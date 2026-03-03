@@ -5,7 +5,7 @@ import { useColorScheme } from '@/hooks/use-color-scheme';
 import { Colors } from '@/constants/theme';
 import { AuthContext } from '../_layout';
 import { useLocalSearchParams } from 'expo-router';
-import { getEquipos, getMaterialesArmado, saveMaterialesArmado, updateEquipo } from '@/lib/api';
+import { getEquipos, getMaterialesArmado, saveMaterialesArmado, updateEquipo, createEquipo } from '@/lib/api';
 
 type Equipo = {
   id: string;
@@ -174,7 +174,23 @@ export default function ArmadoScreen() {
   }, [cargarMat]);
 
   const actualizarEquipo = (id: string, cambios: Partial<Equipo>) => {
-    setEquipos((prev) => prev.map((eq) => (eq.id === id ? { ...eq, ...cambios } : eq)));
+    setEquipos((prev) => {
+      const idx = prev.findIndex((eq) => eq.id === id);
+      if (idx >= 0) {
+        const next = [...prev];
+        next[idx] = { ...next[idx], ...cambios };
+        return next;
+      }
+      // Si era un placeholder que aún no estaba en el estado, lo agregamos
+      const nuevo: Equipo = {
+        id,
+        nombre: cambios.nombre || 'Equipo',
+        caja: cambios.caja || 'Caja 1',
+        serie: cambios.serie || '',
+        codigo: cambios.codigo || (cambios.serie ? cambios.serie.slice(0, 5) : ''),
+      };
+      return [...prev, nuevo];
+    });
   };
 
   const actualizarMaterial = (id: string, cambios: Partial<Material>) => {
@@ -204,15 +220,27 @@ export default function ArmadoScreen() {
   const guardarEquiposApp = async () => {
     try {
       setGuardandoEq(true);
-      const payloads = equipos
-        .filter((e) => e.id)
-        .map((e) =>
-          updateEquipo(e.id, {
+      const payloads = equipos.map((e) => {
+        const esNumerico = /^\d+$/.test(String(e.id));
+        if (esNumerico) {
+          return updateEquipo(e.id, {
             numero_serie: e.serie,
             codigo: e.codigo,
             caja: e.caja,
-          })
-        );
+          });
+        }
+        // Placeholder sin id en backend: lo creamos
+        if (centroId) {
+          return createEquipo({
+            centro_id: centroId,
+            nombre: e.nombre,
+            numero_serie: e.serie,
+            codigo: e.codigo,
+            caja: e.caja,
+          });
+        }
+        return Promise.resolve();
+      });
       await Promise.all(payloads);
       await cargarEquipos();
     } catch (_e) {
@@ -351,7 +379,7 @@ export default function ArmadoScreen() {
                           </View>
                         <Pressable
                           style={[styles.cardBadge, { borderColor: '#0b3b8c' }]}
-                          onPress={() => actualizarEquipo(eq.id, { caja: siguienteCaja(eq.caja) })}>
+                          onPress={() => actualizarEquipo(eq.id, { caja: siguienteCaja(eq.caja), nombre: eq.nombre })}>
                           <Text style={{ color: '#0b3b8c', fontWeight: '700' }}>{eq.caja}</Text>
                         </Pressable>
                         </View>
@@ -363,7 +391,7 @@ export default function ArmadoScreen() {
                             placeholderTextColor="#94a3b8"
                             style={[styles.input, { color: '#0f172a', borderColor: '#d7e3f4', backgroundColor: '#f8fbff' }]}
                             value={eq.serie ? String(eq.serie) : ''}
-                            onChangeText={(t) => actualizarEquipo(eq.id, { serie: t, codigo: t.slice(0, 5) })}
+                            onChangeText={(t) => actualizarEquipo(eq.id, { serie: t, codigo: t.slice(0, 5), nombre: eq.nombre })}
                             keyboardType="numeric"
                           />
                         </View>

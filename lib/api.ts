@@ -60,6 +60,11 @@ export const getEquipos = async (centro_id?: string | number) => {
   return res.data;
 };
 
+export const createEquipo = async (payload: any) => {
+  const res = await api.post('/equipos', payload);
+  return res.data;
+};
+
 export const updateEquipo = async (id_equipo: string | number, payload: any) => {
   const res = await api.put(`/equipos/${id_equipo}`, payload);
   return res.data;
