@@ -140,7 +140,21 @@ export default function HomeScreen() {
                   <ThemedText style={badgeStyle(a.estado)}>{estadoLabel(a.estado)}</ThemedText>
                 </View>
                 <View style={styles.planillaRow}>
-                  <Pressable style={styles.planillaBtn} onPress={() => router.push('(tabs)/armado')}>
+                  <Pressable
+                    style={styles.planillaBtn}
+                    onPress={() =>
+                      router.push({
+                        pathname: '(tabs)/armado',
+                        params: {
+                          armadoId: a.id_armado || a.id,
+                          centro: a.centro?.nombre || a.centro_nombre || '-',
+                          cliente: a.centro?.cliente || a.cliente || '-',
+                          estado: a.estado || '',
+                          total_cajas: a.total_cajas ?? 0,
+                          centro_id: a.centro_id || a.centro?.id || '',
+                        },
+                      })
+                    }>
                     <Ionicons name="list-outline" size={14} color="#fff" style={{ marginRight: 6 }} />
                     <ThemedText style={styles.planillaText}>Ir a planilla</ThemedText>
                   </Pressable>

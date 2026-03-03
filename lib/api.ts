@@ -38,6 +38,33 @@ export const getArmados = async (params?: Record<string, any>) => {
   return res.data;
 };
 
+// Armado detalle: materiales, movimientos, etc.
+export const getMaterialesArmado = async (armadoId: string | number) => {
+  const res = await api.get(`/armados/${armadoId}/materiales`);
+  return res.data;
+};
+
+export const saveMaterialesArmado = async (armadoId: string | number, materiales: any) => {
+  const res = await api.put(`/armados/${armadoId}/materiales`, materiales);
+  return res.data;
+};
+
+export const getMovimientosArmado = async (armadoId: string | number) => {
+  const res = await api.get(`/armados/${armadoId}/movimientos`);
+  return res.data;
+};
+
+// Equipos por centro (misma ruta que frontend web)
+export const getEquipos = async (centro_id?: string | number) => {
+  const res = await api.get('/equipos', { params: { centro_id } });
+  return res.data;
+};
+
+export const updateEquipo = async (id_equipo: string | number, payload: any) => {
+  const res = await api.put(`/equipos/${id_equipo}`, payload);
+  return res.data;
+};
+
 // Consulta centro (mismos endpoints que el frontend web)
 export const fetchClientes = async () => {
   const res = await api.get('/consultas_centro/clientes');
