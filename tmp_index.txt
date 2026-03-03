@@ -1,0 +1,135 @@
+import React, { useContext } from 'react';
+import { StyleSheet, Pressable } from 'react-native';
+import { useRouter } from 'expo-router';
+
+import { HelloWave } from '@/components/hello-wave';
+import ParallaxScrollView from '@/components/parallax-scroll-view';
+import { ThemedText } from '@/components/themed-text';
+import { ThemedView } from '@/components/themed-view';
+import { AuthContext } from '../_layout';
+
+export default function HomeScreen() {
+  const router = useRouter();
+  const { setToken } = useContext(AuthContext);
+
+  return (
+    <ParallaxScrollView
+      headerBackgroundColor={{ light: '#f8fafc', dark: '#1D3D47' }}
+      headerImage={null}>
+      <ThemedView style={styles.titleContainer}>
+        <ThemedText type="title">Bienvenido</ThemedText>
+        <HelloWave />
+      </ThemedView>
+
+      <ThemedView style={styles.hero}>
+        <ThemedText type="title" style={styles.heroTitle}>Panel técnico</ThemedText>
+        <ThemedText style={styles.heroText}>Consulta centros, registra armados y mantén trazabilidad desde tu móvil.</ThemedText>
+        <ThemedText style={styles.heroKpis}>Rutas rápidas · Online · Roles</ThemedText>
+      </ThemedView>
+
+      <ThemedView style={styles.menu}>
+        <ThemedText type="subtitle" style={styles.sectionTitle}>¿Qué quieres hacer?</ThemedText>
+        <ThemedView style={styles.cardsRow}>
+          <ThemedView style={styles.card}>
+            <ThemedText type="title" style={styles.cardTitle}>Consulta de centro</ThemedText>
+            <ThemedText style={styles.cardText}>Busca cliente, centro e historial.</ThemedText>
+            <Pressable onPress={() => router.push('(tabs)/consultacentro')}>
+              <ThemedText type="link" style={styles.cardLink}>Abrir</ThemedText>
+            </Pressable>
+          </ThemedView>
+          <ThemedView style={styles.card}>
+            <ThemedText type="title" style={styles.cardTitle}>Armado técnico</ThemedText>
+            <ThemedText style={styles.cardText}>Planilla de equipos y materiales.</ThemedText>
+            <Pressable onPress={() => router.push('(tabs)/armado')}>
+              <ThemedText type="link" style={styles.cardLink}>Abrir</ThemedText>
+            </Pressable>
+          </ThemedView>
+        </ThemedView>
+      </ThemedView>
+
+      <Pressable
+        style={styles.logoutBtn}
+        onPress={async () => {
+          await setToken(null);
+          router.replace('login');
+        }}>
+        <ThemedText style={styles.logoutText}>Cerrar sesión</ThemedText>
+      </Pressable>
+    </ParallaxScrollView>
+  );
+}
+
+const styles = StyleSheet.create({
+  titleContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  hero: {
+    backgroundColor: '#0b2040',
+    borderRadius: 16,
+    padding: 16,
+    gap: 6,
+    marginBottom: 12,
+  },
+  heroTitle: {
+    color: '#e2e8f0',
+    fontSize: 18,
+    fontWeight: '700',
+  },
+  heroText: {
+    color: '#cbd5e1',
+    fontSize: 13,
+  },
+  heroKpis: {
+    color: '#9ca3af',
+    fontSize: 12,
+  },
+  menu: {
+    gap: 14,
+    backgroundColor: '#ffffff',
+    padding: 4,
+    borderRadius: 12,
+  },
+  sectionTitle: {
+    marginLeft: 6,
+  },
+  cardsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+  },
+  card: {
+    flex: 1,
+    minWidth: 140,
+    backgroundColor: '#f8fafc',
+    padding: 12,
+    borderRadius: 12,
+    gap: 6,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  cardTitle: {
+    fontSize: 16,
+  },
+  cardText: {
+    fontSize: 13,
+  },
+  cardLink: {
+    marginTop: 4,
+    fontWeight: '700',
+  },
+  logoutBtn: {
+    marginTop: 12,
+    alignSelf: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 12,
+    backgroundColor: '#e2e8f0',
+  },
+  logoutText: {
+    color: '#0f172a',
+    fontWeight: '700',
+  },
+});
+
