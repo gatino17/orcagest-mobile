@@ -1,5 +1,6 @@
 import React, { useContext, useEffect, useState, useMemo } from 'react';
-import { StyleSheet, Pressable, ScrollView, SafeAreaView, StatusBar as RNStatusBar, ActivityIndicator, View } from 'react-native';
+import { StyleSheet, Pressable, ScrollView, StatusBar as RNStatusBar, ActivityIndicator, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';

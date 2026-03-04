@@ -1,11 +1,13 @@
 import React, { useMemo, useState, useContext, useEffect, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, TextInput, SafeAreaView, ActivityIndicator, Pressable, StatusBar as RNStatusBar } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TextInput, ActivityIndicator, Pressable, StatusBar as RNStatusBar, Modal } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { Colors } from '@/constants/theme';
 import { AuthContext } from '../_layout';
 import { useLocalSearchParams } from 'expo-router';
 import { getEquipos, getMaterialesArmado, saveMaterialesArmado, updateEquipo, createEquipo } from '@/lib/api';
+import { CameraView, useCameraPermissions } from 'expo-camera';
 
 type Equipo = {
   id: string;
@@ -67,6 +69,11 @@ export default function ArmadoScreen() {
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<'equipos' | 'materiales'>('equipos');
   const [cajas, setCajas] = useState<string[]>(['Caja 1']);
+  const [camVisible, setCamVisible] = useState(false);
+  const [camEquipoId, setCamEquipoId] = useState<string | null>(null);
+  const [camPerm, requestCamPerm] = useCameraPermissions();
+  const [modalCajasVisible, setModalCajasVisible] = useState(false);
+  const [cantidadCajas, setCantidadCajas] = useState('1');
   const centro = (params.centro as string) || '-';
   const cliente = (params.cliente as string) || '-';
   const armadoId = (params.armadoId as string) || '';
@@ -123,7 +130,7 @@ export default function ArmadoScreen() {
       const data = await getEquipos(centroId);
       if (Array.isArray(data)) {
         const mapped = data.map((eq: any) => ({
-          id: eq.id_equipo || eq.id || `${eq.nombre}-${eq.ip || ''}`,
+          id: String(eq.id_equipo || eq.id || `${eq.nombre}-${eq.ip || ''}`),
           nombre: eq.nombre || 'Equipo',
           caja: eq.caja || 'Caja 1',
           serie: eq.numero_serie || eq.serie || '',
@@ -143,6 +150,13 @@ export default function ArmadoScreen() {
   useEffect(() => {
     cargarEquipos();
   }, [cargarEquipos]);
+
+  useEffect(() => {
+    if (!camVisible) return;
+    if (!camPerm || camPerm.status !== 'granted') {
+      requestCamPerm();
+    }
+  }, [camVisible, camPerm, requestCamPerm]);
 
   const cargarMat = useCallback(async () => {
     if (!armadoId) return;
@@ -174,27 +188,32 @@ export default function ArmadoScreen() {
   }, [cargarMat]);
 
   const actualizarEquipo = (id: string, cambios: Partial<Equipo>) => {
-    setEquipos((prev) => {
-      const idx = prev.findIndex((eq) => eq.id === id);
-      if (idx >= 0) {
-        const next = [...prev];
-        next[idx] = { ...next[idx], ...cambios };
-        return next;
-      }
-      // Si era un placeholder que aún no estaba en el estado, lo agregamos
-      const nuevo: Equipo = {
-        id,
-        nombre: cambios.nombre || 'Equipo',
-        caja: cambios.caja || 'Caja 1',
-        serie: cambios.serie || '',
-        codigo: cambios.codigo || (cambios.serie ? cambios.serie.slice(0, 5) : ''),
-      };
-      return [...prev, nuevo];
-    });
+    const idStr = String(id);
+    setEquipos((prev) =>
+      prev.map((eq) => (String(eq.id) === idStr ? { ...eq, ...cambios } : eq))
+    );
   };
 
   const actualizarMaterial = (id: string, cambios: Partial<Material>) => {
     setMateriales((prev) => prev.map((m) => (m.id === id ? { ...m, ...cambios } : m)));
+  };
+
+  const abrirCamaraSerie = (equipoId: string) => {
+    setCamEquipoId(String(equipoId));
+    setCamVisible(true);
+  };
+
+  const handleScan = ({ data }: { data: string }) => {
+    if (!camVisible) return;
+    if (!camEquipoId) return;
+    const soloNumeros = (data || '').replace(/\D+/g, '');
+    if (soloNumeros.length === 0) return;
+    actualizarEquipo(camEquipoId, {
+      serie: soloNumeros,
+      codigo: soloNumeros.slice(0, 5),
+    });
+    setCamVisible(false);
+    setCamEquipoId(null);
   };
 
   const guardarMaterialesApp = async () => {
@@ -251,8 +270,19 @@ export default function ArmadoScreen() {
   };
 
   const agregarCaja = () => {
-    const next = `Caja ${cajas.length + 1}`;
-    setCajas((prev) => [...prev, next]);
+    setCantidadCajas('1');
+    setModalCajasVisible(true);
+  };
+
+  const confirmarAgregarCajas = () => {
+    const qty = Math.max(1, Number.parseInt(cantidadCajas || '1', 10));
+    const maxNum = cajas.reduce((max, c) => {
+      const n = parseInt(String(c).replace(/[^\d]/g, ''), 10);
+      return Number.isFinite(n) ? Math.max(max, n) : max;
+    }, 0);
+    const nuevas = Array.from({ length: qty }, (_, i) => `Caja ${maxNum + i + 1}`);
+    setCajas((prev) => Array.from(new Set([...prev, ...nuevas])));
+    setModalCajasVisible(false);
   };
 
   const siguienteCaja = (actual?: string) => {
@@ -386,14 +416,22 @@ export default function ArmadoScreen() {
 
                         <View style={styles.field}>
                           <Text style={[styles.label, { color: '#475569' }]}>N° Serie</Text>
-                          <TextInput
-                            placeholder="Escribe el N° de serie"
-                            placeholderTextColor="#94a3b8"
-                            style={[styles.input, { color: '#0f172a', borderColor: '#d7e3f4', backgroundColor: '#f8fbff' }]}
-                            value={eq.serie ? String(eq.serie) : ''}
-                            onChangeText={(t) => actualizarEquipo(eq.id, { serie: t, codigo: t.slice(0, 5), nombre: eq.nombre })}
-                            keyboardType="numeric"
-                          />
+                          <View style={styles.inputScanRow}>
+                            <TextInput
+                              placeholder="Escribe el N° de serie"
+                              placeholderTextColor="#94a3b8"
+                              style={[
+                                styles.input,
+                                { flex: 1, color: '#0f172a', borderColor: '#d7e3f4', backgroundColor: '#f8fbff', paddingRight: 12 },
+                              ]}
+                              value={eq.serie ? String(eq.serie) : ''}
+                              onChangeText={(t) => actualizarEquipo(eq.id, { serie: t, codigo: t.slice(0, 5), nombre: eq.nombre })}
+                              keyboardType="numeric"
+                            />
+                            <Pressable style={styles.camBtn} onPress={() => abrirCamaraSerie(eq.id)} hitSlop={6}>
+                              <Ionicons name="barcode-outline" size={18} color="#ffffff" />
+                            </Pressable>
+                          </View>
                         </View>
                       </View>
                     ))}
@@ -478,6 +516,64 @@ export default function ArmadoScreen() {
           <Text style={styles.planillaText}>{guardandoMat ? 'Guardando...' : 'Guardar materiales'}</Text>
         </Pressable>
       )}
+
+      <Modal visible={camVisible} animationType="fade" transparent>
+        <View style={styles.camOverlay}>
+          <View style={styles.camBox}>
+            {camPerm?.status !== 'granted' ? (
+              <Text style={{ color: 'red', textAlign: 'center', padding: 12 }}>
+                Sin permiso de cámara. Concede acceso y vuelve a intentarlo.
+              </Text>
+            ) : (
+              <CameraView
+                style={StyleSheet.absoluteFillObject}
+                facing="back"
+                barcodeScannerSettings={{
+                  barcodeTypes: ['qr', 'code128', 'code39', 'code93', 'ean13', 'ean8', 'upc_a', 'upc_e', 'itf14', 'codabar'],
+                }}
+                onBarcodeScanned={camVisible ? handleScan : undefined}
+              />
+            )}
+            <View style={styles.camHeader}>
+              <Text style={{ color: '#fff', fontWeight: '700' }}>Escanea el N° de serie</Text>
+              <Pressable onPress={() => { setCamVisible(false); setCamEquipoId(null); }}>
+                <Ionicons name="close-circle" size={26} color="#fff" />
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={modalCajasVisible} animationType="fade" transparent>
+        <View style={styles.camOverlay}>
+          <View style={[styles.camBox, { aspectRatio: undefined, padding: 16, backgroundColor: '#f8fafc' }]}>
+            <Text style={{ fontWeight: '800', fontSize: 16, marginBottom: 8, color: '#0f172a' }}>
+              ¿Cuántas cajas agregar?
+            </Text>
+            <Text style={{ marginBottom: 12, color: '#475569' }}>
+              Actualmente existe Caja 1. Ingresa cuántas cajas nuevas quieres crear.
+            </Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+              <TextInput
+                value={cantidadCajas}
+                onChangeText={setCantidadCajas}
+                keyboardType="numeric"
+                style={[
+                  styles.input,
+                  { flex: 1, borderColor: '#d7e3f4', backgroundColor: '#fff', color: '#0f172a' },
+                ]}
+                placeholder="1"
+              />
+              <Pressable style={[styles.camBtn, { backgroundColor: '#e2e8f0' }]} onPress={() => setModalCajasVisible(false)}>
+                <Text style={{ color: '#0f172a', fontWeight: '700' }}>Cancelar</Text>
+              </Pressable>
+              <Pressable style={styles.camBtn} onPress={confirmarAgregarCajas}>
+                <Text style={{ color: '#fff', fontWeight: '700' }}>Agregar</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -530,6 +626,41 @@ const styles = StyleSheet.create({
   metaText: {
     fontSize: 13,
     fontWeight: '600',
+  },
+  inputScanRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  camBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 10,
+    backgroundColor: '#0b3b8c',
+  },
+  camOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.65)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  camBox: {
+    width: '90%',
+    aspectRatio: 3 / 4,
+    backgroundColor: '#000',
+    borderRadius: 16,
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  camHeader: {
+    position: 'absolute',
+    top: 12,
+    left: 12,
+    right: 12,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    zIndex: 2,
   },
   metaHeader: {
     flexDirection: 'row',
@@ -653,6 +784,7 @@ const styles = StyleSheet.create({
   },
   field: {
     gap: 4,
+    position: 'relative',
   },
   label: {
     fontSize: 12,
@@ -732,3 +864,4 @@ const styles = StyleSheet.create({
     elevation: 4,
   },
 });
+

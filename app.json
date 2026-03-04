@@ -23,7 +23,10 @@
         "foregroundImage": "./assets/images/android-icon-foreground.png",
         "backgroundColor": "#ffffff"
       },
-      "package": "com.orcagest.app"
+      "package": "com.orcagest.app",
+      "permissions": [
+        "android.permission.CAMERA"
+      ]
     },
     "web": {
       "bundler": "metro",
@@ -33,7 +36,13 @@
     "extra": {
       "router": {
         "origin": "https://app-router.dev"
+      },
+      "eas": {
+        "projectId": "be7b3c9b-844c-4ce0-8665-0e8bd05a3a07"
       }
-    }
+    },
+    "plugins": [
+      "expo-barcode-scanner"
+    ]
   }
 }
