@@ -13,6 +13,8 @@ export const BASE_URL =
   envBase ||
   (__DEV__ ? devLocal : 'https://orcagest.orcatecnologia.net/api');
 
+export const SOCKET_URL = BASE_URL.replace(/\/api\/?$/i, '');
+
 export const api = axios.create({
   baseURL: BASE_URL,
   timeout: 15000,
