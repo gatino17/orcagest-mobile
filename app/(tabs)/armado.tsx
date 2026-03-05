@@ -649,12 +649,12 @@ export default function ArmadoScreen() {
                       <Text style={styles.groupTitle}>{grupo.titulo}</Text>
                     </View>
                     {items.map((eq) => (
-                      <View
+                    <View
                         key={eq.id}
                         style={[
                           styles.card,
                           eq.serie?.trim()
-                            ? { borderColor: '#bbf7d0', backgroundColor: '#f0fdf4', borderLeftColor: '#16a34a' }
+                            ? { borderColor: '#93c5fd', backgroundColor: '#dbeafe', borderLeftColor: '#1d4ed8' }
                             : { borderColor: palette.tabIconDefault, backgroundColor: '#ffffff' },
                         ]}>
                         <View style={styles.cardHeader}>
@@ -721,7 +721,7 @@ export default function ArmadoScreen() {
                     style={[
                       styles.card,
                       tieneRegistro
-                        ? { borderColor: '#bbf7d0', backgroundColor: '#f0fdf4', borderLeftColor: '#16a34a' }
+                        ? { borderColor: '#93c5fd', backgroundColor: '#dbeafe', borderLeftColor: '#1d4ed8' }
                         : { borderColor: palette.tabIconDefault, backgroundColor: '#ffffff' },
                     ]}>
                     <View style={styles.cardHeader}>
@@ -794,6 +794,7 @@ export default function ArmadoScreen() {
                 onBarcodeScanned={camVisible ? handleScan : undefined}
               />
             )}
+            <View pointerEvents="none" style={styles.scanFrame} />
             <View style={styles.camHeader}>
               <Text style={{ color: '#fff', fontWeight: '700' }}>Escanea el N° de serie</Text>
               <Pressable onPress={() => { setCamVisible(false); setCamEquipoId(null); }}>
@@ -1121,8 +1122,21 @@ const styles = StyleSheet.create({
     aspectRatio: 3 / 4,
     backgroundColor: '#000',
     borderRadius: 16,
+    borderWidth: 2,
+    borderColor: '#3b82f6',
     overflow: 'hidden',
     position: 'relative',
+  },
+  scanFrame: {
+    position: 'absolute',
+    left: '12%',
+    right: '12%',
+    top: '28%',
+    height: '36%',
+    borderWidth: 2,
+    borderColor: '#60a5fa',
+    borderRadius: 16,
+    backgroundColor: 'transparent',
   },
   camHeader: {
     position: 'absolute',
@@ -1177,13 +1191,20 @@ const styles = StyleSheet.create({
   groupHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    marginTop: 4,
+    gap: 8,
+    marginTop: 6,
+    backgroundColor: '#eff6ff',
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
   },
   groupTitle: {
-    fontSize: 14,
-    fontWeight: '800',
-    color: '#0f172a',
+    fontSize: 14.5,
+    fontWeight: '900',
+    color: '#0b3b8c',
+    letterSpacing: 0.2,
   },
   tabs: {
     flexDirection: 'row',
@@ -1377,3 +1398,4 @@ const styles = StyleSheet.create({
     elevation: 4,
   },
 });
+
