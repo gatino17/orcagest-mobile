@@ -74,6 +74,7 @@ export default function ArmadoScreen() {
   const [camEquipoNombre, setCamEquipoNombre] = useState<string | null>(null);
   const [camPerm, requestCamPerm] = useCameraPermissions();
   const scannedOnce = useRef(false);
+  const equiposSnapshotRef = useRef<Record<string, string>>({});
   const [modalCajasVisible, setModalCajasVisible] = useState(false);
   const [cantidadCajas, setCantidadCajas] = useState('1');
   const centro = (params.centro as string) || '-';
@@ -124,6 +125,13 @@ export default function ArmadoScreen() {
     return { total, conSerie };
   }, [gruposRender]);
 
+  const hashEquipo = useCallback((e: Pick<Equipo, 'serie' | 'codigo' | 'caja'>) => {
+    const serie = String(e.serie || '').trim();
+    const codigo = String(e.codigo || '').trim();
+    const caja = String(e.caja || 'Caja 1').trim();
+    return `${serie}|${codigo}|${caja}`;
+  }, []);
+
   const cargarEquipos = useCallback(async () => {
     if (!centroId) return;
     setLoading(true);
@@ -139,6 +147,11 @@ export default function ArmadoScreen() {
           codigo: eq.codigo || (eq.numero_serie ? String(eq.numero_serie).slice(0, 5) : ''),
         }));
         setEquipos(mapped);
+        const snap: Record<string, string> = {};
+        mapped.forEach((e) => {
+          snap[String(e.id)] = hashEquipo(e);
+        });
+        equiposSnapshotRef.current = snap;
         const cajasDetect = Array.from(new Set(mapped.map((e) => e.caja || 'Caja 1')));
         setCajas((prev) => Array.from(new Set([...prev, ...cajasDetect])));
       }
@@ -147,7 +160,7 @@ export default function ArmadoScreen() {
     } finally {
       setLoading(false);
     }
-  }, [centroId]);
+  }, [centroId, hashEquipo]);
 
   useEffect(() => {
     cargarEquipos();
@@ -265,8 +278,13 @@ export default function ArmadoScreen() {
     try {
       setGuardandoEq(true);
       const payloads = equipos.map((e) => {
+        const idStr = String(e.id);
+        const actualHash = hashEquipo(e);
+        const previoHash = equiposSnapshotRef.current[idStr];
         const esNumerico = /^\d+$/.test(String(e.id));
         if (esNumerico) {
+          // Solo registrar movimiento cuando realmente cambió algo.
+          if (previoHash === actualHash) return Promise.resolve();
           return updateEquipo(e.id, {
             numero_serie: e.serie,
             codigo: e.codigo,
@@ -277,6 +295,11 @@ export default function ArmadoScreen() {
         }
         // Placeholder sin id en backend: lo creamos
         if (centroId) {
+          const tieneDatos =
+            String(e.serie || '').trim().length > 0 ||
+            String(e.codigo || '').trim().length > 0 ||
+            String(e.caja || 'Caja 1').trim() !== 'Caja 1';
+          if (!tieneDatos) return Promise.resolve();
           return createEquipo({
             centro_id: centroId,
             nombre: e.nombre,
