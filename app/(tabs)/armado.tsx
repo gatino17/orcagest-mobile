@@ -25,6 +25,94 @@ type Material = {
   usuario?: string;
 };
 
+const MATERIALES_PREDEF: string[] = [
+  'Cable Electrico 3 x 1,5mm',
+  'Cable Electrico 3 x 0,75mm',
+  'Cable Electrico 2 x 0,75mm',
+  'Cable UTP CAT 5e',
+  'CABLE UTP BLINDADO',
+  'Enchufes Macho',
+  'Enchufes Hembra',
+  'Automatico 16A',
+  'Cinta Aislante Super 33',
+  'Cinta Engomada',
+  'Cable Power',
+  'Cable UPS',
+  'Regleta 6-8mm',
+  'Amarras Plasticas 4,5x300mm (med)',
+  'Amarras Plasticas 7,5x500mm (gran)',
+  'Pernos M8 Camara',
+  'Pernos M6 Platina',
+  'Pernos M5 tablero interior',
+  'Corrugado 1"',
+  'Terminales Rectos 1"',
+  'Terminal curvo 1"',
+  'Abrazaderas 2"',
+  'Abrazaderas 2"1/2',
+  'Abrazaderas 3"',
+  'Autoperforantes 1"',
+  'Autoperforantes 1"1/2',
+  'Autoperforantes 2"',
+  'Autoperforantes 2 1/2"',
+  'Autoperforantes 3"',
+  'Tornillos lata madera 1"',
+  'Tornillos lata madera 1"1/2',
+  'Tornillos lata madera 23"',
+  'Tornillos lata madera 2"1/2',
+  'Tornillos vulcanita',
+  'Kit de Soporte a Poste 300mm',
+  'Kit de Soporte a Poste 400mm',
+  'Kit de Soporte a Poste 500mm',
+  'Omega 1"',
+  'Cadie 1"',
+  'Orejas tableros',
+  'Piola 3mm',
+  'Piola engomada',
+  'Tensores 3/8',
+  'Grilletes',
+  'Guardacabos',
+  'Tirafondos',
+  'Prensas',
+  'Cancamo',
+  'Platina o angulo (Tira)',
+  'Disco Corte',
+  'PG 21',
+  'PG 16',
+  'Cinta doble contacto',
+  'Caja de Union Foco 89x89x52',
+  'Caja de Camara Interior 153x110x65',
+  'Caja interior 175x151x95',
+  'Caja de Panel Victron 184x255x99',
+  'Canaletas 40x16x2000 (chicas)',
+  'Canaletas 100x50x2000 (grandes)',
+  'Pernos de rack (tuerca enjaulada)',
+  'Extension USB',
+  'Cable HDMI',
+  'Conectores RJ45',
+  'Conector hembra red (RJ45)',
+  'Cables VGA',
+  'Copla VGA',
+  'Soporte LED',
+  'Spray',
+  'Tapagoteras',
+  'Cinta espiral',
+  'Tarjeta de Memoria microSD 8GB',
+  'Grampas para cable (Paquete)',
+  'PatchCore 90 Cms (2MTS)',
+  'PatchCore 5 Mts.',
+  'PatchCore 10 Mts.',
+  'Sellos',
+  'Puente bateria',
+  'Bolsas de Basura Grandes',
+  'Cajas (fondo + tapa)',
+  'Cinta embalaje',
+  'Logos',
+  'Brazo Ubiquiti',
+  'Mastil',
+  'Riel U',
+  'Perno Pasado',
+];
+
 const GRUPOS_EQUIPOS: { titulo: string; items: string[] }[] = [
   {
     titulo: 'Oficina',
@@ -75,7 +163,9 @@ export default function ArmadoScreen() {
   const [camPerm, requestCamPerm] = useCameraPermissions();
   const scannedOnce = useRef(false);
   const equiposSnapshotRef = useRef<Record<string, string>>({});
+  const materialesSnapshotRef = useRef<Record<string, string>>({});
   const [modalCajasVisible, setModalCajasVisible] = useState(false);
+  const [modalGuardarMatVisible, setModalGuardarMatVisible] = useState(false);
   const [cantidadCajas, setCantidadCajas] = useState('1');
   const centro = (params.centro as string) || '-';
   const cliente = (params.cliente as string) || '-';
@@ -132,6 +222,49 @@ export default function ArmadoScreen() {
     return `${serie}|${codigo}|${caja}`;
   }, []);
 
+  const hashMaterial = useCallback((m: Pick<Material, 'cantidad' | 'caja'>) => {
+    const cantidad = Number(m.cantidad) || 0;
+    const caja = String(m.caja || 'Caja 1').trim();
+    return `${cantidad}|${caja}`;
+  }, []);
+
+  const mergeMateriales = useCallback((listaBackend: any[] = []): Material[] => {
+    const normalizar = (v: any) =>
+      String(v || '')
+        .trim()
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '');
+    const mapa = new Map<string, any>();
+    (listaBackend || []).forEach((m, idx) => {
+      const key = normalizar(m.nombre || `mat-${idx}`);
+      if (key) mapa.set(key, m);
+    });
+
+    const base: Material[] = MATERIALES_PREDEF.map((nombre, idx) => {
+      const found = mapa.get(normalizar(nombre));
+      return {
+        id: String(found?.id_material || found?.id || `base-${idx}`),
+        nombre,
+        cantidad: Number(found?.cantidad) || 0,
+        caja: found?.caja || 'Caja 1',
+        usuario: found?.caja_tecnico_nombre || (found?.caja_tecnico_id ? `ID ${found.caja_tecnico_id}` : '') || found?.usuario || '',
+      };
+    });
+
+    const extras: Material[] = (listaBackend || [])
+      .filter((m) => !MATERIALES_PREDEF.some((n) => normalizar(n) === normalizar(m?.nombre)))
+      .map((m: any, idx: number) => ({
+        id: String(m.id_material || m.id || `extra-${idx}`),
+        nombre: m.nombre || `Material ${idx + 1}`,
+        cantidad: Number(m.cantidad) || 0,
+        caja: m.caja || 'Caja 1',
+        usuario: m.caja_tecnico_nombre || (m.caja_tecnico_id ? `ID ${m.caja_tecnico_id}` : '') || m.usuario || '',
+      }));
+
+    return [...base, ...extras];
+  }, []);
+
   const cargarEquipos = useCallback(async () => {
     if (!centroId) return;
     setLoading(true);
@@ -180,23 +313,21 @@ export default function ArmadoScreen() {
     try {
       const data = await getMaterialesArmado(armadoId);
       const lista = Array.isArray(data) ? data : Array.isArray(data?.items) ? data.items : [];
-      setMateriales(
-        lista.map((m: any, idx: number) => ({
-          id: m.id_material || m.id || m.nombre || `mat-${idx}`,
-          nombre: m.nombre,
-          cantidad: Number(m.cantidad) || 0,
-          caja: m.caja || 'Caja 1',
-          usuario: m.caja_tecnico_nombre || m.usuario || '',
-        }))
-      );
-      const cajasDetect = lista.map((m: any) => m.caja || 'Caja 1');
+      const mapped = mergeMateriales(lista);
+      setMateriales(mapped);
+      const snap: Record<string, string> = {};
+      mapped.forEach((m) => {
+        snap[String(m.id)] = hashMaterial(m);
+      });
+      materialesSnapshotRef.current = snap;
+      const cajasDetect = mapped.map((m: any) => m.caja || 'Caja 1');
       setCajas((prev) => Array.from(new Set([...prev, ...cajasDetect])));
     } catch (_e) {
       // silencioso
     } finally {
       setLoadingMateriales(false);
     }
-  }, [armadoId]);
+  }, [armadoId, hashMaterial, mergeMateriales]);
 
   useEffect(() => {
     cargarMat();
@@ -258,13 +389,21 @@ export default function ArmadoScreen() {
     if (!armadoId) return;
     try {
       setGuardandoMat(true);
-      const payload = materiales.map((m) => ({
-        id_material: m.id,
-        nombre: m.nombre,
-        cantidad: m.cantidad,
-        caja: m.caja || 'Caja 1',
-        caja_tecnico_id: userId || undefined,
-      }));
+      const payload = materiales
+        .filter((m) => {
+          const idStr = String(m.id);
+          const actualHash = hashMaterial(m);
+          const previoHash = materialesSnapshotRef.current[idStr];
+          return previoHash !== actualHash;
+        })
+        .map((m) => ({
+          id_material: m.id,
+          nombre: m.nombre,
+          cantidad: m.cantidad,
+          caja: m.caja || 'Caja 1',
+          caja_tecnico_id: userId || undefined,
+        }));
+      if (payload.length === 0) return;
       await saveMaterialesArmado(armadoId, payload);
       await cargarMat();
     } catch (_e) {
@@ -324,6 +463,10 @@ export default function ArmadoScreen() {
   const agregarCaja = () => {
     setCantidadCajas('1');
     setModalCajasVisible(true);
+  };
+
+  const confirmarGuardarMateriales = () => {
+    setModalGuardarMatVisible(true);
   };
 
   const confirmarAgregarCajas = () => {
@@ -507,11 +650,17 @@ export default function ArmadoScreen() {
             ) : (
               <>
                 {materiales.map((m) => (
+                  (() => {
+                    const tieneRegistro =
+                      (m.usuario && String(m.usuario).trim().length > 0) ||
+                      Number(m.cantidad || 0) > 0 ||
+                      String(m.caja || 'Caja 1').trim() !== 'Caja 1';
+                    return (
                   <View
                     key={m.id}
                     style={[
                       styles.card,
-                      m.cantidad > 0
+                      tieneRegistro
                         ? { borderColor: '#bbf7d0', backgroundColor: '#f0fdf4', borderLeftColor: '#16a34a' }
                         : { borderColor: palette.tabIconDefault, backgroundColor: '#ffffff' },
                     ]}>
@@ -543,6 +692,8 @@ export default function ArmadoScreen() {
                     />
                     {m.usuario ? <Text style={[styles.metaText, { color: '#475569' }]}>Por: {m.usuario}</Text> : null}
                   </View>
+                    );
+                  })()
                 ))}
               </>
             )}
@@ -563,7 +714,7 @@ export default function ArmadoScreen() {
         <Pressable
           style={styles.fabSave}
           disabled={guardandoMat}
-          onPress={guardarMaterialesApp}>
+          onPress={confirmarGuardarMateriales}>
           <Ionicons name="save-outline" size={18} color="#fff" style={{ marginRight: 6 }} />
           <Text style={styles.planillaText}>{guardandoMat ? 'Guardando...' : 'Guardar materiales'}</Text>
         </Pressable>
@@ -618,6 +769,31 @@ export default function ArmadoScreen() {
               </Pressable>
               <Pressable style={styles.camBtn} onPress={confirmarAgregarCajas}>
                 <Text style={{ color: '#fff', fontWeight: '700' }}>Agregar</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={modalGuardarMatVisible} animationType="fade" transparent>
+        <View style={styles.camOverlay}>
+          <View style={styles.confirmBox}>
+            <View style={styles.confirmIconWrap}>
+              <Ionicons name="help-circle-outline" size={20} color="#0b3b8c" />
+            </View>
+            <Text style={styles.confirmTitle}>Confirmar guardado</Text>
+            <Text style={styles.confirmText}>No deseas agregar mas materiales?</Text>
+            <View style={styles.confirmActions}>
+              <Pressable style={styles.confirmCancelBtn} onPress={() => setModalGuardarMatVisible(false)}>
+                <Text style={styles.confirmCancelText}>Cancelar</Text>
+              </Pressable>
+              <Pressable
+                style={styles.confirmSaveBtn}
+                onPress={async () => {
+                  setModalGuardarMatVisible(false);
+                  await guardarMaterialesApp();
+                }}>
+                <Text style={styles.confirmSaveText}>Guardar</Text>
               </Pressable>
             </View>
           </View>
@@ -686,6 +862,65 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderRadius: 10,
     backgroundColor: '#0b3b8c',
+  },
+  confirmBox: {
+    width: '88%',
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    padding: 18,
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+    shadowColor: '#000',
+    shadowOpacity: 0.12,
+    shadowRadius: 14,
+    elevation: 6,
+  },
+  confirmIconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: '#e0ecff',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 10,
+  },
+  confirmTitle: {
+    fontSize: 17,
+    fontWeight: '800',
+    color: '#0f172a',
+    marginBottom: 4,
+  },
+  confirmText: {
+    color: '#475569',
+    fontSize: 14,
+    marginBottom: 14,
+  },
+  confirmActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 10,
+  },
+  confirmCancelBtn: {
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    backgroundColor: '#f8fafc',
+  },
+  confirmCancelText: {
+    color: '#334155',
+    fontWeight: '700',
+  },
+  confirmSaveBtn: {
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    borderRadius: 10,
+    backgroundColor: '#0b3b8c',
+  },
+  confirmSaveText: {
+    color: '#fff',
+    fontWeight: '700',
   },
   camOverlay: {
     flex: 1,
