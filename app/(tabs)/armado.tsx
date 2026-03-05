@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useContext, useEffect, useCallback } from 'react';
+import React, { useMemo, useState, useContext, useEffect, useCallback, useRef } from 'react';
 import { View, Text, StyleSheet, ScrollView, TextInput, ActivityIndicator, Pressable, StatusBar as RNStatusBar, Modal } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -71,7 +71,9 @@ export default function ArmadoScreen() {
   const [cajas, setCajas] = useState<string[]>(['Caja 1']);
   const [camVisible, setCamVisible] = useState(false);
   const [camEquipoId, setCamEquipoId] = useState<string | null>(null);
+  const [camEquipoNombre, setCamEquipoNombre] = useState<string | null>(null);
   const [camPerm, requestCamPerm] = useCameraPermissions();
+  const scannedOnce = useRef(false);
   const [modalCajasVisible, setModalCajasVisible] = useState(false);
   const [cantidadCajas, setCantidadCajas] = useState('1');
   const centro = (params.centro as string) || '-';
@@ -189,31 +191,54 @@ export default function ArmadoScreen() {
 
   const actualizarEquipo = (id: string, cambios: Partial<Equipo>) => {
     const idStr = String(id);
-    setEquipos((prev) =>
-      prev.map((eq) => (String(eq.id) === idStr ? { ...eq, ...cambios } : eq))
-    );
+    setEquipos((prev) => {
+      const idx = prev.findIndex((eq) => String(eq.id) === idStr);
+      if (idx >= 0) {
+        const next = [...prev];
+        next[idx] = { ...next[idx], ...cambios };
+        return next;
+      }
+      // Si es un equipo placeholder (aún no viene de backend), lo creamos en estado local
+      // para que no se borre al escribir manualmente o al escanear.
+      return [
+        ...prev,
+        {
+          id: idStr,
+          nombre: cambios.nombre || 'Equipo',
+          caja: cambios.caja || 'Caja 1',
+          serie: cambios.serie || '',
+          codigo: cambios.codigo || '',
+        },
+      ];
+    });
   };
 
   const actualizarMaterial = (id: string, cambios: Partial<Material>) => {
     setMateriales((prev) => prev.map((m) => (m.id === id ? { ...m, ...cambios } : m)));
   };
 
-  const abrirCamaraSerie = (equipoId: string) => {
+  const abrirCamaraSerie = (equipoId: string, nombre: string) => {
     setCamEquipoId(String(equipoId));
+    setCamEquipoNombre(nombre);
+    scannedOnce.current = false;
     setCamVisible(true);
   };
 
   const handleScan = ({ data }: { data: string }) => {
-    if (!camVisible) return;
-    if (!camEquipoId) return;
-    const soloNumeros = (data || '').replace(/\D+/g, '');
-    if (soloNumeros.length === 0) return;
-    actualizarEquipo(camEquipoId, {
-      serie: soloNumeros,
-      codigo: soloNumeros.slice(0, 5),
-    });
+    if (!camVisible || !camEquipoId || scannedOnce.current) return;
+    scannedOnce.current = true;
+    const raw = (data || '').trim();
+    if (!raw) return;
+    const soloNumeros = raw.replace(/\D+/g, '');
+    const serie = soloNumeros.length ? soloNumeros : raw;
+    const codigo = soloNumeros.length ? soloNumeros.slice(0, 5) : raw.slice(0, 5);
+    actualizarEquipo(camEquipoId, { serie, codigo, nombre: camEquipoNombre || undefined });
     setCamVisible(false);
-    setCamEquipoId(null);
+    setTimeout(() => {
+      setCamEquipoId(null);
+      setCamEquipoNombre(null);
+      scannedOnce.current = false;
+    }, 300);
   };
 
   const guardarMaterialesApp = async () => {
@@ -428,7 +453,7 @@ export default function ArmadoScreen() {
                               onChangeText={(t) => actualizarEquipo(eq.id, { serie: t, codigo: t.slice(0, 5), nombre: eq.nombre })}
                               keyboardType="numeric"
                             />
-                            <Pressable style={styles.camBtn} onPress={() => abrirCamaraSerie(eq.id)} hitSlop={6}>
+                            <Pressable style={styles.camBtn} onPress={() => abrirCamaraSerie(eq.id, eq.nombre)} hitSlop={6}>
                               <Ionicons name="barcode-outline" size={18} color="#ffffff" />
                             </Pressable>
                           </View>
@@ -528,9 +553,6 @@ export default function ArmadoScreen() {
               <CameraView
                 style={StyleSheet.absoluteFillObject}
                 facing="back"
-                barcodeScannerSettings={{
-                  barcodeTypes: ['qr', 'code128', 'code39', 'code93', 'ean13', 'ean8', 'upc_a', 'upc_e', 'itf14', 'codabar'],
-                }}
                 onBarcodeScanned={camVisible ? handleScan : undefined}
               />
             )}
