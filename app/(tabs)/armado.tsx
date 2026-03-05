@@ -6,7 +6,7 @@ import { useColorScheme } from '@/hooks/use-color-scheme';
 import { Colors } from '@/constants/theme';
 import { AuthContext } from '../_layout';
 import { useLocalSearchParams } from 'expo-router';
-import { getEquipos, getMaterialesArmado, saveMaterialesArmado, updateEquipo, createEquipo } from '@/lib/api';
+import { getEquipos, getMaterialesArmado, saveMaterialesArmado, updateEquipo, createEquipo, updateArmado } from '@/lib/api';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 
 type Equipo = {
@@ -171,7 +171,8 @@ export default function ArmadoScreen() {
   const cliente = (params.cliente as string) || '-';
   const armadoId = (params.armadoId as string) || '';
   const estado = (params.estado as string) || '';
-  const totalCajas = params.total_cajas ? Number(params.total_cajas) : undefined;
+  const totalCajasParam = params.total_cajas ? Number(params.total_cajas) : undefined;
+  const [totalCajas, setTotalCajas] = useState<number | undefined>(totalCajasParam);
   const centroId = params.centro_id ? Number(params.centro_id) : undefined;
 
   const gruposRender = useMemo(() => {
@@ -476,9 +477,19 @@ export default function ArmadoScreen() {
       return Number.isFinite(n) ? Math.max(max, n) : max;
     }, 0);
     const nuevas = Array.from({ length: qty }, (_, i) => `Caja ${maxNum + i + 1}`);
+    const totalNuevo = maxNum + qty;
     setCajas((prev) => Array.from(new Set([...prev, ...nuevas])));
+    setTotalCajas(totalNuevo);
+    if (armadoId) {
+      updateArmado(armadoId, { total_cajas_manual: totalNuevo }).catch(() => {});
+    }
     setModalCajasVisible(false);
   };
+
+  useEffect(() => {
+    if (!cajas?.length) return;
+    setTotalCajas((prev) => Math.max(prev || 0, cajas.length));
+  }, [cajas]);
 
   const siguienteCaja = (actual?: string) => {
     if (cajas.length === 0) return 'Caja 1';

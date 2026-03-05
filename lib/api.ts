@@ -38,6 +38,11 @@ export const getArmados = async (params?: Record<string, any>) => {
   return res.data;
 };
 
+export const updateArmado = async (armadoId: string | number, payload: any) => {
+  const res = await api.put(`/armados/${armadoId}`, payload);
+  return res.data;
+};
+
 // Armado detalle: materiales, movimientos, etc.
 export const getMaterialesArmado = async (armadoId: string | number) => {
   const res = await api.get(`/armados/${armadoId}/materiales`);
