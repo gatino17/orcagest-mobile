@@ -271,6 +271,8 @@ export default function ArmadoScreen() {
             numero_serie: e.serie,
             codigo: e.codigo,
             caja: e.caja,
+            caja_tecnico_id: userId || undefined,
+            armado_id: armadoId ? Number(armadoId) : undefined,
           });
         }
         // Placeholder sin id en backend: lo creamos
@@ -281,6 +283,8 @@ export default function ArmadoScreen() {
             numero_serie: e.serie,
             codigo: e.codigo,
             caja: e.caja,
+            caja_tecnico_id: userId || undefined,
+            armado_id: armadoId ? Number(armadoId) : undefined,
           });
         }
         return Promise.resolve();
