@@ -530,31 +530,48 @@ export default function ArmadoScreen() {
           </Text>
         ) : null}
         <View style={styles.hero}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+          <View style={styles.heroRow}>
             <View style={styles.heroIcon}>
-              <Ionicons name="layers-outline" size={22} color="#0b3b8c" />
+              <Ionicons name="layers-outline" size={22} color="#ffffff" />
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.heroTitle}>Armado de equipos</Text>
               <Text style={styles.heroSubtitle}>Completa serie y cajas para este armado</Text>
             </View>
+            <View style={styles.heroBadge}>
+              <Ionicons name="checkmark-done-outline" size={14} color="#0b3b8c" />
+            </View>
           </View>
         </View>
 
+        <View style={styles.sectionHeaderRow}>
+          <Text style={styles.sectionTitleLine}>Asignacion</Text>
+          <View style={styles.sectionLine} />
+        </View>
         <View style={[styles.metaCard, { borderColor: '#dbeafe', backgroundColor: '#f8fbff' }]}>
-          <View style={styles.metaHeader}>
-            <Ionicons name="map-outline" size={18} color="#0b3b8c" />
-            <Text style={styles.metaTitle}>Asignación</Text>
+          <View style={styles.metaTopRow}>
+            <View style={{ flex: 1 }}>
+              <View style={styles.metaCenterRow}>
+                <Ionicons name="business-outline" size={14} color="#0b3b8c" />
+                <Text style={styles.metaCenterValue}>{centro}</Text>
+              </View>
+              <View style={styles.metaClientRow}>
+                <Ionicons name="people-outline" size={13} color="#0b3b8c" />
+                <Text style={styles.metaClientValue}>{cliente}</Text>
+              </View>
+            </View>
+            <View style={styles.cajasWrap}>
+              <Text style={styles.cajasLabel}>Total cajas</Text>
+              <View style={styles.cajasOrbit}>
+                <View style={styles.cajasRingOuter} />
+                <View style={styles.cajasRingInner} />
+                <View style={styles.cajasCore}>
+                  <Text style={styles.cajasCoreNumber}>{totalCajas ?? 1}</Text>
+                </View>
+              </View>
+            </View>
           </View>
           <View style={styles.metaGrid}>
-            <View style={styles.metaItem}>
-              <Text style={styles.metaLabel}>Centro</Text>
-              <Text style={styles.metaValue}>{centro}</Text>
-            </View>
-            <View style={styles.metaItem}>
-              <Text style={styles.metaLabel}>Cliente</Text>
-              <Text style={styles.metaValue}>{cliente}</Text>
-            </View>
             <View style={styles.metaItem}>
               <Text style={styles.metaLabel}>Estado</Text>
               <View style={styles.metaChip}>
@@ -567,29 +584,31 @@ export default function ArmadoScreen() {
                 <Text style={[styles.metaValue, { color: '#0f172a' }]}>{estado || 'Pendiente'}</Text>
               </View>
             </View>
-            {totalCajas !== undefined ? (
-              <View style={styles.metaItem}>
-                <Text style={styles.metaLabel}>Total cajas</Text>
-                <Text style={styles.metaValue}>{totalCajas}</Text>
-              </View>
-            ) : null}
           </View>
         </View>
 
         <View style={styles.tabs}>
           <Pressable
-            style={[styles.tabBtn, tab === 'equipos' && styles.tabBtnActive]}
+            style={({ pressed }) => [
+              styles.tabBtn,
+              tab === 'equipos' && styles.tabBtnActive,
+              pressed && styles.btnPressed,
+            ]}
             onPress={() => setTab('equipos')}>
             <Ionicons name="hardware-chip-outline" size={16} color={tab === 'equipos' ? '#ffffff' : '#475569'} />
             <Text style={[styles.tabText, tab === 'equipos' && styles.tabTextActive]}>Equipos</Text>
           </Pressable>
           <Pressable
-            style={[styles.tabBtn, tab === 'materiales' && styles.tabBtnActive]}
+            style={({ pressed }) => [
+              styles.tabBtn,
+              tab === 'materiales' && styles.tabBtnActive,
+              pressed && styles.btnPressed,
+            ]}
             onPress={() => setTab('materiales')}>
             <Ionicons name="construct-outline" size={16} color={tab === 'materiales' ? '#ffffff' : '#475569'} />
             <Text style={[styles.tabText, tab === 'materiales' && styles.tabTextActive]}>Materiales</Text>
           </Pressable>
-          <Pressable style={styles.addBoxBtn} onPress={agregarCaja}>
+          <Pressable style={({ pressed }) => [styles.addBoxBtn, pressed && styles.btnPressed]} onPress={agregarCaja}>
             <Ionicons name="add-circle-outline" size={16} color="#0b3b8c" />
             <Text style={styles.addBoxText}>Agregar caja</Text>
           </Pressable>
@@ -597,11 +616,21 @@ export default function ArmadoScreen() {
 
         {tab === 'equipos' ? (
           <>
-            <View style={[styles.summary, { borderColor: '#dbeafe', backgroundColor: '#eef2ff' }]}>
-              <Text style={[styles.summaryNumber, { color: '#0b3b8c' }]}>{resumenEquipos.conSerie}</Text>
-              <Text style={[styles.summaryLabel, { color: '#0f172a' }]}>
-                de {resumenEquipos.total} equipos con N° Serie
-              </Text>
+            <View style={styles.summary}>
+              <View style={styles.summaryIcon}>
+                <Ionicons name="hardware-chip-outline" size={18} color="#ffffff" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.summaryNumber}>{resumenEquipos.conSerie}</Text>
+                <Text style={styles.summaryLabel}>
+                  de {resumenEquipos.total} equipos con N serie
+                </Text>
+              </View>
+              <View style={styles.summaryPercentWrap}>
+                <Text style={styles.summaryPercentText}>
+                  {resumenEquipos.total ? Math.round((resumenEquipos.conSerie * 100) / resumenEquipos.total) : 0}%
+                </Text>
+              </View>
             </View>
 
             {loading ? (
@@ -854,25 +883,153 @@ const styles = StyleSheet.create({
   },
   summary: {
     borderWidth: 1,
+    borderColor: '#dbeafe',
+    backgroundColor: '#eef2ff',
     borderRadius: 14,
     padding: 14,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
   },
+  summaryIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: '#2563eb',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   summaryNumber: {
-    fontSize: 22,
-    fontWeight: '700',
+    fontSize: 30,
+    lineHeight: 30,
+    fontWeight: '900',
+    color: '#0b3b8c',
   },
   summaryLabel: {
-    fontSize: 14,
+    fontSize: 12,
+    color: '#0f172a',
+    fontWeight: '700',
+  },
+  summaryPercentWrap: {
+    minWidth: 56,
+    height: 56,
+    borderRadius: 28,
+    borderWidth: 4,
+    borderColor: '#dbeafe',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#f8fafc',
+  },
+  summaryPercentText: {
+    fontWeight: '900',
+    color: '#0f172a',
+    fontSize: 12,
+  },
+  sectionHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginTop: 2,
+  },
+  sectionTitleLine: {
+    color: '#0f172a',
+    fontWeight: '900',
+    fontSize: 16,
+  },
+  sectionLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: '#d1d5db',
   },
   metaCard: {
     borderWidth: 1,
-    borderRadius: 12,
+    borderRadius: 16,
     padding: 14,
-    gap: 8,
+    gap: 10,
     marginBottom: 6,
+    shadowColor: '#1d4ed8',
+    shadowOpacity: 0.06,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2,
+  },
+  metaTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  metaCenterRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  metaCenterValue: {
+    color: '#0f172a',
+    fontWeight: '900',
+    fontSize: 18,
+    lineHeight: 20,
+    flex: 1,
+  },
+  metaClientRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 2,
+  },
+  metaClientValue: {
+    color: '#0b3b8c',
+    fontWeight: '700',
+    fontSize: 13,
+    flex: 1,
+  },
+  cajasWrap: {
+    minWidth: 92,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 2,
+  },
+  cajasLabel: {
+    color: '#0f172a',
+    fontSize: 10,
+    fontWeight: '700',
+    marginBottom: 3,
+  },
+  cajasOrbit: {
+    width: 62,
+    height: 62,
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+  },
+  cajasRingOuter: {
+    position: 'absolute',
+    width: 62,
+    height: 62,
+    borderRadius: 31,
+    backgroundColor: 'rgba(37, 99, 235, 0.12)',
+  },
+  cajasRingInner: {
+    position: 'absolute',
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: 'rgba(37, 99, 235, 0.2)',
+  },
+  cajasCore: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#2563eb',
+    borderWidth: 1,
+    borderColor: '#1d4ed8',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cajasCoreNumber: {
+    color: '#ffffff',
+    fontWeight: '900',
+    fontSize: 16,
   },
   metaRow: {
     flexDirection: 'row',
@@ -991,7 +1148,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 12,
-    marginTop: 4,
+    marginTop: 2,
   },
   metaItem: {
     minWidth: '45%',
@@ -1030,42 +1187,70 @@ const styles = StyleSheet.create({
   },
   tabs: {
     flexDirection: 'row',
-    gap: 8,
-    marginTop: 10,
+    gap: 10,
+    marginTop: 12,
   },
   tabBtn: {
     flex: 1,
-    paddingVertical: 8,
-    borderRadius: 10,
+    minHeight: 44,
+    paddingHorizontal: 10,
+    borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#e2e8f0',
+    borderColor: '#cbd5e1',
+    backgroundColor: '#ffffff',
+    flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    shadowColor: '#0f172a',
+    shadowOpacity: 0.04,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 1,
   },
   tabBtnActive: {
     backgroundColor: '#0b3b8c',
     borderColor: '#0b3b8c',
+    shadowColor: '#0b3b8c',
+    shadowOpacity: 0.16,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 3,
   },
   tabText: {
     fontWeight: '700',
     color: '#475569',
+    fontSize: 12.5,
   },
   tabTextActive: {
     color: '#ffffff',
   },
   addBoxBtn: {
+    flex: 1,
     flexDirection: 'row',
-    gap: 4,
-    paddingHorizontal: 12,
-    paddingVertical: 9,
+    gap: 6,
+    minHeight: 44,
+    paddingHorizontal: 10,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#0b3b8c',
-    backgroundColor: '#e0f2fe',
+    borderColor: '#93c5fd',
+    backgroundColor: '#eff6ff',
     alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#2563eb',
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 1,
   },
   addBoxText: {
-    fontWeight: '700',
-    color: '#0b3b8c',
+    fontWeight: '800',
+    fontSize: 12.5,
+    color: '#1d4ed8',
+  },
+  btnPressed: {
+    transform: [{ scale: 0.98 }],
+    opacity: 0.92,
   },
   card: {
     borderWidth: 1,
@@ -1114,9 +1299,9 @@ const styles = StyleSheet.create({
     backgroundColor: '#f8fafc',
   },
   hero: {
-    backgroundColor: '#eef2ff',
+    backgroundColor: '#1d4ed8',
     borderWidth: 1,
-    borderColor: '#dbeafe',
+    borderColor: '#1e40af',
     borderRadius: 14,
     padding: 14,
     marginBottom: 4,
@@ -1126,22 +1311,35 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 2 },
     elevation: 2,
   },
+  heroRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
   heroIcon: {
     width: 42,
     height: 42,
     borderRadius: 10,
-    backgroundColor: '#0b3b8c10',
+    backgroundColor: 'rgba(255,255,255,0.18)',
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  heroBadge: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#dbeafe',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   heroTitle: {
     fontSize: 18,
     fontWeight: '800',
-    color: '#0f172a',
+    color: '#ffffff',
   },
   heroSubtitle: {
     fontSize: 13,
-    color: '#475569',
+    color: '#dbeafe',
     marginTop: 2,
   },
   planillaBtn: {
@@ -1179,4 +1377,3 @@ const styles = StyleSheet.create({
     elevation: 4,
   },
 });
-

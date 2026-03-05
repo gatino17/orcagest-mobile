@@ -57,6 +57,26 @@ export default function HomeScreen() {
     return [styles.badge, { backgroundColor: '#fef9c3', color: '#a16207' }];
   };
 
+  const estadoTone = (est?: string) => {
+    const e = (est || '').toLowerCase();
+    if (e === 'finalizado') return { border: '#22c55e', bg: '#f0fdf4' };
+    if (e === 'en_proceso') return { border: '#38bdf8', bg: '#f0f9ff' };
+    return { border: '#facc15', bg: '#fffbeb' };
+  };
+  const estadoAccent = (est?: string) => {
+    const e = (est || '').toLowerCase();
+    if (e === 'finalizado') return '#16a34a';
+    if (e === 'en_proceso') return '#2563eb';
+    return '#d97706';
+  };
+
+  const estadoGlow = (est?: string) => {
+    const e = (est || '').toLowerCase();
+    if (e === 'finalizado') return { strong: 'rgba(16, 185, 129, 0.2)', soft: 'rgba(16, 185, 129, 0.1)' };
+    if (e === 'en_proceso') return { strong: 'rgba(59, 130, 246, 0.2)', soft: 'rgba(59, 130, 246, 0.1)' };
+    return { strong: 'rgba(245, 158, 11, 0.2)', soft: 'rgba(245, 158, 11, 0.1)' };
+  };
+
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: '#ffffff' }}>
       <StatusBar style="dark" translucent={false} />
@@ -64,40 +84,94 @@ export default function HomeScreen() {
         contentContainerStyle={styles.container}
         showsVerticalScrollIndicator={false}>
         <ThemedView style={styles.headerMini}>
-          <ThemedText style={styles.headerLogo}>ORCAGEST</ThemedText>
-          <ThemedText style={styles.headerTitle}>Armado de sistemas</ThemedText>
-        </ThemedView>
-        <ThemedView style={styles.titleContainer}>
-          <ThemedView style={styles.avatar}>
-            <ThemedText style={styles.avatarText}>{(name || 'U')[0].toUpperCase()}</ThemedText>
-          </ThemedView>
-          <ThemedText type="title">Hola {name || 'técnico'}</ThemedText>
-          {role && <ThemedText style={styles.roleBadge}>{role}</ThemedText>}
+          <View style={styles.headerTopRow}>
+            <View style={styles.headerLeft}>
+              <ThemedView style={styles.headerAvatar}>
+                <ThemedText style={styles.avatarText}>{(name || 'U')[0].toUpperCase()}</ThemedText>
+              </ThemedView>
+              <View style={{ flex: 1 }}>
+                <ThemedText style={styles.headerHello}>HOLA DE NUEVO</ThemedText>
+                <ThemedText style={styles.headerName}>{name || 'Tecnico'}</ThemedText>
+                {role && (
+                  <View style={styles.roleChip}>
+                    <ThemedText style={styles.roleChipText}>{role}</ThemedText>
+                  </View>
+                )}
+              </View>
+            </View>
+            <Pressable style={styles.bellBtn}>
+              <Ionicons name="notifications-outline" size={18} color="#0b3b8c" />
+            </Pressable>
+          </View>
+
+          <View style={styles.actionCard}>
+            <View style={styles.actionIconWrap}>
+              <Ionicons name="qr-code-outline" size={18} color="#ffffff" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <ThemedText style={styles.actionTitle}>Armado de pedidos</ThemedText>
+              <ThemedText style={styles.actionText}>Toma un pedido y escanea productos</ThemedText>
+            </View>
+          </View>
+
         </ThemedView>
 
+        <View style={styles.sectionHeaderRow}>
+          <ThemedText type="subtitle" style={styles.sectionTitleLine}>Resumen del dia</ThemedText>
+          <View style={styles.sectionLine} />
+        </View>
         <ThemedView style={styles.summaryCard}>
-          <ThemedText type="subtitle" style={styles.sectionTitle}>Resumen rapido</ThemedText>
+          <View style={styles.summaryTopCard}>
+            <View style={styles.summaryTopIcon}>
+              <Ionicons name="trending-up-outline" size={17} color="#fff" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <ThemedText style={styles.summaryTopNumber}>{armados.length}</ThemedText>
+              <ThemedText style={styles.summaryTopLabel}>Armados totales</ThemedText>
+            </View>
+            <View style={styles.summaryPercentWrap}>
+              <ThemedText style={styles.summaryPercentText}>
+                {armados.length ? Math.round((resumen.finalizado * 100) / armados.length) : 0}%
+              </ThemedText>
+            </View>
+          </View>
+
           <View style={styles.summaryRow}>
-            <View style={[styles.summaryBadge, { backgroundColor: '#fef9c3', borderColor: '#facc15' }]}>
-              <Ionicons name="alert-circle-outline" size={14} color="#a16207" />
-              <ThemedText style={[styles.summaryText, { color: '#a16207' }]}>Pendiente</ThemedText>
-              <ThemedText style={[styles.summaryNumber, { color: '#a16207' }]}>{resumen.pendiente}</ThemedText>
+            <View style={[styles.summaryBadge, { backgroundColor: '#fff7ed', borderColor: '#fed7aa' }]}>
+              <View pointerEvents="none" style={[styles.summaryCornerGlow, { backgroundColor: 'rgba(245, 158, 11, 0.22)' }]} />
+              <View pointerEvents="none" style={[styles.summaryCornerGlowSoft, { backgroundColor: 'rgba(245, 158, 11, 0.12)' }]} />
+              <View style={[styles.summaryIconBubble, { backgroundColor: '#f59e0b' }]}>
+                <Ionicons name="time-outline" size={12} color="#fff" />
+              </View>
+              <ThemedText style={styles.summaryNumber}>{resumen.pendiente}</ThemedText>
+              <ThemedText style={styles.summaryText}>Pendientes</ThemedText>
             </View>
-            <View style={[styles.summaryBadge, { backgroundColor: '#e0f2fe', borderColor: '#38bdf8' }]}>
-              <Ionicons name="time-outline" size={14} color="#0284c7" />
-              <ThemedText style={[styles.summaryText, { color: '#0284c7' }]}>En proceso</ThemedText>
-              <ThemedText style={[styles.summaryNumber, { color: '#0284c7' }]}>{resumen.enProceso}</ThemedText>
+            <View style={[styles.summaryBadge, { backgroundColor: '#eff6ff', borderColor: '#bfdbfe' }]}>
+              <View pointerEvents="none" style={[styles.summaryCornerGlow, { backgroundColor: 'rgba(59, 130, 246, 0.22)' }]} />
+              <View pointerEvents="none" style={[styles.summaryCornerGlowSoft, { backgroundColor: 'rgba(59, 130, 246, 0.12)' }]} />
+              <View style={[styles.summaryIconBubble, { backgroundColor: '#3b82f6' }]}>
+                <Ionicons name="sync-outline" size={12} color="#fff" />
+              </View>
+              <ThemedText style={styles.summaryNumber}>{resumen.enProceso}</ThemedText>
+              <ThemedText style={styles.summaryText}>En proceso</ThemedText>
             </View>
-            <View style={[styles.summaryBadge, { backgroundColor: '#dcfce7', borderColor: '#22c55e' }]}>
-              <Ionicons name="checkmark-circle-outline" size={14} color="#15803d" />
-              <ThemedText style={[styles.summaryText, { color: '#15803d' }]}>Finalizado</ThemedText>
-              <ThemedText style={[styles.summaryNumber, { color: '#15803d' }]}>{resumen.finalizado}</ThemedText>
+            <View style={[styles.summaryBadge, { backgroundColor: '#ecfdf5', borderColor: '#bbf7d0' }]}>
+              <View pointerEvents="none" style={[styles.summaryCornerGlow, { backgroundColor: 'rgba(16, 185, 129, 0.22)' }]} />
+              <View pointerEvents="none" style={[styles.summaryCornerGlowSoft, { backgroundColor: 'rgba(16, 185, 129, 0.12)' }]} />
+              <View style={[styles.summaryIconBubble, { backgroundColor: '#10b981' }]}>
+                <Ionicons name="checkmark-outline" size={12} color="#fff" />
+              </View>
+              <ThemedText style={styles.summaryNumber}>{resumen.finalizado}</ThemedText>
+              <ThemedText style={styles.summaryText}>Finalizados</ThemedText>
             </View>
           </View>
         </ThemedView>
 
+        <View style={styles.sectionHeaderRow}>
+          <ThemedText type="subtitle" style={styles.sectionTitleLine}>Tus armados asignados</ThemedText>
+          <View style={styles.sectionLine} />
+        </View>
         <ThemedView style={styles.listCard}>
-          <ThemedText type="subtitle" style={styles.sectionTitle}>Tus armados asignados</ThemedText>
           {loadingArmados ? (
             <View style={{ padding: 12, alignItems: 'center' }}>
               <ActivityIndicator color="#0b3b8c" />
@@ -106,17 +180,45 @@ export default function HomeScreen() {
             <ThemedText style={styles.emptyText}>No tienes armados asignados.</ThemedText>
           ) : (
             armados.map((a) => (
-              <View key={a.id_armado || a.id} style={styles.armadoItem}>
-                <View style={styles.clienteRow}>
-                  <Ionicons name="people-outline" size={14} color="#0b3b8c" />
-                  <ThemedText style={styles.clientePill}>{a.centro?.cliente || a.cliente || '-'}</ThemedText>
-                </View>
-
+              <View
+                key={a.id_armado || a.id}
+                style={[
+                  styles.armadoItem,
+                  { borderColor: estadoTone(a.estado).border, backgroundColor: estadoTone(a.estado).bg },
+                ]}>
+                <View pointerEvents="none" style={[styles.armadoTopAccent, { backgroundColor: estadoAccent(a.estado) }]} />
+                <View pointerEvents="none" style={[styles.armadoGlowStrong, { backgroundColor: estadoGlow(a.estado).strong }]} />
+                <View pointerEvents="none" style={[styles.armadoGlowSoft, { backgroundColor: estadoGlow(a.estado).soft }]} />
                 <View style={styles.armadoHead}>
-                  <ThemedText style={styles.armadoCentro}>{a.centro?.nombre || a.centro_nombre || '-'}</ThemedText>
-                  <View style={styles.cajaTag}>
-                    <Ionicons name="cube-outline" size={12} color="#b45309" />
-                    <ThemedText style={styles.cajaText}>{a.total_cajas ?? 0} caja(s)</ThemedText>
+                  <View style={styles.armadoTitleBlock}>
+                    <View style={styles.armadoCenterRow}>
+                      <Ionicons
+                        name={a.estado === 'finalizado' ? 'checkmark-circle' : a.estado === 'en_proceso' ? 'time' : 'alert-circle'}
+                        size={15}
+                        color={a.estado === 'finalizado' ? '#16a34a' : a.estado === 'en_proceso' ? '#0284c7' : '#a16207'}
+                      />
+                      <ThemedText style={styles.armadoCentro}>{a.centro?.nombre || a.centro_nombre || '-'}</ThemedText>
+                    </View>
+                    <View style={styles.clienteRow}>
+                      <Ionicons name="business-outline" size={13} color="#0b3b8c" />
+                      <ThemedText style={styles.clientePill}>{a.centro?.cliente || a.cliente || '-'}</ThemedText>
+                    </View>
+                  </View>
+                  <View style={styles.armadoRight}>
+                    <View style={styles.diamond3dWrap}>
+                      <View style={styles.diamondGhost} />
+                      <View style={styles.diamondFront} />
+                    </View>
+                    <View style={styles.cajasWrap}>
+                      <ThemedText style={styles.cajasLabel}>Total cajas</ThemedText>
+                      <View style={styles.cajasOrbit}>
+                        <View style={styles.cajasRingOuter} />
+                        <View style={styles.cajasRingInner} />
+                        <View style={styles.cajasCore}>
+                          <ThemedText style={styles.cajasCoreNumber}>{a.total_cajas ?? 0}</ThemedText>
+                        </View>
+                      </View>
+                    </View>
                   </View>
                 </View>
 
@@ -131,15 +233,6 @@ export default function HomeScreen() {
                   </View>
                 </View>
 
-                <View style={styles.estadoRow}>
-                  <Ionicons
-                    name={a.estado === 'finalizado' ? 'checkmark-circle-outline' : a.estado === 'en_proceso' ? 'time-outline' : 'alert-circle-outline'}
-                    size={14}
-                    color={a.estado === 'finalizado' ? '#16a34a' : a.estado === 'en_proceso' ? '#0284c7' : '#a16207'}
-                    style={{ marginRight: 6 }}
-                  />
-                  <ThemedText style={badgeStyle(a.estado)}>{estadoLabel(a.estado)}</ThemedText>
-                </View>
                 <View style={styles.planillaRow}>
                   <Pressable
                     style={styles.planillaBtn}
@@ -178,28 +271,69 @@ const styles = StyleSheet.create({
     backgroundColor: '#ffffff',
   },
   headerMini: {
+    flexDirection: 'column',
+    alignItems: 'stretch',
+    gap: 12,
+    padding: 14,
+    backgroundColor: '#f8fbff',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+  },
+  headerTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  headerLeft: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
-    padding: 10,
-    backgroundColor: '#e8f0ff',
-    borderRadius: 12,
+    flex: 1,
+  },
+  bellBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     borderWidth: 1,
-    borderColor: '#c7d7ff',
+    borderColor: '#bfdbfe',
+    backgroundColor: '#eff6ff',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  headerLogo: {
-    backgroundColor: '#0b3b8c',
-    color: '#e8f0ff',
-    fontWeight: '900',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderRadius: 10,
+  actionCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    borderRadius: 16,
+    padding: 12,
+    backgroundColor: '#1d4ed8',
+    borderWidth: 1,
+    borderColor: '#1e40af',
+    shadowColor: '#1d4ed8',
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 4,
   },
-  headerTitle: {
-    fontWeight: '900',
-    color: '#0a1f44',
-    fontSize: 17,
-    letterSpacing: 0.5,
+  actionIconWrap: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  actionTitle: {
+    color: '#ffffff',
+    fontWeight: '800',
+    fontSize: 18,
+  },
+  actionText: {
+    color: '#dbeafe',
+    marginTop: 1,
+    fontSize: 13,
+    fontWeight: '600',
   },
   titleContainer: {
     flexDirection: 'row',
@@ -208,24 +342,44 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     backgroundColor: '#ffffff',
   },
-  avatar: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: '#22c55e',
+  headerAvatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#1d4ed8',
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  headerHello: {
+    color: '#64748b',
+    fontWeight: '700',
+    fontSize: 12,
+    letterSpacing: 0.6,
+  },
+  headerName: {
+    color: '#0f172a',
+    fontWeight: '900',
+    fontSize: 29,
+    lineHeight: 30,
   },
   avatarText: {
     color: '#ffffff',
     fontWeight: '800',
-    fontSize: 20,
+    fontSize: 16,
   },
-  roleBadge: {
-    marginLeft: 6,
-    color: '#16a34a',
+  roleChip: {
+    marginTop: 4,
+    alignSelf: 'flex-start',
+    backgroundColor: '#dbeafe',
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  roleChipText: {
+    color: '#0b3b8c',
     fontWeight: '700',
-    fontSize: 12,
+    fontSize: 10,
+    textTransform: 'capitalize',
   },
   hero: {
     backgroundColor: '#f8fbff',
@@ -324,59 +478,147 @@ const styles = StyleSheet.create({
   },
   armadoItem: {
     borderWidth: 1,
-    borderColor: '#e2e8f0',
-    borderRadius: 10,
-    padding: 10,
-    gap: 4,
-    backgroundColor: '#f9fbff',
+    borderRadius: 14,
+    padding: 12,
+    gap: 6,
+    borderLeftWidth: 1,
+    position: 'relative',
+    overflow: 'hidden',
+  },
+  armadoTopAccent: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: 0,
+    height: 4,
+  },
+  armadoGlowStrong: {
+    position: 'absolute',
+    right: -24,
+    top: -24,
+    width: 88,
+    height: 88,
+    borderRadius: 44,
+  },
+  armadoGlowSoft: {
+    position: 'absolute',
+    right: -42,
+    top: -42,
+    width: 130,
+    height: 130,
+    borderRadius: 65,
   },
   clienteRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
+    marginTop: -3,
   },
   clientePill: {
-    backgroundColor: '#e0f2fe',
     color: '#0b3b8c',
-    fontWeight: '800',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 10,
-    overflow: 'hidden',
+    fontWeight: '700',
     fontSize: 12,
+  },
+  armadoTitleBlock: {
+    flex: 1,
+    paddingRight: 6,
+    justifyContent: 'flex-start',
+  },
+  armadoCenterRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
   },
   armadoHead: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     justifyContent: 'space-between',
     gap: 8,
   },
+  armadoRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  diamond3dWrap: {
+    width: 40,
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+  },
+  diamondGhost: {
+    position: 'absolute',
+    width: 22,
+    height: 22,
+    transform: [{ rotate: '45deg' }, { translateX: 7 }, { translateY: 7 }],
+    backgroundColor: 'rgba(56, 189, 248, 0.35)',
+    borderRadius: 2,
+  },
+  diamondFront: {
+    width: 24,
+    height: 24,
+    transform: [{ rotate: '45deg' }],
+    backgroundColor: '#0ea5e9',
+    borderRadius: 2,
+    borderWidth: 1,
+    borderColor: '#38bdf8',
+  },
+  cajasWrap: {
+    minWidth: 92,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 2,
+  },
+  cajasLabel: {
+    color: '#0f172a',
+    fontSize: 10,
+    fontWeight: '700',
+    marginBottom: 3,
+  },
+  cajasOrbit: {
+    width: 62,
+    height: 62,
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+  },
+  cajasRingOuter: {
+    position: 'absolute',
+    width: 62,
+    height: 62,
+    borderRadius: 31,
+    backgroundColor: 'rgba(37, 99, 235, 0.12)',
+  },
+  cajasRingInner: {
+    position: 'absolute',
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: 'rgba(37, 99, 235, 0.2)',
+  },
+  cajasCore: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#2563eb',
+    borderWidth: 1,
+    borderColor: '#1d4ed8',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cajasCoreNumber: {
+    color: '#ffffff',
+    fontWeight: '900',
+    fontSize: 16,
+  },
   armadoCentro: {
     color: '#0f172a',
-    fontWeight: '800',
-    fontSize: 14,
+    fontWeight: '900',
+    fontSize: 17,
+    lineHeight: 17,
+    marginBottom: 0,
     flex: 1,
-  },
-  cajaTag: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: '#fff7ed',
-    borderRadius: 8,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderWidth: 1,
-    borderColor: '#fed7aa',
-  },
-  cajaText: {
-    color: '#b45309',
-    fontWeight: '700',
-    fontSize: 11,
-  },
-  estadoRow: {
-    marginTop: 4,
-    flexDirection: 'row',
-    alignItems: 'center',
   },
   planillaRow: {
     flexDirection: 'row',
@@ -410,8 +652,24 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     fontSize: 12,
   },
-  summaryCard: {
+  sectionHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
     gap: 10,
+    marginTop: 2,
+  },
+  sectionTitleLine: {
+    marginLeft: 2,
+    color: '#0f172a',
+    fontWeight: '900',
+  },
+  sectionLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: '#d1d5db',
+  },
+  summaryCard: {
+    gap: 12,
     backgroundColor: '#ffffff',
     padding: 10,
     borderRadius: 12,
@@ -425,24 +683,98 @@ const styles = StyleSheet.create({
   },
   summaryRow: {
     flexDirection: 'row',
-    gap: 8,
+    gap: 7,
   },
   summaryBadge: {
     flex: 1,
     borderWidth: 1,
-    borderRadius: 10,
-    paddingVertical: 10,
-    paddingHorizontal: 8,
+    borderRadius: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 10,
+    alignItems: 'flex-start',
+    gap: 6,
+    position: 'relative',
+    overflow: 'hidden',
+  },
+  summaryCornerGlow: {
+    position: 'absolute',
+    right: -16,
+    top: -16,
+    width: 62,
+    height: 62,
+    borderRadius: 31,
+  },
+  summaryCornerGlowSoft: {
+    position: 'absolute',
+    right: -30,
+    top: -30,
+    width: 96,
+    height: 96,
+    borderRadius: 48,
+  },
+  summaryIconBubble: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
     alignItems: 'center',
-    gap: 4,
+    justifyContent: 'center',
   },
   summaryText: {
-    fontSize: 11,
+    fontSize: 11.5,
     fontWeight: '700',
+    color: '#334155',
+    textTransform: 'uppercase',
   },
   summaryNumber: {
-    fontSize: 14,
+    fontSize: 30,
     fontWeight: '900',
+    lineHeight: 30,
+    color: '#0f172a',
+  },
+  summaryTopCard: {
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 16,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: '#ffffff',
+  },
+  summaryTopIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#2563eb',
+  },
+  summaryTopNumber: {
+    color: '#0f172a',
+    fontSize: 30,
+    fontWeight: '900',
+    lineHeight: 30,
+  },
+  summaryTopLabel: {
+    color: '#334155',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  summaryPercentWrap: {
+    minWidth: 56,
+    height: 56,
+    borderRadius: 28,
+    borderWidth: 4,
+    borderColor: '#e2e8f0',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#f8fafc',
+  },
+  summaryPercentText: {
+    fontWeight: '900',
+    color: '#0f172a',
+    fontSize: 12,
   },
   planillaBtn: {
     flexDirection: 'row',
