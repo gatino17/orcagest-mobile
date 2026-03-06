@@ -28,7 +28,7 @@ export default function TabLayout() {
         name="consultacentro"
         options={{
           title: 'Consulta centro',
-          tabBarIcon: ({ color }) => <IconSymbol size={28} name="list.bullet.rectangle" color={color} />,
+          tabBarIcon: ({ color }) => <Ionicons name="search-outline" size={24} color={color} />,
         }}
       />
       <Tabs.Screen

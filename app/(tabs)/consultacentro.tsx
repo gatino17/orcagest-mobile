@@ -126,6 +126,11 @@ export default function ConsultaCentroScreen() {
 
   const ipsCentro = Array.isArray(historial?.equipos_ip) ? historial.equipos_ip : [];
   const datosCentro = historial?.centro || centros.find((x) => (x.id_centro ?? x.id) === centroSel) || null;
+  const nombrePonton =
+    datosCentro?.nombre_ponton ||
+    datosCentro?.ponton_nombre ||
+    datosCentro?.ponton ||
+    'No especificado';
   const formatearFecha = (fecha?: string) => {
     if (!fecha) return '';
     const d = new Date(fecha);
@@ -183,7 +188,13 @@ export default function ConsultaCentroScreen() {
               placeholder="Buscar cliente o centro"
               placeholderTextColor="#94a3b8"
               value={search}
-              onChangeText={setSearch}
+              onChangeText={(text) => {
+                setSearch(text);
+                if (text.trim()) {
+                  setCentroSel(null);
+                  setHistorial(null);
+                }
+              }}
             />
             {!!search && (
               <Pressable onPress={() => setSearch('')}>
@@ -193,7 +204,7 @@ export default function ConsultaCentroScreen() {
           </View>
         </View>
 
-        {!!search.trim() && !clienteSel && (
+        {!!search.trim() && (
           <>
             <View style={styles.sectionHeaderRow}>
               <Text style={styles.sectionTitleLine}>Resultados por centro</Text>
@@ -314,6 +325,13 @@ export default function ConsultaCentroScreen() {
                       </View>
                     </View>
                     <View style={styles.itemRow}>
+                      <View style={styles.itemIcon}><Ionicons name="boat-outline" size={12} color="#0b3b8c" /></View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.itemPrimary, styles.itemPrimarySoft]}>Ponton</Text>
+                        <Text style={[styles.itemSecondary, styles.itemValueStrong]}>{nombrePonton}</Text>
+                      </View>
+                    </View>
+                    <View style={styles.itemRow}>
                       <View style={styles.itemIcon}><Ionicons name="checkmark-circle-outline" size={12} color={estadoIconColor} /></View>
                       <View style={{ flex: 1 }}>
                         <Text style={[styles.itemPrimary, styles.itemPrimarySoft]}>Estado</Text>
@@ -392,31 +410,37 @@ export default function ConsultaCentroScreen() {
 
               {!loading && consultaTab === 'mantenciones' && (
                 timelineSections.some((s) => s.items.length) ? (
-                  timelineSections.map((section) => (
-                    <View key={section.key} style={styles.timelineSection}>
-                      <View style={styles.timelineHeader}>
-                        <View style={styles.timelineIcon}>
-                          <Ionicons name={section.icon as any} size={13} color="#1d4ed8" />
-                        </View>
-                        <Text style={styles.timelineTitle}>{section.title}</Text>
-                        <Text style={styles.timelineCount}>{section.items.length}</Text>
-                      </View>
-                      {section.items.length ? (
-                        section.items.slice(0, 10).map((it: any, idx: number) => (
-                          <View key={it.id || it.id_mantencion || idx} style={styles.timelineItem}>
-                            <Text style={styles.timelineItemText}>
-                              {it.descripcion || it.detalle || it.observacion || it.problema || 'Registro'}
-                            </Text>
-                            <Text style={styles.timelineItemDate}>
-                              {formatearFecha(it[section.dateField] || it.fecha || it.created_at)}
-                            </Text>
+                  timelineSections.map((section) => {
+                    const isRetiro = section.key === 'retiros';
+                    return (
+                      <View key={section.key} style={[styles.timelineSection, isRetiro && styles.timelineSectionRetiro]}>
+                        <View style={[styles.timelineHeader, isRetiro && styles.timelineHeaderRetiro]}>
+                          <View style={[styles.timelineIcon, isRetiro && styles.timelineIconRetiro]}>
+                            <Ionicons name={section.icon as any} size={13} color={isRetiro ? '#dc2626' : '#1d4ed8'} />
                           </View>
-                        ))
-                      ) : (
-                        <Text style={styles.timelineEmpty}>Sin registros</Text>
-                      )}
-                    </View>
-                  ))
+                          <Text style={[styles.timelineTitle, isRetiro && styles.timelineTitleRetiro]}>{section.title}</Text>
+                          <Text style={[styles.timelineCount, isRetiro && styles.timelineCountRetiro]}>{section.items.length}</Text>
+                        </View>
+                        {section.items.length ? (
+                          section.items.slice(0, 10).map((it: any, idx: number) => (
+                            <View key={it.id || it.id_mantencion || idx} style={styles.timelineItem}>
+                              <Text style={styles.timelineItemText}>
+                                {it.descripcion || it.detalle || it.observacion || it.problema || 'Registro'}
+                              </Text>
+                              <View style={[styles.timelineDateBadge, isRetiro && styles.timelineDateBadgeRetiro]}>
+                                <Ionicons name="calendar-outline" size={11} color={isRetiro ? '#dc2626' : '#1d4ed8'} style={{ marginRight: 4 }} />
+                                <Text style={[styles.timelineItemDate, isRetiro && styles.timelineItemDateRetiro]}>
+                                  {formatearFecha(it[section.dateField] || it.fecha || it.created_at)}
+                                </Text>
+                              </View>
+                            </View>
+                          ))
+                        ) : (
+                          <Text style={styles.timelineEmpty}>Sin registros</Text>
+                        )}
+                      </View>
+                    );
+                  })
                 ) : (
                   <Text style={styles.muted}>Sin historial del centro.</Text>
                 )
@@ -685,6 +709,10 @@ const styles = StyleSheet.create({
     marginBottom: 10,
     overflow: 'hidden',
   },
+  timelineSectionRetiro: {
+    borderColor: '#fecaca',
+    backgroundColor: '#fff7f7',
+  },
   timelineHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -695,6 +723,10 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#dbeafe',
   },
+  timelineHeaderRetiro: {
+    backgroundColor: '#fee2e2',
+    borderBottomColor: '#fecaca',
+  },
   timelineIcon: {
     width: 22,
     height: 22,
@@ -703,16 +735,25 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  timelineIconRetiro: {
+    backgroundColor: '#fee2e2',
+  },
   timelineTitle: {
     flex: 1,
     color: '#0f172a',
     fontWeight: '800',
     fontSize: 13,
   },
+  timelineTitleRetiro: {
+    color: '#991b1b',
+  },
   timelineCount: {
     color: '#1d4ed8',
     fontWeight: '800',
     fontSize: 12,
+  },
+  timelineCountRetiro: {
+    color: '#dc2626',
   },
   timelineItem: {
     paddingHorizontal: 10,
@@ -726,9 +767,28 @@ const styles = StyleSheet.create({
     fontSize: 12.5,
   },
   timelineItemDate: {
-    marginTop: 2,
-    color: '#64748b',
+    color: '#1d4ed8',
     fontSize: 11.5,
+    fontWeight: '800',
+  },
+  timelineDateBadge: {
+    marginTop: 5,
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    backgroundColor: '#eff6ff',
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  timelineDateBadgeRetiro: {
+    borderColor: '#fecaca',
+    backgroundColor: '#fee2e2',
+  },
+  timelineItemDateRetiro: {
+    color: '#dc2626',
   },
   timelineEmpty: {
     color: '#64748b',
