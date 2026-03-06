@@ -1,4 +1,4 @@
-import React, { useContext, useEffect, useState, useMemo } from 'react';
+import React, { useContext, useEffect, useState, useMemo, useCallback } from 'react';
 import { StyleSheet, Pressable, ScrollView, StatusBar as RNStatusBar, ActivityIndicator, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
@@ -8,21 +8,41 @@ import { Ionicons } from '@expo/vector-icons';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { AuthContext } from '../_layout';
-import { getArmados } from '@/lib/api';
+import { getArmados, SOCKET_URL } from '@/lib/api';
+import { io } from 'socket.io-client';
 
 export default function HomeScreen() {
   const router = useRouter();
-  const { name, role, userId } = useContext(AuthContext);
+  const { name, role, userId, token } = useContext(AuthContext);
   const [armados, setArmados] = useState<any[]>([]);
   const [loadingArmados, setLoadingArmados] = useState(false);
 
-  useEffect(() => {
+  const cargarArmados = useCallback(async () => {
     if (!userId) return;
     setLoadingArmados(true);
-    getArmados({ tecnico_id: userId, per_page: 0 })
+    await getArmados({ tecnico_id: userId, per_page: 0 })
       .then((data) => setArmados(Array.isArray(data) ? data : []))
       .catch(() => setArmados([]))
       .finally(() => setLoadingArmados(false));
+  }, [token, userId, cargarArmados]);
+
+  useEffect(() => {
+    cargarArmados();
+  }, [cargarArmados]);
+
+  useEffect(() => {
+    if (!token || !userId) return;
+    const socket = io(SOCKET_URL, { transports: ['websocket', 'polling'], reconnection: true });
+    const onArmadoUpdated = (evt: any) => {
+      const tecnicoId = Number(evt?.tecnico_id || evt?.tecnico || 0);
+      if (tecnicoId && tecnicoId !== Number(userId)) return;
+      cargarArmados();
+    };
+    socket.on('armado_updated', onArmadoUpdated);
+    return () => {
+      socket.off('armado_updated', onArmadoUpdated);
+      socket.disconnect();
+    };
   }, [userId]);
 
   const resumen = useMemo(() => {
