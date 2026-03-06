@@ -167,6 +167,13 @@ export default function ArmadoScreen() {
   const materialesSnapshotRef = useRef<Record<string, string>>({});
   const [modalCajasVisible, setModalCajasVisible] = useState(false);
   const [modalGuardarMatVisible, setModalGuardarMatVisible] = useState(false);
+  const [modalQuitarCajaVisible, setModalQuitarCajaVisible] = useState(false);
+  const [resumenQuitarCaja, setResumenQuitarCaja] = useState({
+    target: '',
+    destino: '',
+    equipos: 0,
+    materiales: 0,
+  });
   const [cantidadCajas, setCantidadCajas] = useState('1');
   const centro = (params.centro as string) || '-';
   const cliente = (params.cliente as string) || '-';
@@ -486,6 +493,27 @@ export default function ArmadoScreen() {
     setModalCajasVisible(true);
   };
 
+  const numeroCaja = (caja?: string) => {
+    const n = parseInt(String(caja || '').replace(/[^\d]/g, ''), 10);
+    return Number.isFinite(n) ? n : 0;
+  };
+
+  const abrirQuitarCaja = () => {
+    if (cajas.length <= 1) return;
+    const ordered = [...cajas].sort((a, b) => numeroCaja(a) - numeroCaja(b));
+    const target = ordered[ordered.length - 1];
+    const destino = ordered[ordered.length - 2] || 'Caja 1';
+    const equiposCount = equipos.filter((e) => (e.caja || 'Caja 1') === target).length;
+    const materialesCount = materiales.filter((m) => (m.caja || 'Caja 1') === target).length;
+    setResumenQuitarCaja({
+      target,
+      destino,
+      equipos: equiposCount,
+      materiales: materialesCount,
+    });
+    setModalQuitarCajaVisible(true);
+  };
+
   const confirmarGuardarMateriales = () => {
     setModalGuardarMatVisible(true);
   };
@@ -504,6 +532,26 @@ export default function ArmadoScreen() {
       updateArmado(armadoId, { total_cajas_manual: totalNuevo }).catch(() => {});
     }
     setModalCajasVisible(false);
+  };
+
+  const confirmarQuitarCaja = () => {
+    const { target, destino } = resumenQuitarCaja;
+    if (!target || cajas.length <= 1) {
+      setModalQuitarCajaVisible(false);
+      return;
+    }
+    setEquipos((prev) => prev.map((e) => ((e.caja || 'Caja 1') === target ? { ...e, caja: destino } : e)));
+    setMateriales((prev) =>
+      prev.map((m) => ((m.caja || 'Caja 1') === target ? { ...m, caja: destino, usuario: m.usuario || name } : m))
+    );
+    const nextCajas = cajas.filter((c) => c !== target);
+    setCajas(nextCajas);
+    const totalNuevo = Math.max(1, nextCajas.length);
+    setTotalCajas(totalNuevo);
+    if (armadoId) {
+      updateArmado(armadoId, { total_cajas_manual: totalNuevo }).catch(() => {});
+    }
+    setModalQuitarCajaVisible(false);
   };
 
   useEffect(() => {
@@ -611,6 +659,10 @@ export default function ArmadoScreen() {
           <Pressable style={({ pressed }) => [styles.addBoxBtn, pressed && styles.btnPressed]} onPress={agregarCaja}>
             <Ionicons name="add-circle-outline" size={16} color="#0b3b8c" />
             <Text style={styles.addBoxText}>Agregar caja</Text>
+          </Pressable>
+          <Pressable style={({ pressed }) => [styles.removeBoxBtn, pressed && styles.btnPressed]} onPress={abrirQuitarCaja}>
+            <Ionicons name="remove-circle-outline" size={16} color="#b91c1c" />
+            <Text style={styles.removeBoxText}>Quitar caja</Text>
           </Pressable>
         </View>
 
@@ -855,6 +907,31 @@ export default function ArmadoScreen() {
                   await guardarMaterialesApp();
                 }}>
                 <Text style={styles.confirmSaveText}>Guardar</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={modalQuitarCajaVisible} animationType="fade" transparent>
+        <View style={styles.camOverlay}>
+          <View style={styles.confirmBox}>
+            <View style={[styles.confirmIconWrap, { backgroundColor: '#fee2e2' }]}>
+              <Ionicons name="trash-outline" size={20} color="#b91c1c" />
+            </View>
+            <Text style={styles.confirmTitle}>Quitar {resumenQuitarCaja.target}</Text>
+            <Text style={styles.confirmText}>
+              Los elementos de esa caja se moveran a {resumenQuitarCaja.destino}.
+            </Text>
+            <Text style={[styles.confirmText, { marginBottom: 10 }]}>
+              Equipos: {resumenQuitarCaja.equipos} | Materiales: {resumenQuitarCaja.materiales}
+            </Text>
+            <View style={styles.confirmActions}>
+              <Pressable style={styles.confirmCancelBtn} onPress={() => setModalQuitarCajaVisible(false)}>
+                <Text style={styles.confirmCancelText}>Cancelar</Text>
+              </Pressable>
+              <Pressable style={styles.confirmSaveBtn} onPress={confirmarQuitarCaja}>
+                <Text style={styles.confirmSaveText}>Confirmar</Text>
               </Pressable>
             </View>
           </View>
@@ -1208,11 +1285,12 @@ const styles = StyleSheet.create({
   },
   tabs: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 10,
     marginTop: 12,
   },
   tabBtn: {
-    flex: 1,
+    flexBasis: '48%',
     minHeight: 44,
     paddingHorizontal: 10,
     borderRadius: 12,
@@ -1247,7 +1325,7 @@ const styles = StyleSheet.create({
     color: '#ffffff',
   },
   addBoxBtn: {
-    flex: 1,
+    flexBasis: '48%',
     flexDirection: 'row',
     gap: 6,
     minHeight: 44,
@@ -1268,6 +1346,29 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     fontSize: 12.5,
     color: '#1d4ed8',
+  },
+  removeBoxBtn: {
+    flexBasis: '48%',
+    flexDirection: 'row',
+    gap: 6,
+    minHeight: 44,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#fecaca',
+    backgroundColor: '#fef2f2',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#dc2626',
+    shadowOpacity: 0.06,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 1,
+  },
+  removeBoxText: {
+    fontWeight: '800',
+    fontSize: 12.5,
+    color: '#b91c1c',
   },
   btnPressed: {
     transform: [{ scale: 0.98 }],
