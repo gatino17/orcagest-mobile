@@ -179,6 +179,8 @@ export default function ArmadoScreen() {
   const cliente = (params.cliente as string) || '-';
   const armadoId = (params.armadoId as string) || '';
   const estado = (params.estado as string) || '';
+  const estadoNormalizado = String(estado || '').toLowerCase();
+  const esFinalizado = estadoNormalizado === 'finalizado';
   const totalCajasParam = params.total_cajas ? Number(params.total_cajas) : undefined;
   const [totalCajas, setTotalCajas] = useState<number | undefined>(totalCajasParam);
   const centroId = params.centro_id ? Number(params.centro_id) : undefined;
@@ -362,6 +364,7 @@ export default function ArmadoScreen() {
   }, [token, armadoId, cargarEquipos, cargarMat]);
 
   const actualizarEquipo = (id: string, cambios: Partial<Equipo>) => {
+    if (esFinalizado) return;
     const idStr = String(id);
     setEquipos((prev) => {
       const idx = prev.findIndex((eq) => String(eq.id) === idStr);
@@ -386,10 +389,12 @@ export default function ArmadoScreen() {
   };
 
   const actualizarMaterial = (id: string, cambios: Partial<Material>) => {
+    if (esFinalizado) return;
     setMateriales((prev) => prev.map((m) => (m.id === id ? { ...m, ...cambios } : m)));
   };
 
   const abrirCamaraSerie = (equipoId: string, nombre: string) => {
+    if (esFinalizado) return;
     setCamEquipoId(String(equipoId));
     setCamEquipoNombre(nombre);
     scannedOnce.current = false;
@@ -414,6 +419,7 @@ export default function ArmadoScreen() {
   };
 
   const guardarMaterialesApp = async () => {
+    if (esFinalizado) return;
     if (!armadoId) return;
     try {
       setGuardandoMat(true);
@@ -442,6 +448,7 @@ export default function ArmadoScreen() {
   };
 
   const guardarEquiposApp = async () => {
+    if (esFinalizado) return;
     try {
       setGuardandoEq(true);
       const payloads = equipos.map((e) => {
@@ -489,6 +496,7 @@ export default function ArmadoScreen() {
   };
 
   const agregarCaja = () => {
+    if (esFinalizado) return;
     setCantidadCajas('1');
     setModalCajasVisible(true);
   };
@@ -499,6 +507,7 @@ export default function ArmadoScreen() {
   };
 
   const abrirQuitarCaja = () => {
+    if (esFinalizado) return;
     if (cajas.length <= 1) return;
     const ordered = [...cajas].sort((a, b) => numeroCaja(a) - numeroCaja(b));
     const target = ordered[ordered.length - 1];
@@ -515,10 +524,12 @@ export default function ArmadoScreen() {
   };
 
   const confirmarGuardarMateriales = () => {
+    if (esFinalizado) return;
     setModalGuardarMatVisible(true);
   };
 
   const confirmarAgregarCajas = () => {
+    if (esFinalizado) return;
     const qty = Math.max(1, Number.parseInt(cantidadCajas || '1', 10));
     const maxNum = cajas.reduce((max, c) => {
       const n = parseInt(String(c).replace(/[^\d]/g, ''), 10);
@@ -535,6 +546,7 @@ export default function ArmadoScreen() {
   };
 
   const confirmarQuitarCaja = () => {
+    if (esFinalizado) return;
     const { target, destino } = resumenQuitarCaja;
     if (!target || cajas.length <= 1) {
       setModalQuitarCajaVisible(false);
@@ -624,9 +636,9 @@ export default function ArmadoScreen() {
               <Text style={styles.metaLabel}>Estado</Text>
               <View style={styles.metaChip}>
                 <Ionicons
-                  name={estado === 'finalizado' ? 'checkmark-circle' : estado === 'en_proceso' ? 'time' : 'alert-circle'}
+                  name={estadoNormalizado === 'finalizado' ? 'checkmark-circle' : estadoNormalizado === 'en_proceso' ? 'time' : 'alert-circle'}
                   size={14}
-                  color={estado === 'finalizado' ? '#16a34a' : estado === 'en_proceso' ? '#0284c7' : '#f59e0b'}
+                  color={estadoNormalizado === 'finalizado' ? '#16a34a' : estadoNormalizado === 'en_proceso' ? '#0284c7' : '#f59e0b'}
                   style={{ marginRight: 4 }}
                 />
                 <Text style={[styles.metaValue, { color: '#0f172a' }]}>{estado || 'Pendiente'}</Text>
@@ -634,6 +646,12 @@ export default function ArmadoScreen() {
             </View>
           </View>
         </View>
+        {esFinalizado ? (
+          <View style={styles.readOnlyBanner}>
+            <Ionicons name="lock-closed-outline" size={14} color="#14532d" />
+            <Text style={styles.readOnlyBannerText}>Armado finalizado: vista solo lectura.</Text>
+          </View>
+        ) : null}
 
         <View style={styles.tabs}>
           <Pressable
@@ -656,11 +674,17 @@ export default function ArmadoScreen() {
             <Ionicons name="construct-outline" size={16} color={tab === 'materiales' ? '#ffffff' : '#475569'} />
             <Text style={[styles.tabText, tab === 'materiales' && styles.tabTextActive]}>Materiales</Text>
           </Pressable>
-          <Pressable style={({ pressed }) => [styles.addBoxBtn, pressed && styles.btnPressed]} onPress={agregarCaja}>
+          <Pressable
+            style={({ pressed }) => [styles.addBoxBtn, esFinalizado && styles.btnDisabled, pressed && styles.btnPressed]}
+            onPress={agregarCaja}
+            disabled={esFinalizado}>
             <Ionicons name="add-circle-outline" size={16} color="#0b3b8c" />
             <Text style={styles.addBoxText}>Agregar caja</Text>
           </Pressable>
-          <Pressable style={({ pressed }) => [styles.removeBoxBtn, pressed && styles.btnPressed]} onPress={abrirQuitarCaja}>
+          <Pressable
+            style={({ pressed }) => [styles.removeBoxBtn, esFinalizado && styles.btnDisabled, pressed && styles.btnPressed]}
+            onPress={abrirQuitarCaja}
+            disabled={esFinalizado}>
             <Ionicons name="remove-circle-outline" size={16} color="#b91c1c" />
             <Text style={styles.removeBoxText}>Quitar caja</Text>
           </Pressable>
@@ -716,7 +740,8 @@ export default function ArmadoScreen() {
                           </View>
                         <Pressable
                           style={[styles.cardBadge, { borderColor: '#0b3b8c' }]}
-                          onPress={() => actualizarEquipo(eq.id, { caja: siguienteCaja(eq.caja), nombre: eq.nombre })}>
+                          onPress={() => actualizarEquipo(eq.id, { caja: siguienteCaja(eq.caja), nombre: eq.nombre })}
+                          disabled={esFinalizado}>
                           <Text style={{ color: '#0b3b8c', fontWeight: '700' }}>{eq.caja}</Text>
                         </Pressable>
                         </View>
@@ -734,8 +759,13 @@ export default function ArmadoScreen() {
                               value={eq.serie ? String(eq.serie) : ''}
                               onChangeText={(t) => actualizarEquipo(eq.id, { serie: t, codigo: t.slice(0, 5), nombre: eq.nombre })}
                               keyboardType="numeric"
+                              editable={!esFinalizado}
                             />
-                            <Pressable style={styles.camBtn} onPress={() => abrirCamaraSerie(eq.id, eq.nombre)} hitSlop={6}>
+                            <Pressable
+                              style={[styles.camBtn, esFinalizado && styles.btnDisabled]}
+                              onPress={() => abrirCamaraSerie(eq.id, eq.nombre)}
+                              hitSlop={6}
+                              disabled={esFinalizado}>
                               <Ionicons name="barcode-outline" size={18} color="#ffffff" />
                             </Pressable>
                           </View>
@@ -784,7 +814,8 @@ export default function ArmadoScreen() {
                     <View style={{ alignItems: 'flex-end' }}>
                     <Pressable
                       style={[styles.cardBadge, { borderColor: '#0b3b8c' }]}
-                      onPress={() => actualizarMaterial(m.id, { caja: siguienteCaja(m.caja) })}>
+                      onPress={() => actualizarMaterial(m.id, { caja: siguienteCaja(m.caja) })}
+                      disabled={esFinalizado}>
                       <Text style={{ color: '#0b3b8c', fontWeight: '700' }}>{m.caja || 'Caja 1'}</Text>
                     </Pressable>
                       </View>
@@ -801,6 +832,7 @@ export default function ArmadoScreen() {
                         })
                       }
                       style={[styles.input, { color: '#0f172a', borderColor: '#d7e3f4', backgroundColor: '#f8fbff' }]}
+                      editable={!esFinalizado}
                     />
                     {m.usuario ? <Text style={[styles.metaText, { color: '#475569' }]}>Por: {m.usuario}</Text> : null}
                   </View>
@@ -815,8 +847,8 @@ export default function ArmadoScreen() {
 
       {tab === 'equipos' && (
         <Pressable
-          style={styles.fabSave}
-          disabled={guardandoEq}
+          style={[styles.fabSave, esFinalizado && styles.btnDisabled]}
+          disabled={guardandoEq || esFinalizado}
           onPress={guardarEquiposApp}>
           <Ionicons name="save-outline" size={18} color="#fff" style={{ marginRight: 6 }} />
           <Text style={styles.planillaText}>{guardandoEq ? 'Guardando...' : 'Guardar equipos'}</Text>
@@ -824,8 +856,8 @@ export default function ArmadoScreen() {
       )}
       {tab === 'materiales' && (
         <Pressable
-          style={styles.fabSave}
-          disabled={guardandoMat}
+          style={[styles.fabSave, esFinalizado && styles.btnDisabled]}
+          disabled={guardandoMat || esFinalizado}
           onPress={confirmarGuardarMateriales}>
           <Ionicons name="save-outline" size={18} color="#fff" style={{ marginRight: 6 }} />
           <Text style={styles.planillaText}>{guardandoMat ? 'Guardando...' : 'Guardar materiales'}</Text>
@@ -1265,6 +1297,24 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#dbeafe',
   },
+  readOnlyBanner: {
+    marginTop: 8,
+    marginBottom: 2,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 10,
+    backgroundColor: '#dcfce7',
+    borderWidth: 1,
+    borderColor: '#86efac',
+  },
+  readOnlyBannerText: {
+    color: '#14532d',
+    fontSize: 12.5,
+    fontWeight: '700',
+  },
   groupHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1373,6 +1423,9 @@ const styles = StyleSheet.create({
   btnPressed: {
     transform: [{ scale: 0.98 }],
     opacity: 0.92,
+  },
+  btnDisabled: {
+    opacity: 0.5,
   },
   card: {
     borderWidth: 1,
