@@ -542,7 +542,7 @@ export default function ArmadoScreen() {
     }
     setEquipos((prev) => prev.map((e) => ((e.caja || 'Caja 1') === target ? { ...e, caja: destino } : e)));
     setMateriales((prev) =>
-      prev.map((m) => ((m.caja || 'Caja 1') === target ? { ...m, caja: destino, usuario: m.usuario || name } : m))
+      prev.map((m) => ((m.caja || 'Caja 1') === target ? { ...m, caja: destino } : m))
     );
     const nextCajas = cajas.filter((c) => c !== target);
     setCajas(nextCajas);

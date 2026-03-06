@@ -34,8 +34,7 @@ export default function TabLayout() {
       <Tabs.Screen
         name="armado"
         options={{
-          title: 'Armado',
-          tabBarIcon: ({ color }) => <IconSymbol size={28} name="shippingbox" color={color} />,
+          href: null,
         }}
       />
       <Tabs.Screen
