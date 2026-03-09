@@ -1,5 +1,5 @@
-import React, { useContext, useEffect, useState, useMemo, useCallback } from 'react';
-import { StyleSheet, Pressable, ScrollView, StatusBar as RNStatusBar, ActivityIndicator, View } from 'react-native';
+import React, { useContext, useEffect, useState, useMemo, useCallback, useRef } from 'react';
+import { StyleSheet, Pressable, ScrollView, StatusBar as RNStatusBar, ActivityIndicator, View, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { useRouter } from 'expo-router';
@@ -16,15 +16,89 @@ export default function HomeScreen() {
   const { name, role, userId, token } = useContext(AuthContext);
   const [armados, setArmados] = useState<any[]>([]);
   const [loadingArmados, setLoadingArmados] = useState(false);
+  const [tieneNuevoArmado, setTieneNuevoArmado] = useState(false);
+  const [mensajeNotificacion, setMensajeNotificacion] = useState('');
+  const knownArmadosRef = useRef<Set<number>>(new Set());
+  const snapshotArmadosRef = useRef<Map<number, string>>(new Map());
+  const detailArmadosRef = useRef<Map<number, { estado: string; centro: string }>>(new Map());
+
+  const estadoTexto = (est?: string) => {
+    const e = String(est || '').toLowerCase();
+    if (e === 'en_proceso') return 'En proceso';
+    if (e === 'finalizado') return 'Finalizado';
+    return 'Pendiente';
+  };
 
   const cargarArmados = useCallback(async () => {
     if (!userId) return;
     setLoadingArmados(true);
     await getArmados({ tecnico_id: userId, per_page: 0 })
-      .then((data) => setArmados(Array.isArray(data) ? data : []))
+      .then((data) => {
+        const lista = Array.isArray(data) ? data : [];
+        setArmados(lista);
+        const idsActuales = new Set<number>(
+          lista
+            .map((a) => Number(a?.id_armado || a?.id || 0))
+            .filter((id) => Number.isFinite(id) && id > 0)
+        );
+        const conocidos = knownArmadosRef.current;
+        const prevSnapshot = snapshotArmadosRef.current;
+        const prevDetails = detailArmadosRef.current;
+        const currentSnapshot = new Map<number, string>();
+        const currentDetails = new Map<number, { estado: string; centro: string }>();
+        lista.forEach((a) => {
+          const id = Number(a?.id_armado || a?.id || 0);
+          if (!Number.isFinite(id) || id <= 0) return;
+          const estado = String(a?.estado || '');
+          const centro = String(a?.centro?.nombre || a?.centro_nombre || 'Centro');
+          const sig = [
+            estado,
+            a?.fecha_asignacion || a?.created_at || '',
+            a?.fecha_inicio || '',
+            a?.fecha_cierre || '',
+            String(a?.total_cajas ?? ''),
+          ].join('|');
+          currentSnapshot.set(id, sig);
+          currentDetails.set(id, { estado, centro });
+        });
+        if (conocidos.size > 0) {
+          const nuevosIds = Array.from(idsActuales).filter((id) => !conocidos.has(id));
+          const cambiosIds = Array.from(currentSnapshot.entries())
+            .filter(([id, sig]) => prevSnapshot.get(id) !== sig)
+            .map(([id]) => id);
+          const hayNuevo = nuevosIds.length > 0;
+          const hayCambio = cambiosIds.length > 0;
+          if (hayNuevo || hayCambio) {
+            setTieneNuevoArmado(true);
+            if (hayNuevo) {
+              const idNuevo = nuevosIds[0];
+              const info = currentDetails.get(idNuevo);
+              setMensajeNotificacion(
+                `Se te asigno un nuevo centro: ${info?.centro || 'Centro'}. Estado: ${estadoTexto(info?.estado)}.`
+              );
+            } else {
+              const idCambio = cambiosIds[0];
+              const prev = prevDetails.get(idCambio);
+              const curr = currentDetails.get(idCambio);
+              const prevEstado = estadoTexto(prev?.estado);
+              const currEstado = estadoTexto(curr?.estado);
+              if (prevEstado !== currEstado) {
+                setMensajeNotificacion(
+                  `El armado de ${curr?.centro || 'Centro'} cambio de estado: ${prevEstado} -> ${currEstado}.`
+                );
+              } else {
+                setMensajeNotificacion(`El armado de ${curr?.centro || 'Centro'} tuvo cambios recientes.`);
+              }
+            }
+          }
+        }
+        knownArmadosRef.current = idsActuales;
+        snapshotArmadosRef.current = currentSnapshot;
+        detailArmadosRef.current = currentDetails;
+      })
       .catch(() => setArmados([]))
       .finally(() => setLoadingArmados(false));
-  }, [token, userId, cargarArmados]);
+  }, [userId]);
 
   useEffect(() => {
     cargarArmados();
@@ -96,6 +170,38 @@ export default function HomeScreen() {
     if (e === 'en_proceso') return { strong: 'rgba(59, 130, 246, 0.2)', soft: 'rgba(59, 130, 246, 0.1)' };
     return { strong: 'rgba(245, 158, 11, 0.2)', soft: 'rgba(245, 158, 11, 0.1)' };
   };
+  const prioridadEstado = (est?: string) => {
+    const e = (est || '').toLowerCase();
+    if (e === 'pendiente') return 0;
+    if (e === 'en_proceso') return 1;
+    if (e === 'finalizado') return 2;
+    return 3;
+  };
+  const armadosParaHome = useMemo(() => {
+    if (!Array.isArray(armados) || armados.length === 0) return [];
+    const pendientesProceso = armados.filter((a) => {
+      const e = (a?.estado || '').toLowerCase();
+      return e === 'pendiente' || e === 'en_proceso';
+    });
+    if (pendientesProceso.length > 0) {
+      return pendientesProceso.sort((a, b) => {
+        const pa = prioridadEstado(a?.estado);
+        const pb = prioridadEstado(b?.estado);
+        if (pa !== pb) return pa - pb;
+        const fa = new Date(a?.fecha_asignacion || a?.created_at || 0).getTime();
+        const fb = new Date(b?.fecha_asignacion || b?.created_at || 0).getTime();
+        return fb - fa;
+      });
+    }
+    const finalizados = armados
+      .filter((a) => (a?.estado || '').toLowerCase() === 'finalizado')
+      .sort((a, b) => {
+        const fa = new Date(a?.fecha_cierre || a?.fecha_asignacion || a?.created_at || 0).getTime();
+        const fb = new Date(b?.fecha_cierre || b?.fecha_asignacion || b?.created_at || 0).getTime();
+        return fb - fa;
+      });
+    return finalizados.slice(0, 1);
+  }, [armados]);
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: '#ffffff' }}>
@@ -119,8 +225,16 @@ export default function HomeScreen() {
                 )}
               </View>
             </View>
-            <Pressable style={styles.bellBtn}>
-              <Ionicons name="notifications-outline" size={18} color="#0b3b8c" />
+            <Pressable
+              style={[styles.bellBtn, tieneNuevoArmado && styles.bellBtnAlert]}
+              onPress={() => {
+                Alert.alert(
+                  'Notificaciones',
+                  tieneNuevoArmado ? mensajeNotificacion || 'Tienes novedades en tus armados.' : 'Sin notificaciones nuevas.'
+                );
+                setTieneNuevoArmado(false);
+              }}>
+              <Ionicons name="notifications-outline" size={18} color={tieneNuevoArmado ? '#ffffff' : '#0b3b8c'} />
             </Pressable>
           </View>
 
@@ -196,10 +310,10 @@ export default function HomeScreen() {
             <View style={{ padding: 12, alignItems: 'center' }}>
               <ActivityIndicator color="#0b3b8c" />
             </View>
-          ) : armados.length === 0 ? (
+          ) : armadosParaHome.length === 0 ? (
             <ThemedText style={styles.emptyText}>No tienes armados asignados.</ThemedText>
           ) : (
-            armados.map((a) => (
+            armadosParaHome.map((a) => (
               <View
                 key={a.id_armado || a.id}
                 style={[
@@ -320,6 +434,10 @@ const styles = StyleSheet.create({
     backgroundColor: '#eff6ff',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  bellBtnAlert: {
+    backgroundColor: '#dc2626',
+    borderColor: '#dc2626',
   },
   actionCard: {
     flexDirection: 'row',
