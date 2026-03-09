@@ -7,6 +7,7 @@ import { Colors } from '@/constants/theme';
 import { AuthContext } from '../_layout';
 import { useLocalSearchParams } from 'expo-router';
 import { getEquipos, getMaterialesArmado, saveMaterialesArmado, updateEquipo, createEquipo, updateArmado, SOCKET_URL } from '@/lib/api';
+import { enqueueOfflineOp, syncOfflineQueue } from '@/lib/offline-queue';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { io } from 'socket.io-client';
 
@@ -421,9 +422,10 @@ export default function ArmadoScreen() {
   const guardarMaterialesApp = async () => {
     if (esFinalizado) return;
     if (!armadoId) return;
+    let payload: any[] = [];
     try {
       setGuardandoMat(true);
-      const payload = materiales
+      payload = materiales
         .filter((m) => {
           const idStr = String(m.id);
           const actualHash = hashMaterial(m);
@@ -441,7 +443,7 @@ export default function ArmadoScreen() {
       await saveMaterialesArmado(armadoId, payload);
       await cargarMat();
     } catch (_e) {
-      // silencioso, podríamos mostrar toast
+      await enqueueOfflineOp('save_materiales', { armadoId, materiales: payload });
     } finally {
       setGuardandoMat(false);
     }
@@ -451,30 +453,34 @@ export default function ArmadoScreen() {
     if (esFinalizado) return;
     try {
       setGuardandoEq(true);
-      const payloads = equipos.map((e) => {
+      for (const e of equipos) {
         const idStr = String(e.id);
         const actualHash = hashEquipo(e);
         const previoHash = equiposSnapshotRef.current[idStr];
         const esNumerico = /^\d+$/.test(String(e.id));
         if (esNumerico) {
-          // Solo registrar movimiento cuando realmente cambió algo.
-          if (previoHash === actualHash) return Promise.resolve();
-          return updateEquipo(e.id, {
+          if (previoHash === actualHash) continue;
+          const data = {
             numero_serie: e.serie,
             codigo: e.codigo,
             caja: e.caja,
             caja_tecnico_id: userId || undefined,
             armado_id: armadoId ? Number(armadoId) : undefined,
-          });
+          };
+          try {
+            await updateEquipo(e.id, data);
+          } catch (_err) {
+            await enqueueOfflineOp('update_equipo', { id_equipo: e.id, data });
+          }
+          continue;
         }
-        // Placeholder sin id en backend: lo creamos
         if (centroId) {
           const tieneDatos =
             String(e.serie || '').trim().length > 0 ||
             String(e.codigo || '').trim().length > 0 ||
             String(e.caja || 'Caja 1').trim() !== 'Caja 1';
-          if (!tieneDatos) return Promise.resolve();
-          return createEquipo({
+          if (!tieneDatos) continue;
+          const data = {
             centro_id: centroId,
             nombre: e.nombre,
             numero_serie: e.serie,
@@ -482,11 +488,14 @@ export default function ArmadoScreen() {
             caja: e.caja,
             caja_tecnico_id: userId || undefined,
             armado_id: armadoId ? Number(armadoId) : undefined,
-          });
+          };
+          try {
+            await createEquipo(data);
+          } catch (_err) {
+            await enqueueOfflineOp('create_equipo', { data });
+          }
         }
-        return Promise.resolve();
-      });
-      await Promise.all(payloads);
+      }
       await cargarEquipos();
     } catch (_e) {
       // silencioso
@@ -540,7 +549,9 @@ export default function ArmadoScreen() {
     setCajas((prev) => Array.from(new Set([...prev, ...nuevas])));
     setTotalCajas(totalNuevo);
     if (armadoId) {
-      updateArmado(armadoId, { total_cajas_manual: totalNuevo }).catch(() => {});
+      updateArmado(armadoId, { total_cajas_manual: totalNuevo }).catch(async () => {
+        await enqueueOfflineOp('update_armado', { armadoId, data: { total_cajas_manual: totalNuevo } });
+      });
     }
     setModalCajasVisible(false);
   };
@@ -561,10 +572,19 @@ export default function ArmadoScreen() {
     const totalNuevo = Math.max(1, nextCajas.length);
     setTotalCajas(totalNuevo);
     if (armadoId) {
-      updateArmado(armadoId, { total_cajas_manual: totalNuevo }).catch(() => {});
+      updateArmado(armadoId, { total_cajas_manual: totalNuevo }).catch(async () => {
+        await enqueueOfflineOp('update_armado', { armadoId, data: { total_cajas_manual: totalNuevo } });
+      });
     }
     setModalQuitarCajaVisible(false);
   };
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      syncOfflineQueue().catch(() => {});
+    }, 12000);
+    return () => clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     if (!cajas?.length) return;
@@ -1552,4 +1572,5 @@ const styles = StyleSheet.create({
     elevation: 4,
   },
 });
+
 

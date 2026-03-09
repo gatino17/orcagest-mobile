@@ -9,6 +9,7 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { AuthContext } from '../_layout';
 import { getArmados, SOCKET_URL } from '@/lib/api';
+import { clearOfflineNotice, getOfflineNotice, getPendingCount, syncOfflineQueue } from '@/lib/offline-queue';
 import { io } from 'socket.io-client';
 
 export default function HomeScreen() {
@@ -18,6 +19,7 @@ export default function HomeScreen() {
   const [loadingArmados, setLoadingArmados] = useState(false);
   const [tieneNuevoArmado, setTieneNuevoArmado] = useState(false);
   const [mensajeNotificacion, setMensajeNotificacion] = useState('');
+  const [pendientesOffline, setPendientesOffline] = useState(0);
   const knownArmadosRef = useRef<Set<number>>(new Set());
   const snapshotArmadosRef = useRef<Map<number, string>>(new Map());
   const detailArmadosRef = useRef<Map<number, { estado: string; centro: string }>>(new Map());
@@ -118,6 +120,24 @@ export default function HomeScreen() {
       socket.disconnect();
     };
   }, [userId]);
+
+  const refrescarEstadoOffline = useCallback(async () => {
+    const [count, notice] = await Promise.all([getPendingCount(), getOfflineNotice()]);
+    setPendientesOffline(count);
+    if (notice) {
+      setTieneNuevoArmado(true);
+      setMensajeNotificacion(notice);
+    }
+  }, []);
+
+  useEffect(() => {
+    refrescarEstadoOffline();
+    const timer = setInterval(async () => {
+      await syncOfflineQueue().catch(() => {});
+      await refrescarEstadoOffline();
+    }, 12000);
+    return () => clearInterval(timer);
+  }, [refrescarEstadoOffline]);
 
   const resumen = useMemo(() => {
     const base = { pendiente: 0, enProceso: 0, finalizado: 0 };
@@ -226,15 +246,27 @@ export default function HomeScreen() {
               </View>
             </View>
             <Pressable
-              style={[styles.bellBtn, tieneNuevoArmado && styles.bellBtnAlert]}
+              style={[styles.bellBtn, (tieneNuevoArmado || pendientesOffline > 0) && styles.bellBtnAlert]}
               onPress={() => {
                 Alert.alert(
                   'Notificaciones',
-                  tieneNuevoArmado ? mensajeNotificacion || 'Tienes novedades en tus armados.' : 'Sin notificaciones nuevas.'
+                  tieneNuevoArmado || pendientesOffline > 0
+                    ? mensajeNotificacion ||
+                      (pendientesOffline > 0
+                        ? 'Sin red: queda pendiente subir armado...'
+                        : 'Tienes novedades en tus armados.')
+                    : 'Sin notificaciones nuevas.'
                 );
                 setTieneNuevoArmado(false);
+                if (pendientesOffline === 0) {
+                  clearOfflineNotice().catch(() => {});
+                }
               }}>
-              <Ionicons name="notifications-outline" size={18} color={tieneNuevoArmado ? '#ffffff' : '#0b3b8c'} />
+              <Ionicons
+                name="notifications-outline"
+                size={18}
+                color={tieneNuevoArmado || pendientesOffline > 0 ? '#ffffff' : '#0b3b8c'}
+              />
             </Pressable>
           </View>
 
