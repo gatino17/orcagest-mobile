@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useContext, useEffect, useCallback, useRef } from 'react';
+﻿import React, { useMemo, useState, useContext, useEffect, useCallback, useRef } from 'react';
 import { View, Text, StyleSheet, ScrollView, TextInput, ActivityIndicator, Pressable, StatusBar as RNStatusBar, Modal } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -118,7 +118,7 @@ const MATERIALES_PREDEF: string[] = [
 const GRUPOS_EQUIPOS: { titulo: string; items: string[] }[] = [
   {
     titulo: 'Oficina',
-    items: ['PC', 'Monitor', 'Mouse', 'Teclado', 'Router', 'Switch', 'Switch (Cisco)', 'Camara Interior', 'Parlantes', 'Sensor Magnetico', 'Rack 9U - tuercas - tornillos', 'Bandeja Rack - tornillos', 'Zapatilla Rack (PDU)'],
+    items: ['PC', 'Monitor', 'Mouse', 'Teclado', 'Router', 'Switch', 'Switch (Cisco)', 'Switch raqueable', 'Camara Interior', 'Parlantes', 'Sensor Magnetico', 'Rack 9U - tuercas - tornillos', 'Bandeja Rack - tornillos', 'Zapatilla Rack (PDU)'],
   },
   {
     titulo: 'Tablero Alarma',
@@ -134,7 +134,7 @@ const GRUPOS_EQUIPOS: { titulo: string; items: string[] }[] = [
   },
   {
     titulo: 'Tablero Camara',
-    items: ['Tablero 750x500x250', 'Netio'],
+    items: ['Tablero Camara (500x700x250)', 'Poe Power 1', 'Poe Power 2', 'Poe Power 3', 'Poe Power 4', 'Poe Power 5', 'Switch POE 1', 'Switch POE 2', 'Mass', 'Tablero 750x500x250', 'Switch 1', 'Switch 2', 'Switch 3', 'Switch 4', 'Netio'],
   },
 ];
 
@@ -191,7 +191,14 @@ export default function ArmadoScreen() {
   const centroId = params.centro_id ? Number(params.centro_id) : undefined;
 
   const gruposRender = useMemo(() => {
-    const norm = (v: any) => (typeof v === 'string' ? v.toLowerCase() : '');
+    const norm = (v: any) => {
+      const base = typeof v === 'string'
+        ? v.toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+        : '';
+      if (base === 'ip pc' || base === 'ip pc nvr') return 'pc';
+      if (base === 'puerta de enlace' || base === 'router (puerta de enlace)') return 'router';
+      return base;
+    };
     const usados = new Set<string>();
 
     const groups = GRUPOS_EQUIPOS.map((g) => {
@@ -202,9 +209,10 @@ export default function ArmadoScreen() {
           const found = equipos.find((e) => norm(e.nombre) === norm(n));
           if (found) {
             usados.add(found.id);
-            return found;
+            // Muestra el nombre canonico del grupo (ej: IP PC -> PC)
+            return { ...found, nombre: n };
           }
-          // placeholder para que se vea en la lista aunque no exista aún
+          // placeholder para que se vea en la lista aunque no exista aÃºn
           return {
             id: `${g.titulo}-${idx}`,
             nombre: n,
@@ -378,7 +386,7 @@ export default function ArmadoScreen() {
         next[idx] = { ...next[idx], ...cambios };
         return next;
       }
-      // Si es un equipo placeholder (aún no viene de backend), lo creamos en estado local
+      // Si es un equipo placeholder (aÃºn no viene de backend), lo creamos en estado local
       // para que no se borre al escribir manualmente o al escanear.
       return [
         ...prev,
@@ -626,11 +634,11 @@ export default function ArmadoScreen() {
       <ScrollView contentContainerStyle={styles.container} style={{ backgroundColor: '#ffffff' }}>
         {!token ? (
           <Text style={[styles.subtitle, { color: 'red', textAlign: 'center' }]}>
-            Debes iniciar sesiÃ³n para ver tus armados.
+            Debes iniciar sesiÃƒÂ³n para ver tus armados.
           </Text>
         ) : role !== 'admin' && role !== 'tecnico' ? (
           <Text style={[styles.subtitle, { color: 'red', textAlign: 'center' }]}>
-            Tu rol no tiene acceso a esta secciÃ³n.
+            Tu rol no tiene acceso a esta secciÃƒÂ³n.
           </Text>
         ) : null}
         <View style={styles.hero}>
@@ -824,7 +832,7 @@ export default function ArmadoScreen() {
                           <Text style={[styles.label, { color: '#475569' }]}>N° Serie</Text>
                           <View style={styles.inputScanRow}>
                             <TextInput
-                              placeholder="Escribe el N° de serie"
+                              placeholder="Escribe el NÂ° de serie"
                               placeholderTextColor="#94a3b8"
                               style={[
                                 styles.input,
@@ -943,7 +951,7 @@ export default function ArmadoScreen() {
           <View style={styles.camBox}>
             {camPerm?.status !== 'granted' ? (
               <Text style={{ color: 'red', textAlign: 'center', padding: 12 }}>
-                Sin permiso de cámara. Concede acceso y vuelve a intentarlo.
+                Sin permiso de cÃ¡mara. Concede acceso y vuelve a intentarlo.
               </Text>
             ) : (
               <CameraView
@@ -954,7 +962,7 @@ export default function ArmadoScreen() {
             )}
             <View pointerEvents="none" style={styles.scanFrame} />
             <View style={styles.camHeader}>
-              <Text style={{ color: '#fff', fontWeight: '700' }}>Escanea el N° de serie</Text>
+              <Text style={{ color: '#fff', fontWeight: '700' }}>Escanea el NÂ° de serie</Text>
               <Pressable onPress={() => { setCamVisible(false); setCamEquipoId(null); }}>
                 <Ionicons name="close-circle" size={26} color="#fff" />
               </Pressable>
@@ -967,10 +975,10 @@ export default function ArmadoScreen() {
         <View style={styles.camOverlay}>
           <View style={[styles.camBox, { aspectRatio: undefined, padding: 16, backgroundColor: '#f8fafc' }]}>
             <Text style={{ fontWeight: '800', fontSize: 16, marginBottom: 8, color: '#0f172a' }}>
-              ¿Cuántas cajas agregar?
+              Â¿CuÃ¡ntas cajas agregar?
             </Text>
             <Text style={{ marginBottom: 12, color: '#475569' }}>
-              Actualmente existe Caja 1. Ingresa cuántas cajas nuevas quieres crear.
+              Actualmente existe Caja 1. Ingresa cuÃ¡ntas cajas nuevas quieres crear.
             </Text>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
               <TextInput
@@ -1654,5 +1662,6 @@ const styles = StyleSheet.create({
     elevation: 4,
   },
 });
+
 
 
