@@ -10,6 +10,7 @@ import { getEquipos, getMaterialesArmado, saveMaterialesArmado, updateEquipo, cr
 import { enqueueOfflineOp, syncOfflineQueue } from '@/lib/offline-queue';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { io } from 'socket.io-client';
+import * as SecureStore from 'expo-secure-store';
 
 type Equipo = {
   id: string;
@@ -173,6 +174,8 @@ export default function ArmadoScreen() {
   const [modalCajasVisible, setModalCajasVisible] = useState(false);
   const [modalGuardarMatVisible, setModalGuardarMatVisible] = useState(false);
   const [modalQuitarCajaVisible, setModalQuitarCajaVisible] = useState(false);
+  const [gruposColapsados, setGruposColapsados] = useState<Record<string, boolean>>({});
+  const [cacheReady, setCacheReady] = useState(false);
   const [resumenQuitarCaja, setResumenQuitarCaja] = useState({
     target: '',
     destino: '',
@@ -189,6 +192,13 @@ export default function ArmadoScreen() {
   const totalCajasParam = params.total_cajas ? Number(params.total_cajas) : undefined;
   const [totalCajas, setTotalCajas] = useState<number | undefined>(totalCajasParam);
   const centroId = params.centro_id ? Number(params.centro_id) : undefined;
+  const cacheKey = useMemo(
+    () => `armado_cache_v1:${armadoId || 'sin-armado'}:${centroId || 'sin-centro'}`,
+    [armadoId, centroId]
+  );
+  const toggleGrupo = (titulo: string) => {
+    setGruposColapsados((prev) => ({ ...prev, [titulo]: !prev[titulo] }));
+  };
 
   const gruposRender = useMemo(() => {
     const norm = (v: any) => {
@@ -200,13 +210,18 @@ export default function ArmadoScreen() {
       return base;
     };
     const usados = new Set<string>();
+    const equiposPorNombre = new Map<string, Equipo>();
+    equipos.forEach((e) => {
+      const key = norm(e.nombre);
+      if (key && !equiposPorNombre.has(key)) equiposPorNombre.set(key, e);
+    });
 
     const groups = GRUPOS_EQUIPOS.map((g) => {
       const baseItems = Array.isArray(g.items) ? g.items : [];
       const items = baseItems
         .map((n, idx) => {
           if (typeof n !== 'string') return null;
-          const found = equipos.find((e) => norm(e.nombre) === norm(n));
+          const found = equiposPorNombre.get(norm(n));
           if (found) {
             usados.add(found.id);
             // Muestra el nombre canonico del grupo (ej: IP PC -> PC)
@@ -252,6 +267,30 @@ export default function ArmadoScreen() {
     return `${cantidad}|${caja}`;
   }, []);
 
+  const readCache = useCallback(async () => {
+    try {
+      const raw = await SecureStore.getItemAsync(cacheKey);
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  }, [cacheKey]);
+
+  const writeCache = useCallback(
+    async (partial: Record<string, any>) => {
+      try {
+        const current = (await readCache()) || {};
+        await SecureStore.setItemAsync(
+          cacheKey,
+          JSON.stringify({ ...current, ...partial, updatedAt: new Date().toISOString() })
+        );
+      } catch {
+        // silencioso
+      }
+    },
+    [cacheKey, readCache]
+  );
+
   const mergeMateriales = useCallback((listaBackend: any[] = []): Material[] => {
     const normalizar = (v: any) =>
       String(v || '')
@@ -289,6 +328,48 @@ export default function ArmadoScreen() {
     return [...base, ...extras];
   }, []);
 
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      const cached = await readCache();
+      if (!active) return;
+      if (cached?.equipos && Array.isArray(cached.equipos) && cached.equipos.length > 0) {
+        setEquipos(cached.equipos);
+        const snap: Record<string, string> = {};
+        cached.equipos.forEach((e: Equipo) => {
+          snap[String(e.id)] = hashEquipo(e);
+        });
+        equiposSnapshotRef.current = snap;
+      }
+      if (cached?.materiales && Array.isArray(cached.materiales) && cached.materiales.length > 0) {
+        setMateriales(cached.materiales);
+        const snap: Record<string, string> = {};
+        cached.materiales.forEach((m: Material) => {
+          snap[String(m.id)] = hashMaterial(m);
+        });
+        materialesSnapshotRef.current = snap;
+      }
+      if (cached?.cajas && Array.isArray(cached.cajas) && cached.cajas.length > 0) {
+        setCajas(cached.cajas);
+      }
+      if (typeof cached?.totalCajas === 'number') {
+        setTotalCajas(cached.totalCajas);
+      }
+      setCacheReady(true);
+    })();
+    return () => {
+      active = false;
+    };
+  }, [readCache, hashEquipo, hashMaterial]);
+
+  useEffect(() => {
+    if (!cacheReady) return;
+    const timer = setTimeout(() => {
+      writeCache({ equipos, materiales, cajas, totalCajas });
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [cacheReady, equipos, materiales, cajas, totalCajas, writeCache]);
+
   const cargarEquipos = useCallback(async () => {
     if (!centroId) return;
     setLoading(true);
@@ -311,13 +392,25 @@ export default function ArmadoScreen() {
         equiposSnapshotRef.current = snap;
         const cajasDetect = Array.from(new Set(mapped.map((e) => e.caja || 'Caja 1')));
         setCajas((prev) => Array.from(new Set([...prev, ...cajasDetect])));
+        await writeCache({ equipos: mapped });
       }
     } catch (e) {
-      setError('No se pudieron cargar los equipos.');
+      const cached = await readCache();
+      if (cached?.equipos && Array.isArray(cached.equipos) && cached.equipos.length > 0) {
+        setEquipos(cached.equipos);
+        const snap: Record<string, string> = {};
+        cached.equipos.forEach((eq: Equipo) => {
+          snap[String(eq.id)] = hashEquipo(eq);
+        });
+        equiposSnapshotRef.current = snap;
+        setError('Sin internet: mostrando equipos guardados localmente.');
+      } else {
+        setError('No se pudieron cargar los equipos.');
+      }
     } finally {
       setLoading(false);
     }
-  }, [centroId, hashEquipo]);
+  }, [centroId, hashEquipo, readCache, writeCache]);
 
   useEffect(() => {
     cargarEquipos();
@@ -346,12 +439,21 @@ export default function ArmadoScreen() {
       materialesSnapshotRef.current = snap;
       const cajasDetect = mapped.map((m: any) => m.caja || 'Caja 1');
       setCajas((prev) => Array.from(new Set([...prev, ...cajasDetect])));
+      await writeCache({ materiales: mapped });
     } catch (_e) {
-      // silencioso
+      const cached = await readCache();
+      if (cached?.materiales && Array.isArray(cached.materiales) && cached.materiales.length > 0) {
+        setMateriales(cached.materiales);
+        const snap: Record<string, string> = {};
+        cached.materiales.forEach((m: Material) => {
+          snap[String(m.id)] = hashMaterial(m);
+        });
+        materialesSnapshotRef.current = snap;
+      }
     } finally {
       setLoadingMateriales(false);
     }
-  }, [armadoId, hashMaterial, mergeMateriales]);
+  }, [armadoId, hashMaterial, mergeMateriales, readCache, writeCache]);
 
   useEffect(() => {
     cargarMat();
@@ -798,15 +900,32 @@ export default function ArmadoScreen() {
               gruposRender.map((grupo) => {
                 const items = grupo.items;
                 const groupVisual = getGrupoVisual(grupo.titulo);
+                const colapsado = !!gruposColapsados[grupo.titulo];
                 return (
                   <View key={grupo.titulo} style={{ gap: 8 }}>
-                    <View style={[styles.groupHeader, { backgroundColor: groupVisual.bg, borderColor: groupVisual.border }]}>
-                      <View style={[styles.groupIconWrap, { backgroundColor: '#ffffff', borderColor: groupVisual.border }]}>
-                        <Ionicons name={groupVisual.icon} size={16} color={groupVisual.color} />
+                    <Pressable
+                      onPress={() => toggleGrupo(grupo.titulo)}
+                      style={({ pressed }) => [
+                        styles.groupHeader,
+                        { backgroundColor: groupVisual.bg, borderColor: groupVisual.border },
+                        pressed && styles.btnPressed,
+                      ]}>
+                      <View style={styles.groupHeaderMain}>
+                        <View style={[styles.groupIconWrap, { backgroundColor: '#ffffff', borderColor: groupVisual.border }]}>
+                          <Ionicons name={groupVisual.icon} size={16} color={groupVisual.color} />
+                        </View>
+                        <Text style={[styles.groupTitle, { color: groupVisual.color }]}>{grupo.titulo}</Text>
                       </View>
-                      <Text style={[styles.groupTitle, { color: groupVisual.color }]}>{grupo.titulo}</Text>
-                    </View>
-                    {items.map((eq) => (
+                      <View style={styles.groupHeaderRight}>
+                        <Text style={[styles.groupCount, { color: groupVisual.color }]}>{items.length}</Text>
+                        <Ionicons
+                          name={colapsado ? 'chevron-down-outline' : 'chevron-up-outline'}
+                          size={18}
+                          color={groupVisual.color}
+                        />
+                      </View>
+                    </Pressable>
+                    {!colapsado && items.map((eq) => (
                     <View
                         key={eq.id}
                         style={[
@@ -832,7 +951,7 @@ export default function ArmadoScreen() {
                           <Text style={[styles.label, { color: '#475569' }]}>N° Serie</Text>
                           <View style={styles.inputScanRow}>
                             <TextInput
-                              placeholder="Escribe el NÂ° de serie"
+                              placeholder="Escribe el N° de serie"
                               placeholderTextColor="#94a3b8"
                               style={[
                                 styles.input,
@@ -1422,12 +1541,23 @@ const styles = StyleSheet.create({
   groupHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    justifyContent: 'space-between',
     marginTop: 6,
     borderWidth: 1,
     borderRadius: 10,
     paddingHorizontal: 10,
     paddingVertical: 6,
+  },
+  groupHeaderMain: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flex: 1,
+  },
+  groupHeaderRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
   },
   groupIconWrap: {
     width: 28,
@@ -1442,6 +1572,12 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     letterSpacing: 0.2,
     textTransform: 'uppercase',
+  },
+  groupCount: {
+    fontSize: 12,
+    fontWeight: '900',
+    minWidth: 20,
+    textAlign: 'right',
   },
   tabs: {
     flexDirection: 'row',
