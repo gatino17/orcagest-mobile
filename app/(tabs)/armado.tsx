@@ -118,19 +118,23 @@ const MATERIALES_PREDEF: string[] = [
 const GRUPOS_EQUIPOS: { titulo: string; items: string[] }[] = [
   {
     titulo: 'Oficina',
-    items: ['PC', 'Monitor', 'Mouse', 'Teclado', 'Router', 'Switch', 'Parlantes', 'Sensor Magnetico', 'Rack 9U - tuercas - tornillos', 'Bandeja Rack - tornillos', 'Zapatilla Rack (PDU)'],
+    items: ['PC', 'Monitor', 'Mouse', 'Teclado', 'Router', 'Switch', 'Switch (Cisco)', 'Camara Interior', 'Parlantes', 'Sensor Magnetico', 'Rack 9U - tuercas - tornillos', 'Bandeja Rack - tornillos', 'Zapatilla Rack (PDU)'],
   },
   {
     titulo: 'Tablero Alarma',
-    items: ['Tablero 500x400x200', 'Baliza Interior', 'Bocina Interior', 'Baliza Exterior 1', 'Baliza Exterior 2', 'Bocina Exterior 1', 'Bocina Exterior 2', 'Foco led 1 150W', 'Foco led 2 150W', 'Fuente poder 12V', 'Axis P8221'],
+    items: ['Tablero 500x400x200', 'Baliza Interior', 'Bocina Interior', 'Baliza Exterior 1', 'Baliza Exterior 2', 'Bocina Exterior 1', 'Bocina Exterior 2', 'Foco led 1 150W', 'Foco led 2 150W', 'Foco led 1 50W', 'Foco led 2 50W', 'Fuente poder 12V', 'Axis P8221'],
   },
   {
     titulo: 'Tablero Respaldo',
-    items: ['Tablero 1200x800x300', 'Inversor cargador Victron', 'Panel Victron', 'Bateria 1', 'Bateria 2', 'Bateria 3', 'Bateria 4', 'Bateria 5', 'Bateria 6', 'Sensor magnetico respaldo', 'Sensor magnetico cargador', 'Cargador 1', 'Cargador 2', 'Tablero Cargador 750x500x250', 'UPS online'],
+    items: ['Tablero 1200x800x300', 'Tablero 1000x600x300', 'Inversor cargador Victron', 'Panel Victron', 'Bateria 1', 'Bateria 2', 'Bateria 3', 'Bateria 4', 'Bateria 5', 'Bateria 6', 'Switch POE', 'Sensor magnetico respaldo', 'Sensor magnetico cargador', 'Cargador 1', 'Cargador 2', 'Tablero Cargador 750x500x250', 'UPS online'],
   },
   {
     titulo: 'Mastil',
-    items: ['Mastil', 'Brazo Ubiquiti', 'Riel U', 'Perno Pasado', 'Omega 1'],
+    items: ['Tablero Derivacion (400x300x200)', 'Radar 1', 'Radar 2', 'Cable rj radar 1', 'Cable rj radar 2', 'Soporte radar 1', 'Soporte radar 2', 'Camara PTZ termal', 'Camara PTZ Laser', 'Camara PTZ Laser 2', 'Camara Modulo', 'Camara Silo 1', 'Camara Silo 2', 'Camara Ensinerador', 'Ensilaje interior', 'Ensilaje exterior', 'Camara Popa', 'Camara acceso 1', 'Camara acceso 2', 'Camara acceso 3', 'Camara acceso 4', 'Enlace Ubiquiti'],
+  },
+  {
+    titulo: 'Tablero Camara',
+    items: ['Tablero 750x500x250', 'Netio'],
   },
 ];
 
@@ -597,6 +601,26 @@ export default function ArmadoScreen() {
     return cajas[(idx + 1) % cajas.length];
   };
 
+  const getGrupoVisual = (titulo: string) => {
+    const key = String(titulo || '').toLowerCase();
+    if (key.includes('oficina')) {
+      return { icon: 'business-outline' as const, bg: '#eff6ff', border: '#93c5fd', color: '#1d4ed8' };
+    }
+    if (key.includes('alarma')) {
+      return { icon: 'alert-circle-outline' as const, bg: '#fff7ed', border: '#fdba74', color: '#c2410c' };
+    }
+    if (key.includes('respaldo')) {
+      return { icon: 'battery-charging-outline' as const, bg: '#f0f9ff', border: '#7dd3fc', color: '#0369a1' };
+    }
+    if (key.includes('mastil')) {
+      return { icon: 'radio-outline' as const, bg: '#ecfeff', border: '#67e8f9', color: '#0e7490' };
+    }
+    if (key.includes('otros')) {
+      return { icon: 'apps-outline' as const, bg: '#f8fafc', border: '#cbd5e1', color: '#334155' };
+    }
+    return { icon: 'folder-open-outline' as const, bg: '#eff6ff', border: '#bfdbfe', color: '#0b3b8c' };
+  };
+
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: '#ffffff' }]}>
       <ScrollView contentContainerStyle={styles.container} style={{ backgroundColor: '#ffffff' }}>
@@ -654,14 +678,41 @@ export default function ArmadoScreen() {
           <View style={styles.metaGrid}>
             <View style={styles.metaItem}>
               <Text style={styles.metaLabel}>Estado</Text>
-              <View style={styles.metaChip}>
-                <Ionicons
-                  name={estadoNormalizado === 'finalizado' ? 'checkmark-circle' : estadoNormalizado === 'en_proceso' ? 'time' : 'alert-circle'}
-                  size={14}
-                  color={estadoNormalizado === 'finalizado' ? '#16a34a' : estadoNormalizado === 'en_proceso' ? '#0284c7' : '#f59e0b'}
-                  style={{ marginRight: 4 }}
-                />
-                <Text style={[styles.metaValue, { color: '#0f172a' }]}>{estado || 'Pendiente'}</Text>
+              <View
+                style={[
+                  styles.metaChipEstado,
+                  estadoNormalizado === 'finalizado'
+                    ? { backgroundColor: '#dcfce7', borderColor: '#86efac' }
+                    : estadoNormalizado === 'en_proceso'
+                      ? { backgroundColor: '#e0f2fe', borderColor: '#7dd3fc' }
+                      : { backgroundColor: '#fef9c3', borderColor: '#fde047' },
+                ]}>
+                <View
+                  style={[
+                    styles.metaEstadoIconWrap,
+                    estadoNormalizado === 'finalizado'
+                      ? { backgroundColor: '#16a34a' }
+                      : estadoNormalizado === 'en_proceso'
+                        ? { backgroundColor: '#0284c7' }
+                        : { backgroundColor: '#f59e0b' },
+                  ]}>
+                  <Ionicons
+                    name={estadoNormalizado === 'finalizado' ? 'checkmark' : estadoNormalizado === 'en_proceso' ? 'time-outline' : 'alert-outline'}
+                    size={12}
+                    color="#ffffff"
+                  />
+                </View>
+                <Text
+                  style={[
+                    styles.metaEstadoText,
+                    estadoNormalizado === 'finalizado'
+                      ? { color: '#15803d' }
+                      : estadoNormalizado === 'en_proceso'
+                        ? { color: '#0369a1' }
+                        : { color: '#a16207' },
+                  ]}>
+                  {estado || 'Pendiente'}
+                </Text>
               </View>
             </View>
           </View>
@@ -738,11 +789,14 @@ export default function ArmadoScreen() {
             ) : (
               gruposRender.map((grupo) => {
                 const items = grupo.items;
+                const groupVisual = getGrupoVisual(grupo.titulo);
                 return (
                   <View key={grupo.titulo} style={{ gap: 8 }}>
-                    <View style={styles.groupHeader}>
-                      <Ionicons name="folder-open-outline" size={16} color="#0b3b8c" />
-                      <Text style={styles.groupTitle}>{grupo.titulo}</Text>
+                    <View style={[styles.groupHeader, { backgroundColor: groupVisual.bg, borderColor: groupVisual.border }]}>
+                      <View style={[styles.groupIconWrap, { backgroundColor: '#ffffff', borderColor: groupVisual.border }]}>
+                        <Ionicons name={groupVisual.icon} size={16} color={groupVisual.color} />
+                      </View>
+                      <Text style={[styles.groupTitle, { color: groupVisual.color }]}>{grupo.titulo}</Text>
                     </View>
                     {items.map((eq) => (
                     <View
@@ -1317,6 +1371,28 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#dbeafe',
   },
+  metaChipEstado: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 999,
+    borderWidth: 1,
+    gap: 6,
+  },
+  metaEstadoIconWrap: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  metaEstadoText: {
+    fontSize: 12.5,
+    fontWeight: '900',
+    textTransform: 'capitalize',
+  },
   readOnlyBanner: {
     marginTop: 8,
     marginBottom: 2,
@@ -1340,18 +1416,24 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
     marginTop: 6,
-    backgroundColor: '#eff6ff',
     borderWidth: 1,
-    borderColor: '#bfdbfe',
     borderRadius: 10,
     paddingHorizontal: 10,
-    paddingVertical: 7,
+    paddingVertical: 6,
+  },
+  groupIconWrap: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   groupTitle: {
     fontSize: 14.5,
     fontWeight: '900',
-    color: '#0b3b8c',
     letterSpacing: 0.2,
+    textTransform: 'uppercase',
   },
   tabs: {
     flexDirection: 'row',
