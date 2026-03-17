@@ -24,7 +24,7 @@ export default function LoginScreen() {
     }
     setLoading(true);
     try {
-      const data = await login(email.trim(), password.trim());
+      const data = await login(email.trim(), password);
       const access = data.access_token || data.token;
       if (!access) throw new Error('Token no recibido');
       await setToken(access);
@@ -55,6 +55,7 @@ export default function LoginScreen() {
             style={styles.input}
             placeholder="correo@empresa.com"
             autoCapitalize="none"
+            autoCorrect={false}
             keyboardType="email-address"
             value={email}
             onChangeText={setEmail}
@@ -65,6 +66,8 @@ export default function LoginScreen() {
             style={styles.input}
             placeholder="********"
             secureTextEntry
+            autoCapitalize="none"
+            autoCorrect={false}
             value={password}
             onChangeText={setPassword}
           />

@@ -14,6 +14,10 @@ export const BASE_URL =
   (__DEV__ ? devLocal : 'https://orcagest.orcatecnologia.net/api');
 
 export const SOCKET_URL = BASE_URL.replace(/\/api\/?$/i, '');
+export const SOCKET_TRANSPORTS =
+  __DEV__ || process.env.EXPO_PUBLIC_SOCKET_POLLING_ONLY === '1'
+    ? (['polling'] as const)
+    : (['websocket', 'polling'] as const);
 
 export const api = axios.create({
   baseURL: BASE_URL,

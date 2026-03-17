@@ -4,13 +4,14 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import * as SecureStore from 'expo-secure-store';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { AuthContext } from '../_layout';
-import { getArmados, SOCKET_URL } from '@/lib/api';
+import { getArmados } from '@/lib/api';
 import { clearOfflineNotice, getOfflineNotice, getPendingCount, syncOfflineQueue } from '@/lib/offline-queue';
-import { io } from 'socket.io-client';
+import { subscribeArmadoUpdated } from '@/lib/realtime';
 
 export default function HomeScreen() {
   const router = useRouter();
@@ -23,6 +24,28 @@ export default function HomeScreen() {
   const knownArmadosRef = useRef<Set<number>>(new Set());
   const snapshotArmadosRef = useRef<Map<number, string>>(new Map());
   const detailArmadosRef = useRef<Map<number, { estado: string; centro: string }>>(new Map());
+  const cacheKey = useMemo(() => `home_cache_v1_${userId || 'anon'}`, [userId]);
+
+  const readHomeCache = useCallback(async () => {
+    try {
+      const raw = await SecureStore.getItemAsync(cacheKey);
+      const parsed = raw ? JSON.parse(raw) : null;
+      return Array.isArray(parsed?.armados) ? parsed.armados : [];
+    } catch {
+      return [];
+    }
+  }, [cacheKey]);
+
+  const writeHomeCache = useCallback(
+    async (lista: any[]) => {
+      try {
+        await SecureStore.setItemAsync(cacheKey, JSON.stringify({ armados: lista, updatedAt: Date.now() }));
+      } catch {
+        // ignore cache write errors
+      }
+    },
+    [cacheKey]
+  );
 
   const estadoTexto = (est?: string) => {
     const e = String(est || '').toLowerCase();
@@ -31,13 +54,14 @@ export default function HomeScreen() {
     return 'Pendiente';
   };
 
-  const cargarArmados = useCallback(async () => {
+  const cargarArmados = useCallback(async (silent = false) => {
     if (!userId) return;
-    setLoadingArmados(true);
+    if (!silent) setLoadingArmados(true);
     await getArmados({ tecnico_id: userId, per_page: 0 })
       .then((data) => {
         const lista = Array.isArray(data) ? data : [];
         setArmados(lista);
+        writeHomeCache(lista).catch(() => {});
         const idsActuales = new Set<number>(
           lista
             .map((a) => Number(a?.id_armado || a?.id || 0))
@@ -98,28 +122,28 @@ export default function HomeScreen() {
         snapshotArmadosRef.current = currentSnapshot;
         detailArmadosRef.current = currentDetails;
       })
-      .catch(() => setArmados([]))
-      .finally(() => setLoadingArmados(false));
-  }, [userId]);
+      .catch(async () => {
+        const cached = await readHomeCache();
+        setArmados(cached);
+      })
+      .finally(() => {
+        if (!silent) setLoadingArmados(false);
+      });
+  }, [userId, readHomeCache, writeHomeCache]);
 
   useEffect(() => {
-    cargarArmados();
+    cargarArmados(false);
   }, [cargarArmados]);
 
   useEffect(() => {
     if (!token || !userId) return;
-    const socket = io(SOCKET_URL, { transports: ['websocket', 'polling'], reconnection: true });
     const onArmadoUpdated = (evt: any) => {
       const tecnicoId = Number(evt?.tecnico_id || evt?.tecnico || 0);
       if (tecnicoId && tecnicoId !== Number(userId)) return;
-      cargarArmados();
+      cargarArmados(true);
     };
-    socket.on('armado_updated', onArmadoUpdated);
-    return () => {
-      socket.off('armado_updated', onArmadoUpdated);
-      socket.disconnect();
-    };
-  }, [userId]);
+    return subscribeArmadoUpdated(onArmadoUpdated);
+  }, [token, userId, cargarArmados]);
 
   const refrescarEstadoOffline = useCallback(async () => {
     const [count, notice] = await Promise.all([getPendingCount(), getOfflineNotice()]);

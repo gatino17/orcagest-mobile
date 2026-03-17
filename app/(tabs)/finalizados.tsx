@@ -4,12 +4,13 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import * as SecureStore from 'expo-secure-store';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { AuthContext } from '../_layout';
-import { getArmados, SOCKET_URL } from '@/lib/api';
-import { io } from 'socket.io-client';
+import { getArmados } from '@/lib/api';
+import { subscribeArmadoUpdated } from '@/lib/realtime';
 
 export default function FinalizadosScreen() {
   const router = useRouter();
@@ -17,29 +18,55 @@ export default function FinalizadosScreen() {
   const [items, setItems] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
+  const cacheKey = useMemo(() => `finalizados_cache_v1_${userId || 'anon'}`, [userId]);
 
-  const cargarFinalizados = useCallback(async () => {
+  const readCache = useCallback(async () => {
+    try {
+      const raw = await SecureStore.getItemAsync(cacheKey);
+      const parsed = raw ? JSON.parse(raw) : null;
+      return Array.isArray(parsed?.items) ? parsed.items : [];
+    } catch {
+      return [];
+    }
+  }, [cacheKey]);
+
+  const writeCache = useCallback(
+    async (data: any[]) => {
+      try {
+        await SecureStore.setItemAsync(cacheKey, JSON.stringify({ items: data, updatedAt: Date.now() }));
+      } catch {
+        // ignore cache write errors
+      }
+    },
+    [cacheKey]
+  );
+
+  const cargarFinalizados = useCallback(async (silent = false) => {
     if (!userId) return;
-    setLoading(true);
+    if (!silent) setLoading(true);
     await getArmados({ tecnico_id: userId, estado: 'finalizado', per_page: 0 })
-      .then((data) => setItems(Array.isArray(data) ? data : []))
-      .catch(() => setItems([]))
-      .finally(() => setLoading(false));
-  }, [userId]);
+      .then((data) => {
+        const lista = Array.isArray(data) ? data : [];
+        setItems(lista);
+        writeCache(lista).catch(() => {});
+      })
+      .catch(async () => {
+        const cached = await readCache();
+        setItems(cached);
+      })
+      .finally(() => {
+        if (!silent) setLoading(false);
+      });
+  }, [userId, readCache, writeCache]);
 
   useEffect(() => {
-    cargarFinalizados();
+    cargarFinalizados(false);
   }, [cargarFinalizados]);
 
   useEffect(() => {
     if (!token || !userId) return;
-    const socket = io(SOCKET_URL, { transports: ['websocket', 'polling'], reconnection: true });
-    const onArmadoUpdated = () => cargarFinalizados();
-    socket.on('armado_updated', onArmadoUpdated);
-    return () => {
-      socket.off('armado_updated', onArmadoUpdated);
-      socket.disconnect();
-    };
+    const onArmadoUpdated = () => cargarFinalizados(true);
+    return subscribeArmadoUpdated(onArmadoUpdated);
   }, [token, userId, cargarFinalizados]);
 
   const formatFecha = (val?: string) => {

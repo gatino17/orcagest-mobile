@@ -12,6 +12,10 @@ type PendingOp = {
 
 const QUEUE_KEY = 'offline_queue_v1';
 const NOTICE_KEY = 'offline_notice_v1';
+const SYNC_MIN_INTERVAL_MS = 4000;
+
+let syncingPromise: Promise<{ synced: number; pending: number }> | null = null;
+let lastSyncAt = 0;
 
 const uid = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
@@ -78,21 +82,32 @@ const execOp = async (op: PendingOp) => {
 };
 
 export const syncOfflineQueue = async () => {
+  const now = Date.now();
+  if (syncingPromise) return syncingPromise;
+  if (now - lastSyncAt < SYNC_MIN_INTERVAL_MS) {
+    return { synced: 0, pending: await getPendingCount() };
+  }
+
+  const run = async () => {
   const queue = await readQueue();
-  if (!queue.length) return { synced: 0, pending: 0 };
+  if (!queue.length) {
+    lastSyncAt = Date.now();
+    return { synced: 0, pending: 0 };
+  }
 
   await setNotice('Red estable: se esta subiendo lo pendiente.');
 
   const remaining: PendingOp[] = [];
   let synced = 0;
 
-  for (const op of queue) {
+  for (let idx = 0; idx < queue.length; idx += 1) {
+    const op = queue[idx];
     try {
       await execOp(op);
       synced += 1;
     } catch (error) {
       if (isNetworkError(error)) {
-        remaining.push(op, ...queue.slice(queue.indexOf(op) + 1));
+        remaining.push(op, ...queue.slice(idx + 1));
         break;
       }
       // Si falla por validación/servidor, descartamos ese op para no bloquear toda la cola.
@@ -105,6 +120,14 @@ export const syncOfflineQueue = async () => {
   } else if (remaining.length > 0) {
     await setNotice('Sin red: queda pendiente subir armado.');
   }
+  lastSyncAt = Date.now();
   return { synced, pending: remaining.length };
-};
+  };
 
+  syncingPromise = run();
+  try {
+    return await syncingPromise;
+  } finally {
+    syncingPromise = null;
+  }
+};

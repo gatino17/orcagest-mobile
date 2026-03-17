@@ -6,11 +6,11 @@ import { useColorScheme } from '@/hooks/use-color-scheme';
 import { Colors } from '@/constants/theme';
 import { AuthContext } from '../_layout';
 import { useLocalSearchParams } from 'expo-router';
-import { getEquipos, getMaterialesArmado, saveMaterialesArmado, updateEquipo, createEquipo, updateArmado, SOCKET_URL } from '@/lib/api';
+import { getEquipos, getMaterialesArmado, saveMaterialesArmado, updateEquipo, createEquipo, updateArmado } from '@/lib/api';
 import { enqueueOfflineOp, syncOfflineQueue } from '@/lib/offline-queue';
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import { io } from 'socket.io-client';
 import * as SecureStore from 'expo-secure-store';
+import { subscribeArmadoUpdated } from '@/lib/realtime';
 
 type Equipo = {
   id: string;
@@ -462,20 +462,12 @@ export default function ArmadoScreen() {
   // Realtime: refresca armado activo cuando backend emite cambios.
   useEffect(() => {
     if (!token || !armadoId) return;
-    const socket = io(SOCKET_URL, {
-      transports: ['websocket', 'polling'],
-      reconnection: true,
-    });
     const onArmadoUpdated = (evt: any) => {
       if (Number(evt?.armado_id || 0) !== Number(armadoId)) return;
       cargarEquipos();
       cargarMat();
     };
-    socket.on('armado_updated', onArmadoUpdated);
-    return () => {
-      socket.off('armado_updated', onArmadoUpdated);
-      socket.disconnect();
-    };
+    return subscribeArmadoUpdated(onArmadoUpdated);
   }, [token, armadoId, cargarEquipos, cargarMat]);
 
   const actualizarEquipo = (id: string, cambios: Partial<Equipo>) => {
@@ -1081,7 +1073,7 @@ export default function ArmadoScreen() {
             )}
             <View pointerEvents="none" style={styles.scanFrame} />
             <View style={styles.camHeader}>
-              <Text style={{ color: '#fff', fontWeight: '700' }}>Escanea el NÂ° de serie</Text>
+              <Text style={{ color: '#fff', fontWeight: '700' }}>Escanea el N° de serie</Text>
               <Pressable onPress={() => { setCamVisible(false); setCamEquipoId(null); }}>
                 <Ionicons name="close-circle" size={26} color="#fff" />
               </Pressable>
