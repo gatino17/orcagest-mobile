@@ -1062,7 +1062,7 @@ export default function ArmadoScreen() {
           <View style={styles.camBox}>
             {camPerm?.status !== 'granted' ? (
               <Text style={{ color: 'red', textAlign: 'center', padding: 12 }}>
-                Sin permiso de cÃ¡mara. Concede acceso y vuelve a intentarlo.
+                Sin permiso de camara. Concede acceso y vuelve a intentarlo.
               </Text>
             ) : (
               <CameraView
@@ -1086,10 +1086,10 @@ export default function ArmadoScreen() {
         <View style={styles.camOverlay}>
           <View style={[styles.camBox, { aspectRatio: undefined, padding: 16, backgroundColor: '#f8fafc' }]}>
             <Text style={{ fontWeight: '800', fontSize: 16, marginBottom: 8, color: '#0f172a' }}>
-              Â¿CuÃ¡ntas cajas agregar?
+              ¿Cuantas cajas agregar?
             </Text>
             <Text style={{ marginBottom: 12, color: '#475569' }}>
-              Actualmente existe Caja 1. Ingresa cuÃ¡ntas cajas nuevas quieres crear.
+              Actualmente existe Caja 1. Ingresa cuantas cajas nuevas quieres crear.
             </Text>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
               <TextInput
