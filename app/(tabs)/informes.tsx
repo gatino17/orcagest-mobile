@@ -117,6 +117,20 @@ export default function InformesScreen() {
   const [firmaRecepciona, setFirmaRecepciona] = useState('');
   const [equiposConsiderados, setEquiposConsiderados] = useState('');
 
+  // Permiso de trabajo (intervencion) - formulario local por ahora
+  const [permClienteId, setPermClienteId] = useState<number | null>(null);
+  const [permCentros, setPermCentros] = useState<Centro[]>([]);
+  const [permCentroId, setPermCentroId] = useState<number | null>(null);
+  const [permBuscarCentro, setPermBuscarCentro] = useState('');
+  const [permFecha, setPermFecha] = useState(todayInputDate());
+  const [permRegion, setPermRegion] = useState('');
+  const [permLocalidad, setPermLocalidad] = useState('');
+  const [permTecnico1, setPermTecnico1] = useState('');
+  const [permTecnico2, setPermTecnico2] = useState('');
+  const [permRecepciona, setPermRecepciona] = useState('');
+  const [permPuntosGps, setPermPuntosGps] = useState('');
+  const [permDescripcionTrabajo, setPermDescripcionTrabajo] = useState('');
+
   const clienteForm = useMemo(
     () => clientes.find((c) => Number(c.id_cliente ?? c.id ?? 0) === Number(clienteIdForm ?? 0)) || null,
     [clientes, clienteIdForm]
@@ -132,6 +146,29 @@ export default function InformesScreen() {
     if (!q) return centrosForm;
     return centrosForm.filter((c) => String(c.nombre || '').toLowerCase().includes(q));
   }, [centrosForm, buscarCentroForm]);
+
+  const permCentroSel = useMemo(
+    () => permCentros.find((c) => Number(c.id_centro ?? c.id ?? 0) === Number(permCentroId ?? 0)) || null,
+    [permCentros, permCentroId]
+  );
+
+  const permCentrosFiltrados = useMemo(() => {
+    const q = permBuscarCentro.trim().toLowerCase();
+    if (!q) return permCentros;
+    return permCentros.filter((c) => String(c.nombre || '').toLowerCase().includes(q));
+  }, [permCentros, permBuscarCentro]);
+
+  const actaCentroSeleccionado = useMemo(() => {
+    if (!permCentroId) return null;
+    const porCentro = actas
+      .filter((a) => Number(a.centro_id || 0) === Number(permCentroId))
+      .sort((a, b) => {
+        const ta = new Date(a.fecha_registro || 0).getTime();
+        const tb = new Date(b.fecha_registro || 0).getTime();
+        return tb - ta;
+      });
+    return porCentro[0] || null;
+  }, [actas, permCentroId]);
 
   const cargarClientes = async () => {
     if (!token) return;
@@ -222,6 +259,35 @@ export default function InformesScreen() {
     cargarActas();
   }, [moduloInforme, tipoInstalacion, filtroCentroId, filtroFechaDesde, filtroFechaHasta]);
 
+  useEffect(() => {
+    if (!permClienteId) {
+      setPermCentros([]);
+      setPermCentroId(null);
+      return;
+    }
+    fetchCentrosPorCliente(permClienteId)
+      .then((lista) => setPermCentros(Array.isArray(lista) ? lista : []))
+      .catch(() => setPermCentros([]));
+  }, [permClienteId]);
+
+  useEffect(() => {
+    if (!permCentroSel) {
+      setPermRegion('');
+      setPermLocalidad('');
+      return;
+    }
+    setPermRegion(String(permCentroSel.area || permCentroSel.region || ''));
+    setPermLocalidad(String(permCentroSel.ubicacion || permCentroSel.localidad || permCentroSel.direccion || ''));
+  }, [permCentroSel]);
+
+  useEffect(() => {
+    if (!actaCentroSeleccionado) return;
+    setPermFecha(toInputDate(actaCentroSeleccionado.fecha_registro) || todayInputDate());
+    setPermTecnico1(actaCentroSeleccionado.tecnico_1 || '');
+    setPermTecnico2(actaCentroSeleccionado.tecnico_2 || '');
+    setPermRecepciona(actaCentroSeleccionado.recepciona_nombre || '');
+  }, [actaCentroSeleccionado]);
+
   const resetForm = () => {
     setEditId(null);
     setClienteIdForm(null);
@@ -293,8 +359,13 @@ export default function InformesScreen() {
       setShowEditor(false);
       resetForm();
       Alert.alert('Informes', 'Acta guardada correctamente.');
-    } catch {
-      Alert.alert('Informes', 'No se pudo guardar el acta.');
+    } catch (error: any) {
+      const backendMsg =
+        error?.response?.data?.error ||
+        error?.response?.data?.message ||
+        error?.message ||
+        'No se pudo guardar el acta.';
+      Alert.alert('Informes', backendMsg);
     } finally {
       setSaving(false);
     }
@@ -385,7 +456,7 @@ export default function InformesScreen() {
               </Pressable>
               <Pressable style={[styles.tabBtn, tipoInstalacion === 'informe_intervencion' && styles.tabBtnActive]} onPress={() => setTipoInstalacion('informe_intervencion')}>
                 <Ionicons name="clipboard-outline" size={14} color={tipoInstalacion === 'informe_intervencion' ? '#fff' : '#1d4ed8'} />
-                <Text style={[styles.tabBtnText, tipoInstalacion === 'informe_intervencion' && styles.tabBtnTextActive]}>Intervencion</Text>
+                <Text style={[styles.tabBtnText, tipoInstalacion === 'informe_intervencion' && styles.tabBtnTextActive]}>Permiso de trabajo</Text>
               </Pressable>
             </View>
           </View>
@@ -409,8 +480,101 @@ export default function InformesScreen() {
 
         {moduloInforme === 'instalacion' && tipoInstalacion === 'informe_intervencion' && (
           <View style={styles.card}>
-            <Text style={styles.placeholderTitle}>Informe de intervencion</Text>
-            <Text style={styles.placeholderText}>Seccion de referencia (sin formulario por ahora).</Text>
+            <Text style={styles.placeholderTitle}>Permiso de trabajo</Text>
+            <View style={styles.requirementBox}>
+              <View style={styles.requirementRow}>
+                <Ionicons name={actaCentroSeleccionado ? 'checkmark-circle' : 'ellipse-outline'} size={14} color={actaCentroSeleccionado ? '#16a34a' : '#64748b'} />
+                <Text style={styles.requirementText}>Acta de entrega {actaCentroSeleccionado ? 'completada' : 'pendiente'}</Text>
+              </View>
+              <View style={styles.requirementRow}>
+                <Ionicons name="ellipse-outline" size={14} color="#64748b" />
+                <Text style={styles.requirementText}>Permiso de trabajo pendiente</Text>
+              </View>
+              <Text style={styles.requirementHint}>Para cerrar instalacion, el centro debe tener ambos documentos: Acta + Permiso de trabajo.</Text>
+            </View>
+
+            <View style={styles.inputBlock}>
+              <Text style={styles.selectLabel}>Cliente</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.pillsRow}>
+                {clientes.map((cl) => {
+                  const id = Number(cl.id_cliente ?? cl.id ?? 0);
+                  const active = id === permClienteId;
+                  return (
+                    <Pressable key={id} style={[styles.pill, active && styles.pillActive]} onPress={() => { setPermClienteId(id); setPermCentroId(null); setPermBuscarCentro(''); }}>
+                      <Text style={[styles.pillText, active && styles.pillTextActive]}>{cl.nombre || cl.razon_social || `Cliente ${id}`}</Text>
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
+            </View>
+
+            <View style={styles.inputBlock}>
+              <Text style={styles.selectLabel}>Centro</Text>
+              {permCentroSel ? (
+                <View style={styles.selectedCenterBox}>
+                  <Text style={styles.selectedCenterText}>{permCentroSel.nombre || 'Centro seleccionado'}</Text>
+                  <Pressable style={styles.changeCenterBtn} onPress={() => { setPermCentroId(null); setPermBuscarCentro(''); }}>
+                    <Text style={styles.changeCenterBtnText}>Cambiar</Text>
+                  </Pressable>
+                </View>
+              ) : (
+                <>
+                  <TextInput style={styles.input} value={permBuscarCentro} onChangeText={setPermBuscarCentro} placeholder="Buscar centro..." />
+                  <ScrollView style={styles.centerDropdown} nestedScrollEnabled>
+                    {permCentrosFiltrados.map((ce) => {
+                      const id = Number(ce.id_centro ?? ce.id ?? 0);
+                      return (
+                        <Pressable key={id} style={styles.centerOption} onPress={() => setPermCentroId(id)}>
+                          <Text style={styles.centerOptionText}>{ce.nombre || `Centro ${id}`}</Text>
+                        </Pressable>
+                      );
+                    })}
+                  </ScrollView>
+                </>
+              )}
+            </View>
+
+            <View style={styles.row}>
+              <View style={styles.inputCol}><Text style={styles.selectLabel}>Empresa</Text><TextInput style={[styles.input, styles.inputDisabled]} editable={false} value={clientes.find((c) => Number(c.id_cliente ?? c.id ?? 0) === Number(permClienteId ?? 0))?.nombre || ''} /></View>
+              <View style={styles.inputCol}><Text style={styles.selectLabel}>Codigo ponton</Text><TextInput style={[styles.input, styles.inputDisabled]} editable={false} value={permCentroSel?.nombre_ponton || ''} /></View>
+            </View>
+            <View style={styles.row}>
+              <View style={styles.inputCol}><Text style={styles.selectLabel}>Region (Area)</Text><TextInput style={[styles.input, styles.inputDisabled]} editable={false} value={permRegion} /></View>
+              <View style={styles.inputCol}><Text style={styles.selectLabel}>Localidad</Text><TextInput style={[styles.input, styles.inputDisabled]} editable={false} value={permLocalidad} /></View>
+            </View>
+            <View style={styles.row}>
+              <View style={styles.inputCol}><Text style={styles.selectLabel}>Tecnico 1</Text><TextInput style={styles.input} value={permTecnico1} onChangeText={setPermTecnico1} /></View>
+              <View style={styles.inputCol}><Text style={styles.selectLabel}>Tecnico 2</Text><TextInput style={styles.input} value={permTecnico2} onChangeText={setPermTecnico2} /></View>
+            </View>
+            <View style={styles.row}>
+              <View style={styles.inputCol}><Text style={styles.selectLabel}>Recepciona</Text><TextInput style={styles.input} value={permRecepciona} onChangeText={setPermRecepciona} /></View>
+              <View style={styles.inputCol}><Text style={styles.selectLabel}>Fecha</Text><TextInput style={styles.input} value={permFecha} onChangeText={setPermFecha} placeholder="YYYY-MM-DD" /></View>
+            </View>
+            <View style={styles.inputBlock}>
+              <Text style={styles.selectLabel}>Puntos GPS</Text>
+              <TextInput style={styles.input} value={permPuntosGps} onChangeText={setPermPuntosGps} placeholder="Ej: -41.47123, -72.93651" />
+            </View>
+            <View style={styles.inputBlock}>
+              <Text style={styles.selectLabel}>Descripcion del trabajo</Text>
+              <TextInput
+                style={[styles.input, styles.textArea]}
+                value={permDescripcionTrabajo}
+                onChangeText={setPermDescripcionTrabajo}
+                multiline
+                textAlignVertical="top"
+              />
+            </View>
+            <Pressable
+              style={styles.saveBtn}
+              onPress={() => {
+                if (!actaCentroSeleccionado) {
+                  Alert.alert('Permiso de trabajo', 'Primero debes tener un Acta de entrega para este centro.');
+                  return;
+                }
+                Alert.alert('Permiso de trabajo', 'Formulario listo. En el siguiente paso lo conectamos al backend.');
+              }}>
+              <Text style={styles.saveBtnText}>Guardar (proximo paso)</Text>
+            </Pressable>
           </View>
         )}
 
@@ -608,6 +772,29 @@ const styles = StyleSheet.create({
   tabBtnTextActive: { color: '#fff' },
   placeholderTitle: { color: '#0f172a', fontWeight: '800', fontSize: 15 },
   placeholderText: { color: '#64748b', fontWeight: '600' },
+  requirementBox: {
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+    backgroundColor: '#f8fbff',
+    borderRadius: 10,
+    padding: 10,
+    gap: 6,
+  },
+  requirementRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  requirementText: {
+    color: '#0f172a',
+    fontWeight: '700',
+    fontSize: 12.5,
+  },
+  requirementHint: {
+    color: '#64748b',
+    fontSize: 12,
+    marginTop: 2,
+  },
   selectLabel: { color: '#334155', fontSize: 12, fontWeight: '700', textTransform: 'uppercase' },
   pillsRow: { gap: 8, paddingRight: 8 },
   pill: { borderWidth: 1, borderColor: '#bfdbfe', backgroundColor: '#eff6ff', borderRadius: 999, paddingVertical: 7, paddingHorizontal: 12 },
