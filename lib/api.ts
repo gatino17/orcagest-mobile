@@ -96,3 +96,24 @@ export const fetchHistorialCentro = async (centroId: string | number) => {
   const res = await api.get(`/consultas_centro/centro_historial/${centroId}`);
   return res.data;
 };
+
+// Informes centros - Actas de entrega
+export const fetchActasEntrega = async (params?: Record<string, any>) => {
+  const res = await api.get('/actas_entrega/', { params });
+  return res.data;
+};
+
+export const createActaEntrega = async (payload: any) => {
+  const res = await api.post('/actas_entrega/', payload);
+  return res.data;
+};
+
+export const updateActaEntrega = async (idActa: string | number, payload: any) => {
+  const res = await api.put(`/actas_entrega/${idActa}`, payload);
+  return res.data;
+};
+
+export const deleteActaEntrega = async (idActa: string | number) => {
+  const res = await api.delete(`/actas_entrega/${idActa}`);
+  return res.data;
+};

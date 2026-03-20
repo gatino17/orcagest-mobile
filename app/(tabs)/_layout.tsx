@@ -39,6 +39,13 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
+        name="informes"
+        options={{
+          title: 'Informes',
+          tabBarIcon: ({ color }) => <Ionicons name="document-text-outline" size={24} color={color} />,
+        }}
+      />
+      <Tabs.Screen
         name="armado"
         options={{
           href: null,
