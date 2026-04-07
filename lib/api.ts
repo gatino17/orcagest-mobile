@@ -119,6 +119,10 @@ export const fetchCentrosPorCliente = async (clienteId: string | number) => {
         area: c?.area,
         region: c?.area,
         nombre_ponton: c?.nombre_ponton,
+        correo_centro: c?.correo_centro ?? c?.correo,
+        telefono: c?.telefono,
+        base_tierra: c?.base_tierra,
+        cantidad_radares: c?.cantidad_radares,
         estado: c?.estado,
       }));
   }

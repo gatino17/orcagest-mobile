@@ -42,6 +42,12 @@ type Centro = {
   ubicacion?: string;
   localidad?: string;
   direccion?: string;
+  correo_centro?: string;
+  correo?: string;
+  telefono?: string;
+  telefono_centro?: string;
+  base_tierra?: string;
+  cantidad_radares?: number;
 };
 type Acta = {
   id_acta_entrega?: number;
@@ -62,6 +68,7 @@ type Acta = {
   recepciona_nombre?: string;
   firma_recepciona?: string;
   equipos_considerados?: string;
+  centro_origen_traslado?: string;
 };
 type Permiso = {
   id_permiso_trabajo?: number;
@@ -75,16 +82,25 @@ type Permiso = {
   tecnico_1?: string;
   tecnico_2?: string;
   recepciona_nombre?: string;
+  recepciona_rut?: string;
+  firma_recepciona?: string;
+  telefono_centro?: string;
   puntos_gps?: string;
+  medicion_fase_neutro?: string;
+  medicion_neutro_tierra?: string;
+  hertz?: string;
+  sellos?: string;
   descripcion_trabajo?: string;
   empresa?: string;
   cliente?: string;
   centro?: string;
 };
+type GpsPoint = { lat: string; lng: string };
+type SelloItem = { ubicacion: string; numero: string };
 
 type ModuloInforme = 'instalacion' | 'mantencion' | 'retiro';
 type TipoInstalacion = 'acta_entrega' | 'informe_intervencion';
-type FirmaTarget = 'tecnico1' | 'tecnico2' | 'recepciona' | null;
+type FirmaTarget = 'tecnico1' | 'tecnico2' | 'recepciona' | 'perm_recepciona' | null;
 
 const toInputDate = (value?: string) => {
   if (!value) return '';
@@ -112,6 +128,64 @@ const inputDateToDate = (value?: string) => {
   if (!normalized) return new Date();
   const [y, m, d] = normalized.split('-').map((v) => Number(v));
   return new Date(y, (m || 1) - 1, d || 1);
+};
+
+const parseGpsPoints = (value?: string): GpsPoint[] => {
+  const raw = String(value || '');
+  if (!raw.trim()) return [{ lat: '', lng: '' }];
+  const parts = raw
+    .split('|')
+    .map((p) => p.trim())
+    .filter(Boolean);
+  const points = parts
+    .map((p) => {
+      const [latRaw = '', lngRaw = ''] = p.split(',');
+      return { lat: latRaw.trim(), lng: lngRaw.trim() };
+    })
+    .filter((p) => p.lat || p.lng);
+  return points.length ? points : [{ lat: '', lng: '' }];
+};
+
+const normalizeMeasureInput = (value?: string) => {
+  let text = String(value || '').replace(/,/g, '.').replace(/[^\d.]/g, '');
+  const firstDot = text.indexOf('.');
+  if (firstDot !== -1) {
+    text = text.slice(0, firstDot + 1) + text.slice(firstDot + 1).replace(/\./g, '');
+  }
+  return text;
+};
+
+const normalizeGpsPointInput = (value?: string) => {
+  let text = String(value || '').replace(/[^\d.\-]/g, '');
+  const minusCount = (text.match(/-/g) || []).length;
+  if (minusCount > 1) text = `-${text.replace(/-/g, '')}`;
+  if (text.includes('-') && !text.startsWith('-')) text = `-${text.replace(/-/g, '')}`;
+  const firstDot = text.indexOf('.');
+  if (firstDot !== -1) {
+    text = text.slice(0, firstDot + 1) + text.slice(firstDot + 1).replace(/\./g, '');
+  }
+  if (text && !text.startsWith('-')) text = `-${text}`;
+  return text;
+};
+
+const normalizeSelloNumero = (value?: string) => String(value || '').replace(/\D/g, '');
+
+const parseSellos = (value?: string): SelloItem[] => {
+  const raw = String(value || '').trim();
+  if (!raw) return [{ ubicacion: '', numero: '' }];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [{ ubicacion: '', numero: '' }];
+    const items = parsed
+      .map((it: any) => ({
+        ubicacion: String(it?.ubicacion || '').trim(),
+        numero: String(it?.numero || '').trim(),
+      }))
+      .filter((it) => it.ubicacion || it.numero);
+    return items.length ? items : [{ ubicacion: '', numero: '' }];
+  } catch {
+    return [{ ubicacion: '', numero: '' }];
+  }
 };
 
 export default function InformesScreen() {
@@ -151,6 +225,7 @@ export default function InformesScreen() {
   const [recepcionaNombre, setRecepcionaNombre] = useState('');
   const [firmaRecepciona, setFirmaRecepciona] = useState('');
   const [equiposConsiderados, setEquiposConsiderados] = useState('');
+  const [centroOrigenTraslado, setCentroOrigenTraslado] = useState('');
 
   // Permiso de trabajo
   const [permClienteId, setPermClienteId] = useState<number | null>(null);
@@ -162,12 +237,21 @@ export default function InformesScreen() {
   const [showPermFechaPicker, setShowPermFechaPicker] = useState(false);
   const [showPermFechaSalidaPicker, setShowPermFechaSalidaPicker] = useState(false);
   const [permCorreoCentro, setPermCorreoCentro] = useState('');
+  const [permTelefonoCentro, setPermTelefonoCentro] = useState('');
+  const [permBaseTierra, setPermBaseTierra] = useState('');
+  const [permCantidadRadares, setPermCantidadRadares] = useState('');
   const [permRegion, setPermRegion] = useState('');
   const [permLocalidad, setPermLocalidad] = useState('');
   const [permTecnico1, setPermTecnico1] = useState('');
   const [permTecnico2, setPermTecnico2] = useState('');
   const [permRecepciona, setPermRecepciona] = useState('');
-  const [permPuntosGps, setPermPuntosGps] = useState('');
+  const [permRecepcionaRut, setPermRecepcionaRut] = useState('');
+  const [permFirmaRecepciona, setPermFirmaRecepciona] = useState('');
+  const [permPuntosGpsList, setPermPuntosGpsList] = useState<GpsPoint[]>([{ lat: '', lng: '' }]);
+  const [permSellosList, setPermSellosList] = useState<SelloItem[]>([{ ubicacion: '', numero: '' }]);
+  const [permMedicionFaseNeutro, setPermMedicionFaseNeutro] = useState('');
+  const [permMedicionNeutroTierra, setPermMedicionNeutroTierra] = useState('');
+  const [permHertz, setPermHertz] = useState('');
   const [permDescripcionTrabajo, setPermDescripcionTrabajo] = useState('');
 
   const clienteForm = useMemo(
@@ -326,8 +410,14 @@ export default function InformesScreen() {
         fecha_hasta: filtroFechaHasta || undefined,
       });
       setPermisos(Array.isArray(data) ? data : []);
-    } catch {
+    } catch (error: any) {
       setPermisos([]);
+      const backendMsg =
+        error?.response?.data?.error ||
+        error?.response?.data?.message ||
+        error?.message ||
+        'No se pudieron cargar los permisos de trabajo.';
+      Alert.alert('Informes', backendMsg);
     }
   };
 
@@ -373,12 +463,22 @@ export default function InformesScreen() {
 
   useEffect(() => {
     if (!permCentroSel) {
+      setPermCorreoCentro('');
       setPermRegion('');
       setPermLocalidad('');
+      setPermTelefonoCentro('');
+      setPermBaseTierra('');
+      setPermCantidadRadares('');
       return;
     }
+    setPermCorreoCentro(String(permCentroSel.correo_centro || permCentroSel.correo || ''));
     setPermRegion(String(permCentroSel.area || permCentroSel.region || ''));
     setPermLocalidad(String(permCentroSel.ubicacion || permCentroSel.localidad || permCentroSel.direccion || ''));
+    setPermTelefonoCentro(String(permCentroSel.telefono || permCentroSel.telefono_centro || ''));
+    setPermBaseTierra(
+      permCentroSel.base_tierra === true ? 'si' : permCentroSel.base_tierra === false ? 'no' : ''
+    );
+    setPermCantidadRadares(String(permCentroSel.cantidad_radares ?? ''));
   }, [permCentroSel]);
 
   useEffect(() => {
@@ -392,10 +492,29 @@ export default function InformesScreen() {
     if (!permisoCentroSeleccionado) return;
     setPermFecha(toInputDate(permisoCentroSeleccionado.fecha_ingreso) || todayInputDate());
     setPermFechaSalida(toInputDate(permisoCentroSeleccionado.fecha_salida) || '');
-    setPermCorreoCentro(permisoCentroSeleccionado.correo_centro || '');
-    setPermPuntosGps(permisoCentroSeleccionado.puntos_gps || '');
+    setPermCorreoCentro(
+      String(permCentroSel?.correo_centro || permCentroSel?.correo || '') ||
+        permisoCentroSeleccionado.correo_centro ||
+        ''
+    );
+    setPermTelefonoCentro(
+      String(permCentroSel?.telefono || permCentroSel?.telefono_centro || '') ||
+        permisoCentroSeleccionado.telefono_centro ||
+        ''
+    );
+    setPermBaseTierra(
+      permCentroSel?.base_tierra === true ? 'si' : permCentroSel?.base_tierra === false ? 'no' : ''
+    );
+    setPermCantidadRadares(String(permCentroSel?.cantidad_radares ?? ''));
+    setPermPuntosGpsList(parseGpsPoints(permisoCentroSeleccionado.puntos_gps));
+    setPermSellosList(parseSellos(permisoCentroSeleccionado.sellos));
+    setPermMedicionFaseNeutro(normalizeMeasureInput(permisoCentroSeleccionado.medicion_fase_neutro || ''));
+    setPermMedicionNeutroTierra(normalizeMeasureInput(permisoCentroSeleccionado.medicion_neutro_tierra || ''));
+    setPermHertz(normalizeMeasureInput(permisoCentroSeleccionado.hertz || ''));
     setPermDescripcionTrabajo(permisoCentroSeleccionado.descripcion_trabajo || '');
-  }, [permisoCentroSeleccionado]);
+    setPermRecepcionaRut(permisoCentroSeleccionado.recepciona_rut || '');
+    setPermFirmaRecepciona(permisoCentroSeleccionado.firma_recepciona || '');
+  }, [permisoCentroSeleccionado, permCentroSel]);
 
   const resetForm = () => {
     setEditId(null);
@@ -412,6 +531,7 @@ export default function InformesScreen() {
     setRecepcionaNombre('');
     setFirmaRecepciona('');
     setEquiposConsiderados('');
+    setCentroOrigenTraslado('');
   };
 
   const resetPermisoForm = () => {
@@ -420,12 +540,21 @@ export default function InformesScreen() {
     setShowPermFechaPicker(false);
     setShowPermFechaSalidaPicker(false);
     setPermCorreoCentro('');
+    setPermTelefonoCentro('');
+    setPermBaseTierra('');
+    setPermCantidadRadares('');
     setPermRegion('');
     setPermLocalidad('');
     setPermTecnico1('');
     setPermTecnico2('');
     setPermRecepciona('');
-    setPermPuntosGps('');
+    setPermRecepcionaRut('');
+    setPermFirmaRecepciona('');
+    setPermPuntosGpsList([{ lat: '', lng: '' }]);
+    setPermSellosList([{ ubicacion: '', numero: '' }]);
+    setPermMedicionFaseNeutro('');
+    setPermMedicionNeutroTierra('');
+    setPermHertz('');
     setPermDescripcionTrabajo('');
   };
 
@@ -467,6 +596,7 @@ export default function InformesScreen() {
     setRecepcionaNombre(acta.recepciona_nombre || '');
     setFirmaRecepciona(acta.firma_recepciona || '');
     setEquiposConsiderados(acta.equipos_considerados || '');
+    setCentroOrigenTraslado(acta.centro_origen_traslado || '');
     const clienteIdFromActa = Number(acta.cliente_id || 0) || null;
     const centroFromFiltro = centrosFiltro.find((c) => Number(c.id_centro ?? c.id ?? 0) === Number(centroId || 0));
     const clienteIdFromCentro = Number(centroFromFiltro?.cliente_id || 0) || null;
@@ -500,6 +630,7 @@ export default function InformesScreen() {
       recepciona_nombre: recepcionaNombre,
       firma_recepciona: firmaRecepciona,
       equipos_considerados: equiposConsiderados,
+      centro_origen_traslado: centroOrigenTraslado,
     };
     try {
       if (editId) await updateActaEntrega(editId, payload);
@@ -556,14 +687,16 @@ export default function InformesScreen() {
     if (firmaTarget === 'tecnico1') setFirmaTecnico1(signature);
     if (firmaTarget === 'tecnico2') setFirmaTecnico2(signature);
     if (firmaTarget === 'recepciona') setFirmaRecepciona(signature);
+    if (firmaTarget === 'perm_recepciona') setPermFirmaRecepciona(signature);
     setFirmaModalVisible(false);
     setFirmaTarget(null);
   };
 
-  const limpiarFirma = (target: 'tecnico1' | 'tecnico2' | 'recepciona') => {
+  const limpiarFirma = (target: 'tecnico1' | 'tecnico2' | 'recepciona' | 'perm_recepciona') => {
     if (target === 'tecnico1') setFirmaTecnico1('');
     if (target === 'tecnico2') setFirmaTecnico2('');
     if (target === 'recepciona') setFirmaRecepciona('');
+    if (target === 'perm_recepciona') setPermFirmaRecepciona('');
   };
 
   const handlePermFechaChange = (_event: DateTimePickerEvent, selectedDate?: Date) => {
@@ -1029,8 +1162,17 @@ export default function InformesScreen() {
                 </View>
               </View>
               <View style={styles.inputBlock}>
-                <Text style={styles.selectLabel}>Equipos considerados</Text>
+                <Text style={styles.selectLabel}>Los equipos considerados en este sistema, corresponden a</Text>
                 <TextInput style={[styles.input, styles.textArea]} value={equiposConsiderados} onChangeText={setEquiposConsiderados} multiline textAlignVertical="top" />
+              </View>
+              <View style={styles.inputBlock}>
+                <Text style={styles.selectLabel}>En caso de ser traslado, indicar centro de origen</Text>
+                <TextInput
+                  style={styles.input}
+                  value={centroOrigenTraslado}
+                  onChangeText={setCentroOrigenTraslado}
+                  placeholder="Centro de origen (solo traslados)"
+                />
               </View>
             </ScrollView>
             <View style={styles.modalActions}>
@@ -1076,11 +1218,47 @@ export default function InformesScreen() {
                 <View style={styles.inputCol}><Text style={styles.selectLabel}>Localidad</Text><TextInput style={[styles.input, styles.inputDisabled]} editable={false} value={permLocalidad} /></View>
               </View>
               <View style={styles.row}>
-                <View style={styles.inputCol}><Text style={styles.selectLabel}>Tecnico 1</Text><TextInput style={styles.input} value={permTecnico1} onChangeText={setPermTecnico1} /></View>
-                <View style={styles.inputCol}><Text style={styles.selectLabel}>Tecnico 2</Text><TextInput style={styles.input} value={permTecnico2} onChangeText={setPermTecnico2} /></View>
+                <View style={styles.inputCol}><Text style={styles.selectLabel}>Correo centro</Text><TextInput style={styles.input} value={permCorreoCentro} onChangeText={setPermCorreoCentro} placeholder="correo@centro.cl" autoCapitalize="none" /></View>
+                <View style={styles.inputCol}><Text style={styles.selectLabel}>Telefono centro</Text><TextInput style={styles.input} value={permTelefonoCentro} onChangeText={setPermTelefonoCentro} placeholder="Ej: +56 9 1234 5678" keyboardType="phone-pad" /></View>
+              </View>
+              <View style={styles.sectionDivider}>
+                <View style={styles.sectionLine} />
+                <Text style={styles.sectionTitleBlue}>Datos operativos</Text>
+                <View style={styles.sectionLine} />
               </View>
               <View style={styles.row}>
-                <View style={styles.inputCol}><Text style={styles.selectLabel}>Recepciona</Text><TextInput style={styles.input} value={permRecepciona} onChangeText={setPermRecepciona} /></View>
+                <View style={styles.inputCol}>
+                  <Text style={styles.selectLabel}>Base tierra</Text>
+                  <View style={styles.baseChoiceRow}>
+                    <Pressable
+                      style={[styles.baseChoiceBtn, permBaseTierra.toLowerCase() === 'si' && styles.baseChoiceBtnActive]}
+                      onPress={() => setPermBaseTierra('si')}>
+                      <Text style={[styles.baseChoiceText, permBaseTierra.toLowerCase() === 'si' && styles.baseChoiceTextActive]}>Si</Text>
+                    </Pressable>
+                    <Pressable
+                      style={[styles.baseChoiceBtn, permBaseTierra.toLowerCase() === 'no' && styles.baseChoiceBtnActive]}
+                      onPress={() => setPermBaseTierra('no')}>
+                      <Text style={[styles.baseChoiceText, permBaseTierra.toLowerCase() === 'no' && styles.baseChoiceTextActive]}>No</Text>
+                    </Pressable>
+                  </View>
+                </View>
+                <View style={styles.inputCol}>
+                  <Text style={styles.selectLabel}>Cantidad de radares</Text>
+                  <TextInput
+                    style={styles.input}
+                    value={permCantidadRadares}
+                    onChangeText={(v) => setPermCantidadRadares(v.replace(/\D/g, ''))}
+                    placeholder="Ej: 2"
+                    keyboardType="numeric"
+                    maxLength={1}
+                  />
+                </View>
+              </View>
+              <View style={[styles.row, styles.rowTopGap]}>
+                <View style={styles.inputCol}><Text style={styles.miniFieldLabel}>Tecnico 1</Text><TextInput style={styles.input} value={permTecnico1} onChangeText={setPermTecnico1} /></View>
+                <View style={styles.inputCol}><Text style={styles.miniFieldLabel}>Tecnico 2</Text><TextInput style={styles.input} value={permTecnico2} onChangeText={setPermTecnico2} /></View>
+              </View>
+              <View style={[styles.row, styles.rowTopGap]}>
                 <View style={styles.inputCol}>
                   <Text style={styles.selectLabel}>Fecha ingreso</Text>
                   <Pressable style={styles.dateInput} onPress={() => setShowPermFechaPicker(true)}>
@@ -1088,8 +1266,6 @@ export default function InformesScreen() {
                     <Ionicons name="calendar-outline" size={16} color="#1d4ed8" />
                   </Pressable>
                 </View>
-              </View>
-              <View style={styles.row}>
                 <View style={styles.inputCol}>
                   <Text style={styles.selectLabel}>Fecha salida</Text>
                   <Pressable style={styles.dateInput} onPress={() => setShowPermFechaSalidaPicker(true)}>
@@ -1097,7 +1273,6 @@ export default function InformesScreen() {
                     <Ionicons name="calendar-outline" size={16} color="#1d4ed8" />
                   </Pressable>
                 </View>
-                <View style={styles.inputCol}><Text style={styles.selectLabel}>Correo centro</Text><TextInput style={styles.input} value={permCorreoCentro} onChangeText={setPermCorreoCentro} placeholder="correo@centro.cl" autoCapitalize="none" /></View>
               </View>
               {showPermFechaPicker && (
                 <DateTimePicker
@@ -1115,9 +1290,139 @@ export default function InformesScreen() {
                   onChange={handlePermFechaSalidaChange}
                 />
               )}
+              <View style={styles.sectionDivider}>
+                <View style={styles.sectionLine} />
+                <Text style={styles.sectionTitleBlue}>GPS</Text>
+                <View style={styles.sectionLine} />
+              </View>
               <View style={styles.inputBlock}>
-                <Text style={styles.selectLabel}>Puntos GPS</Text>
-                <TextInput style={styles.input} value={permPuntosGps} onChangeText={setPermPuntosGps} placeholder="Ej: -41.47123, -72.93651" />
+                {permPuntosGpsList.map((pt, idx) => (
+                  <View key={`gps-${idx}`} style={styles.row}>
+                    <View style={styles.inputCol}>
+                      <TextInput
+                        style={styles.input}
+                        value={pt.lat}
+                        onChangeText={(val) =>
+                          setPermPuntosGpsList((prev) =>
+                            prev.map((p, i) => (i === idx ? { ...p, lat: normalizeGpsPointInput(val) } : p))
+                          )
+                        }
+                        placeholder={`Latitud ${idx + 1}`}
+                        keyboardType="decimal-pad"
+                      />
+                    </View>
+                    <View style={styles.inputCol}>
+                      <TextInput
+                        style={styles.input}
+                        value={pt.lng}
+                        onChangeText={(val) =>
+                          setPermPuntosGpsList((prev) =>
+                            prev.map((p, i) => (i === idx ? { ...p, lng: normalizeGpsPointInput(val) } : p))
+                          )
+                        }
+                        placeholder={`Longitud ${idx + 1}`}
+                        keyboardType="decimal-pad"
+                      />
+                    </View>
+                    {permPuntosGpsList.length > 1 ? (
+                      <Pressable
+                        style={styles.actionBtnDelete}
+                        onPress={() => setPermPuntosGpsList((prev) => prev.filter((_, i) => i !== idx))}>
+                        <Ionicons name="close" size={16} color="#dc2626" />
+                      </Pressable>
+                    ) : null}
+                  </View>
+                ))}
+                <Pressable
+                  style={styles.firmaBtn}
+                  onPress={() => setPermPuntosGpsList((prev) => [...prev, { lat: '', lng: '' }])}>
+                  <Text style={styles.firmaBtnText}>+ Agregar punto GPS</Text>
+                </Pressable>
+              </View>
+              <View style={styles.sectionDivider}>
+                <View style={styles.sectionLine} />
+                <Text style={styles.sectionTitleBlue}>Mediciones</Text>
+                <View style={styles.sectionLine} />
+              </View>
+              <View style={styles.row}>
+                <View style={styles.inputCol}>
+                  <Text style={styles.selectLabel}>Medicion fase/neutro</Text>
+                  <TextInput
+                    style={styles.input}
+                    value={permMedicionFaseNeutro}
+                    onChangeText={(v) => setPermMedicionFaseNeutro(normalizeMeasureInput(v))}
+                    placeholder="Ej: 220.5"
+                    keyboardType="decimal-pad"
+                  />
+                </View>
+                <View style={styles.inputCol}>
+                  <Text style={styles.selectLabel}>Medicion neutro/tierra</Text>
+                  <TextInput
+                    style={styles.input}
+                    value={permMedicionNeutroTierra}
+                    onChangeText={(v) => setPermMedicionNeutroTierra(normalizeMeasureInput(v))}
+                    placeholder="Ej: 0.6"
+                    keyboardType="decimal-pad"
+                  />
+                </View>
+              </View>
+              <View style={styles.inputBlock}>
+                <Text style={styles.selectLabel}>Hertz</Text>
+                <TextInput
+                  style={styles.input}
+                  value={permHertz}
+                  onChangeText={(v) => setPermHertz(normalizeMeasureInput(v))}
+                  placeholder="Ej: 50.0"
+                  keyboardType="decimal-pad"
+                />
+              </View>
+              <View style={styles.sectionDivider}>
+                <View style={styles.sectionLine} />
+                <Text style={styles.sectionTitleBlue}>Sellos</Text>
+                <View style={styles.sectionLine} />
+              </View>
+              <View style={styles.inputBlock}>
+                {permSellosList.map((sello, idx) => (
+                  <View key={`sello-${idx}`} style={styles.row}>
+                    <View style={styles.inputCol}>
+                      <TextInput
+                        style={styles.input}
+                        value={sello.ubicacion}
+                        onChangeText={(val) =>
+                          setPermSellosList((prev) =>
+                            prev.map((s, i) => (i === idx ? { ...s, ubicacion: val } : s))
+                          )
+                        }
+                        placeholder={`Ubicacion sello ${idx + 1}`}
+                      />
+                    </View>
+                    <View style={styles.inputCol}>
+                      <TextInput
+                        style={styles.input}
+                        value={sello.numero}
+                        onChangeText={(val) =>
+                          setPermSellosList((prev) =>
+                            prev.map((s, i) => (i === idx ? { ...s, numero: normalizeSelloNumero(val) } : s))
+                          )
+                        }
+                        placeholder={`Numero sello ${idx + 1}`}
+                        keyboardType="numeric"
+                      />
+                    </View>
+                    {permSellosList.length > 1 ? (
+                      <Pressable
+                        style={styles.actionBtnDelete}
+                        onPress={() => setPermSellosList((prev) => prev.filter((_, i) => i !== idx))}>
+                        <Ionicons name="close" size={16} color="#dc2626" />
+                      </Pressable>
+                    ) : null}
+                  </View>
+                ))}
+                <Pressable
+                  style={styles.firmaBtn}
+                  onPress={() => setPermSellosList((prev) => [...prev, { ubicacion: '', numero: '' }])}>
+                  <Text style={styles.firmaBtnText}>+ Agregar sello</Text>
+                </Pressable>
               </View>
               <View style={styles.inputBlock}>
                 <Text style={styles.selectLabel}>Descripcion del trabajo</Text>
@@ -1128,6 +1433,68 @@ export default function InformesScreen() {
                   multiline
                   textAlignVertical="top"
                 />
+              </View>
+              <View style={styles.sectionDivider}>
+                <View style={styles.sectionLine} />
+                <Text style={styles.sectionTitleBlue}>Cliente</Text>
+                <View style={styles.sectionLine} />
+              </View>
+              <View style={styles.inputBlock}>
+                <Text style={styles.sectionHint}>Tecnicos desde acta. Firma de cliente se registra aqui.</Text>
+                <View style={styles.row}>
+                  <View style={styles.inputCol}>
+                    <Text style={styles.selectLabel}>Recepciona</Text>
+                    <TextInput style={styles.input} value={permRecepciona} onChangeText={setPermRecepciona} placeholder="Nombre recepciona" />
+                  </View>
+                  <View style={styles.inputCol}>
+                    <Text style={styles.selectLabel}>RUT recepciona</Text>
+                    <TextInput
+                      style={styles.input}
+                      value={permRecepcionaRut}
+                      onChangeText={setPermRecepcionaRut}
+                      placeholder="Ej: 12345678-9"
+                      autoCapitalize="none"
+                    />
+                  </View>
+                </View>
+                <View style={styles.inputBlock}>
+                  <Text style={styles.signatureFieldLabel}>Firma recepciona</Text>
+                  <View style={styles.firmaActions}>
+                    <Pressable style={styles.firmaBtn} onPress={() => abrirFirma('perm_recepciona')}>
+                      <Text style={styles.firmaBtnText}>{permFirmaRecepciona ? 'Editar firma' : 'Firmar'}</Text>
+                    </Pressable>
+                    {!!permFirmaRecepciona && (
+                      <Pressable style={styles.firmaClearBtn} onPress={() => limpiarFirma('perm_recepciona')}>
+                        <Ionicons name="trash-outline" size={14} color="#dc2626" />
+                      </Pressable>
+                    )}
+                  </View>
+                  {!!permFirmaRecepciona ? (
+                    <Image source={{ uri: permFirmaRecepciona }} style={styles.firmaPreview} resizeMode="contain" />
+                  ) : (
+                    <Text style={styles.signatureEmptyText}>Sin firma</Text>
+                  )}
+                </View>
+                <View style={styles.row}>
+                  <View style={styles.inputCol}>
+                    <Text style={styles.signatureFieldLabel}>Tecnico 1</Text>
+                    <Text style={styles.signatureNameText}>{permTecnico1 || actaCentroSeleccionado?.tecnico_1 || 'Sin nombre'}</Text>
+                    {actaCentroSeleccionado?.firma_tecnico_1 ? (
+                      <Image source={{ uri: actaCentroSeleccionado.firma_tecnico_1 }} style={styles.firmaPreview} resizeMode="contain" />
+                    ) : (
+                      <Text style={styles.signatureEmptyText}>Sin firma</Text>
+                    )}
+                  </View>
+                  <View style={styles.inputCol}>
+                    <Text style={styles.signatureFieldLabel}>Tecnico 2</Text>
+                    <Text style={styles.signatureNameText}>{permTecnico2 || actaCentroSeleccionado?.tecnico_2 || 'Sin nombre'}</Text>
+                    {actaCentroSeleccionado?.firma_tecnico_2 ? (
+                      <Image source={{ uri: actaCentroSeleccionado.firma_tecnico_2 }} style={styles.firmaPreview} resizeMode="contain" />
+                    ) : (
+                      <Text style={styles.signatureEmptyText}>Sin firma</Text>
+                    )}
+                  </View>
+                </View>
               </View>
             </ScrollView>
             <View style={styles.modalActions}>
@@ -1154,6 +1521,26 @@ export default function InformesScreen() {
                     Alert.alert('Permiso de trabajo', 'Fecha ingreso es obligatoria.');
                     return;
                   }
+                  const gpsRows = permPuntosGpsList.map((p) => ({ lat: p.lat.trim(), lng: p.lng.trim() }));
+                  const hasPartialGps = gpsRows.some((p) => (p.lat && !p.lng) || (!p.lat && p.lng));
+                  if (hasPartialGps) {
+                    Alert.alert('Permiso de trabajo', 'Completa latitud y longitud en cada punto GPS.');
+                    return;
+                  }
+                  const selloRows = permSellosList.map((s) => ({
+                    ubicacion: s.ubicacion.trim(),
+                    numero: s.numero.trim(),
+                  }));
+                  const hasPartialSello = selloRows.some((s) => (s.ubicacion && !s.numero) || (!s.ubicacion && s.numero));
+                  if (hasPartialSello) {
+                    Alert.alert('Permiso de trabajo', 'Completa ubicacion y numero en cada sello.');
+                    return;
+                  }
+                  const sellosSerialized = JSON.stringify(selloRows.filter((s) => s.ubicacion && s.numero));
+                  const gpsSerialized = gpsRows
+                    .filter((p) => p.lat && p.lng)
+                    .map((p) => `${p.lat},${p.lng}`)
+                    .join(' | ');
                   try {
                     const payload = {
                       centro_id: permCentroId,
@@ -1161,12 +1548,21 @@ export default function InformesScreen() {
                       fecha_ingreso: permFecha,
                       fecha_salida: permFechaSalida || null,
                       correo_centro: permCorreoCentro || null,
+                      telefono_centro: permTelefonoCentro || null,
+                      base_tierra: permBaseTierra || null,
+                      cantidad_radares: permCantidadRadares ? Number(permCantidadRadares) : null,
                       region: permRegion || null,
                       localidad: permLocalidad || null,
                       tecnico_1: permTecnico1 || null,
                       tecnico_2: permTecnico2 || null,
                       recepciona_nombre: permRecepciona || null,
-                      puntos_gps: permPuntosGps || null,
+                      recepciona_rut: permRecepcionaRut || null,
+                      firma_recepciona: permFirmaRecepciona || null,
+                      puntos_gps: gpsSerialized || null,
+                      sellos: sellosSerialized === '[]' ? null : sellosSerialized,
+                      medicion_fase_neutro: normalizeMeasureInput(permMedicionFaseNeutro) || null,
+                      medicion_neutro_tierra: normalizeMeasureInput(permMedicionNeutroTierra) || null,
+                      hertz: normalizeMeasureInput(permHertz) || null,
                       descripcion_trabajo: permDescripcionTrabajo || null,
                     };
                     if (permisoCentroSeleccionado?.id_permiso_trabajo) {
@@ -1175,6 +1571,32 @@ export default function InformesScreen() {
                       await createPermisoTrabajo(payload);
                     }
                     await cargarPermisos();
+                    // Refresca centros para no seguir mostrando telefono/correo antiguos en la misma sesion.
+                    if (permClienteId) {
+                      try {
+                        const centrosActualizados = await fetchCentrosPorCliente(permClienteId);
+                        setPermCentros(Array.isArray(centrosActualizados) ? centrosActualizados : []);
+                      } catch {
+                        setPermCentros((prev) =>
+                          prev.map((c) =>
+                            Number(c.id_centro ?? c.id ?? 0) === Number(permCentroId)
+                              ? {
+                                  ...c,
+                                  telefono: permTelefonoCentro,
+                                  correo_centro: permCorreoCentro,
+                                  base_tierra:
+                                    permBaseTierra.toLowerCase() === 'si'
+                                      ? true
+                                      : permBaseTierra.toLowerCase() === 'no'
+                                      ? false
+                                      : c.base_tierra,
+                                  cantidad_radares: permCantidadRadares ? Number(permCantidadRadares) : c.cantidad_radares,
+                                }
+                              : c
+                          )
+                        );
+                      }
+                    }
                     setShowPermisoModal(false);
                     setTipoInstalacion('acta_entrega');
                     setMostrarInstalacionForm(false);
@@ -1232,6 +1654,7 @@ const styles = StyleSheet.create({
   card: { backgroundColor: '#fff', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 14, padding: 12, gap: 10 },
   label: { color: '#0f172a', fontWeight: '800', fontSize: 14 },
   row: { flexDirection: 'row', gap: 8 },
+  rowTopGap: { marginTop: 8 },
   tabBtn: { flex: 1, minHeight: 40, borderRadius: 10, borderWidth: 1, borderColor: '#bfdbfe', backgroundColor: '#eff6ff', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
   tabBtnActive: { backgroundColor: '#1d4ed8', borderColor: '#1d4ed8' },
   tabBtnDone: { borderColor: '#86efac', backgroundColor: '#f0fdf4' },
@@ -1324,6 +1747,7 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   selectLabel: { color: '#334155', fontSize: 12, fontWeight: '700', textTransform: 'uppercase' },
+  miniFieldLabel: { color: '#94a3b8', fontSize: 11, fontWeight: '700', textTransform: 'uppercase', marginBottom: 2 },
   pillsRow: { gap: 8, paddingRight: 8 },
   pill: { borderWidth: 1, borderColor: '#bfdbfe', backgroundColor: '#eff6ff', borderRadius: 999, paddingVertical: 7, paddingHorizontal: 12 },
   pillActive: { backgroundColor: '#1d4ed8', borderColor: '#1d4ed8' },
@@ -1355,7 +1779,16 @@ const styles = StyleSheet.create({
   rowMeta: { color: '#64748b', fontSize: 12, marginTop: 1 },
   rowActions: { flexDirection: 'row', gap: 6 },
   actionBtn: { width: 32, height: 32, borderRadius: 8, borderWidth: 1, borderColor: '#bfdbfe', backgroundColor: '#eff6ff', alignItems: 'center', justifyContent: 'center' },
-  actionBtnDelete: { borderColor: '#fecaca', backgroundColor: '#fef2f2' },
+  actionBtnDelete: {
+    width: 30,
+    height: 30,
+    borderWidth: 1,
+    borderColor: '#ef4444',
+    backgroundColor: '#fee2e2',
+    borderRadius: 999,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(15,23,42,0.45)', justifyContent: 'center', padding: 12 },
   modalCard: { backgroundColor: '#fff', borderRadius: 14, borderWidth: 1, borderColor: '#dbeafe', maxHeight: '92%', padding: 12, gap: 10 },
   signatureModalCard: { backgroundColor: '#fff', borderRadius: 14, borderWidth: 1, borderColor: '#dbeafe', height: '72%', padding: 12, gap: 10 },
@@ -1363,6 +1796,24 @@ const styles = StyleSheet.create({
   modalHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: 1, borderBottomColor: '#e2e8f0', paddingBottom: 8 },
   modalTitle: { color: '#0f172a', fontWeight: '800', fontSize: 16 },
   inputBlock: { gap: 6, marginBottom: 8 },
+  sectionDivider: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8, marginBottom: 6 },
+  sectionLine: { flex: 1, height: 1, backgroundColor: '#bfdbfe' },
+  sectionTitleBlue: { color: '#1d4ed8', fontWeight: '800', fontSize: 13.5, letterSpacing: 0.4 },
+  baseChoiceRow: { flexDirection: 'row', gap: 8 },
+  baseChoiceBtn: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    backgroundColor: '#fff',
+    borderRadius: 10,
+    paddingVertical: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  baseChoiceBtnActive: { borderColor: '#1d4ed8', backgroundColor: '#eff6ff' },
+  baseChoiceText: { color: '#475569', fontWeight: '700' },
+  baseChoiceTextActive: { color: '#1d4ed8' },
+  sectionHint: { color: '#64748b', fontSize: 12, fontWeight: '600' },
   textArea: { minHeight: 88 },
   centerDropdown: { maxHeight: 180, borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 10, backgroundColor: '#fff' },
   centerOption: { paddingHorizontal: 10, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#eef2f7' },
@@ -1448,6 +1899,9 @@ const styles = StyleSheet.create({
   firmaBtnText: { color: '#1d4ed8', fontWeight: '700', fontSize: 12 },
   firmaClearBtn: { width: 32, height: 32, borderRadius: 8, borderWidth: 1, borderColor: '#fecaca', backgroundColor: '#fff1f2', alignItems: 'center', justifyContent: 'center' },
   firmaPreview: { marginTop: 8, width: '100%', height: 90, borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 8, backgroundColor: '#fff' },
+  signatureFieldLabel: { color: '#94a3b8', fontWeight: '700', fontSize: 11.5 },
+  signatureNameText: { marginTop: 1, color: '#0f172a', fontWeight: '700' },
+  signatureEmptyText: { marginTop: 8, color: '#94a3b8', fontWeight: '700' },
   modalActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 8 },
   cancelBtn: { borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 9, backgroundColor: '#f8fafc' },
   cancelBtnText: { color: '#334155', fontWeight: '700' },
