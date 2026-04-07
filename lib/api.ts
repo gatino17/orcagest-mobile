@@ -83,13 +83,45 @@ export const updateEquipo = async (id_equipo: string | number, payload: any) => 
 
 // Consulta centro (mismos endpoints que el frontend web)
 export const fetchClientes = async () => {
-  const res = await api.get('/consultas_centro/clientes');
-  return res.data;
+  try {
+    const res = await api.get('/consultas_centro/clientes');
+    return res.data;
+  } catch {
+    // Fallback para entornos donde consultas_centro aun no esta publicado.
+    const res = await api.get('/clientes/');
+    return res.data;
+  }
 };
 
 export const fetchCentrosPorCliente = async (clienteId: string | number) => {
-  const res = await api.get(`/consultas_centro/centros/${clienteId}`);
-  return res.data;
+  try {
+    const res = await api.get(`/consultas_centro/centros/${clienteId}`);
+    return res.data;
+  } catch {
+    // Fallback: reconstruye centros por cliente desde /centros y /clientes.
+    const [clientesRes, centrosRes] = await Promise.all([
+      api.get('/clientes/'),
+      api.get('/centros/', { params: { per_page: 0 } }),
+    ]);
+    const clientes = Array.isArray(clientesRes.data) ? clientesRes.data : [];
+    const centros = Array.isArray(centrosRes.data?.centros) ? centrosRes.data.centros : [];
+    const cliente = clientes.find((c: any) => Number(c?.id_cliente ?? c?.id ?? 0) === Number(clienteId));
+    const nombreCliente = String(cliente?.nombre || '').trim().toLowerCase();
+    return centros
+      .filter((c: any) => String(c?.cliente || '').trim().toLowerCase() === nombreCliente)
+      .map((c: any) => ({
+        id_centro: c?.id,
+        nombre: c?.nombre,
+        cliente_id: Number(clienteId),
+        ubicacion: c?.ubicacion,
+        localidad: c?.ubicacion,
+        direccion: c?.ubicacion,
+        area: c?.area,
+        region: c?.area,
+        nombre_ponton: c?.nombre_ponton,
+        estado: c?.estado,
+      }));
+  }
 };
 
 export const fetchHistorialCentro = async (centroId: string | number) => {
@@ -115,5 +147,26 @@ export const updateActaEntrega = async (idActa: string | number, payload: any) =
 
 export const deleteActaEntrega = async (idActa: string | number) => {
   const res = await api.delete(`/actas_entrega/${idActa}`);
+  return res.data;
+};
+
+// Informes centros - Permisos de trabajo
+export const fetchPermisosTrabajo = async (params?: Record<string, any>) => {
+  const res = await api.get('/permisos_trabajo/', { params });
+  return res.data;
+};
+
+export const createPermisoTrabajo = async (payload: any) => {
+  const res = await api.post('/permisos_trabajo/', payload);
+  return res.data;
+};
+
+export const updatePermisoTrabajo = async (idPermiso: string | number, payload: any) => {
+  const res = await api.put(`/permisos_trabajo/${idPermiso}`, payload);
+  return res.data;
+};
+
+export const deletePermisoTrabajo = async (idPermiso: string | number) => {
+  const res = await api.delete(`/permisos_trabajo/${idPermiso}`);
   return res.data;
 };

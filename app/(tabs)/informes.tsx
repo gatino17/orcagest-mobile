@@ -4,6 +4,7 @@ import {
   Alert,
   Image,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   StatusBar as RNStatusBar,
@@ -12,17 +13,21 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import SignatureScreen from 'react-native-signature-canvas';
 import { AuthContext } from '../_layout';
 import {
   createActaEntrega,
+  createPermisoTrabajo,
   deleteActaEntrega,
   fetchActasEntrega,
   fetchCentrosPorCliente,
   fetchClientes,
+  fetchPermisosTrabajo,
   updateActaEntrega,
+  updatePermisoTrabajo,
 } from '@/lib/api';
 
 type Cliente = { id_cliente?: number; id?: number; nombre?: string; razon_social?: string };
@@ -41,9 +46,11 @@ type Centro = {
 type Acta = {
   id_acta_entrega?: number;
   centro_id?: number;
+  cliente_id?: number;
   empresa?: string;
   cliente?: string;
   centro?: string;
+  centro_nombre?: string;
   codigo_ponton?: string;
   fecha_registro?: string;
   region?: string;
@@ -55,6 +62,24 @@ type Acta = {
   recepciona_nombre?: string;
   firma_recepciona?: string;
   equipos_considerados?: string;
+};
+type Permiso = {
+  id_permiso_trabajo?: number;
+  centro_id?: number;
+  acta_entrega_id?: number;
+  fecha_ingreso?: string;
+  fecha_salida?: string;
+  correo_centro?: string;
+  region?: string;
+  localidad?: string;
+  tecnico_1?: string;
+  tecnico_2?: string;
+  recepciona_nombre?: string;
+  puntos_gps?: string;
+  descripcion_trabajo?: string;
+  empresa?: string;
+  cliente?: string;
+  centro?: string;
 };
 
 type ModuloInforme = 'instalacion' | 'mantencion' | 'retiro';
@@ -82,18 +107,28 @@ const todayInputDate = () => {
   return `${y}-${m}-${day}`;
 };
 
+const inputDateToDate = (value?: string) => {
+  const normalized = toInputDate(value);
+  if (!normalized) return new Date();
+  const [y, m, d] = normalized.split('-').map((v) => Number(v));
+  return new Date(y, (m || 1) - 1, d || 1);
+};
+
 export default function InformesScreen() {
   const { token } = useContext(AuthContext);
 
   const [moduloInforme, setModuloInforme] = useState<ModuloInforme>('instalacion');
+  const [mostrarInstalacionForm, setMostrarInstalacionForm] = useState(false);
   const [tipoInstalacion, setTipoInstalacion] = useState<TipoInstalacion>('acta_entrega');
   const [clientes, setClientes] = useState<Cliente[]>([]);
   const [centrosFiltro, setCentrosFiltro] = useState<Centro[]>([]);
   const [centrosForm, setCentrosForm] = useState<Centro[]>([]);
   const [actas, setActas] = useState<Acta[]>([]);
+  const [permisos, setPermisos] = useState<Permiso[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [showEditor, setShowEditor] = useState(false);
+  const [showPermisoModal, setShowPermisoModal] = useState(false);
   const [firmaModalVisible, setFirmaModalVisible] = useState(false);
   const [firmaTarget, setFirmaTarget] = useState<FirmaTarget>(null);
 
@@ -117,12 +152,16 @@ export default function InformesScreen() {
   const [firmaRecepciona, setFirmaRecepciona] = useState('');
   const [equiposConsiderados, setEquiposConsiderados] = useState('');
 
-  // Permiso de trabajo (intervencion) - formulario local por ahora
+  // Permiso de trabajo
   const [permClienteId, setPermClienteId] = useState<number | null>(null);
   const [permCentros, setPermCentros] = useState<Centro[]>([]);
   const [permCentroId, setPermCentroId] = useState<number | null>(null);
   const [permBuscarCentro, setPermBuscarCentro] = useState('');
   const [permFecha, setPermFecha] = useState(todayInputDate());
+  const [permFechaSalida, setPermFechaSalida] = useState('');
+  const [showPermFechaPicker, setShowPermFechaPicker] = useState(false);
+  const [showPermFechaSalidaPicker, setShowPermFechaSalidaPicker] = useState(false);
+  const [permCorreoCentro, setPermCorreoCentro] = useState('');
   const [permRegion, setPermRegion] = useState('');
   const [permLocalidad, setPermLocalidad] = useState('');
   const [permTecnico1, setPermTecnico1] = useState('');
@@ -169,6 +208,50 @@ export default function InformesScreen() {
       });
     return porCentro[0] || null;
   }, [actas, permCentroId]);
+  const actaCompletada = !!actaCentroSeleccionado;
+  const permisoCentroSeleccionado = useMemo(() => {
+    if (!permCentroId) return null;
+    const porCentro = permisos
+      .filter((p) => Number(p.centro_id || 0) === Number(permCentroId))
+      .sort((a, b) => {
+        const ta = new Date(a.fecha_ingreso || 0).getTime();
+        const tb = new Date(b.fecha_ingreso || 0).getTime();
+        return tb - ta;
+      });
+    return porCentro[0] || null;
+  }, [permisos, permCentroId]);
+  const permisoCompletado = !!permisoCentroSeleccionado;
+  const instalacionSeleccionada = !!(permClienteId && permCentroId);
+  const instalacionesCompletadas = useMemo(() => {
+    const ids = permisos
+      .map((p) => Number(p.centro_id || 0))
+      .filter(Boolean)
+      .filter((v, i, arr) => arr.indexOf(v) === i);
+    return ids.map((centroId) => {
+      const acta = actas
+        .filter((a) => Number(a.centro_id || 0) === centroId)
+        .sort((a, b) => {
+          const ta = new Date(a.fecha_registro || 0).getTime();
+          const tb = new Date(b.fecha_registro || 0).getTime();
+          return tb - ta;
+        })[0];
+      const centro =
+        acta?.centro ||
+        permCentros.find((c) => Number(c.id_centro ?? c.id ?? 0) === centroId)?.nombre ||
+        centrosFiltro.find((c) => Number(c.id_centro ?? c.id ?? 0) === centroId)?.nombre ||
+        `Centro ${centroId}`;
+      const cliente = acta?.empresa || acta?.cliente || '-';
+      return {
+        centroId,
+        actaId: Number(acta?.id_acta_entrega || 0) || null,
+        permisoId: Number(permisos.find((p) => Number(p.centro_id || 0) === centroId)?.id_permiso_trabajo || 0) || null,
+        centro,
+        cliente,
+        fechaActa: acta?.fecha_registro || '',
+        fechaPermiso: permisos.find((p) => Number(p.centro_id || 0) === centroId)?.fecha_ingreso || '',
+      };
+    });
+  }, [permisos, actas, permCentros, centrosFiltro]);
 
   const cargarClientes = async () => {
     if (!token) return;
@@ -176,9 +259,14 @@ export default function InformesScreen() {
     try {
       const listaClientes = await fetchClientes();
       setClientes(Array.isArray(listaClientes) ? listaClientes : []);
-    } catch {
+    } catch (error: any) {
       setClientes([]);
-      Alert.alert('Informes', 'No se pudieron cargar los clientes.');
+      const backendMsg =
+        error?.response?.data?.error ||
+        error?.response?.data?.message ||
+        error?.message ||
+        'No se pudieron cargar los clientes.';
+      Alert.alert('Informes', backendMsg);
     } finally {
       setLoading(false);
     }
@@ -229,6 +317,19 @@ export default function InformesScreen() {
       setLoading(false);
     }
   };
+  const cargarPermisos = async () => {
+    if (!token || moduloInforme !== 'instalacion') return;
+    try {
+      const data = await fetchPermisosTrabajo({
+        centro_id: filtroCentroId || undefined,
+        fecha_desde: filtroFechaDesde || undefined,
+        fecha_hasta: filtroFechaHasta || undefined,
+      });
+      setPermisos(Array.isArray(data) ? data : []);
+    } catch {
+      setPermisos([]);
+    }
+  };
 
   useEffect(() => {
     cargarClientes();
@@ -241,7 +342,6 @@ export default function InformesScreen() {
 
   useEffect(() => {
     cargarCentrosPorClienteForm(clienteIdForm);
-    setCentroIdForm(null);
     setBuscarCentroForm('');
   }, [clienteIdForm]);
 
@@ -257,6 +357,7 @@ export default function InformesScreen() {
 
   useEffect(() => {
     cargarActas();
+    cargarPermisos();
   }, [moduloInforme, tipoInstalacion, filtroCentroId, filtroFechaDesde, filtroFechaHasta]);
 
   useEffect(() => {
@@ -287,6 +388,14 @@ export default function InformesScreen() {
     setPermTecnico2(actaCentroSeleccionado.tecnico_2 || '');
     setPermRecepciona(actaCentroSeleccionado.recepciona_nombre || '');
   }, [actaCentroSeleccionado]);
+  useEffect(() => {
+    if (!permisoCentroSeleccionado) return;
+    setPermFecha(toInputDate(permisoCentroSeleccionado.fecha_ingreso) || todayInputDate());
+    setPermFechaSalida(toInputDate(permisoCentroSeleccionado.fecha_salida) || '');
+    setPermCorreoCentro(permisoCentroSeleccionado.correo_centro || '');
+    setPermPuntosGps(permisoCentroSeleccionado.puntos_gps || '');
+    setPermDescripcionTrabajo(permisoCentroSeleccionado.descripcion_trabajo || '');
+  }, [permisoCentroSeleccionado]);
 
   const resetForm = () => {
     setEditId(null);
@@ -305,10 +414,41 @@ export default function InformesScreen() {
     setEquiposConsiderados('');
   };
 
+  const resetPermisoForm = () => {
+    setPermFecha(todayInputDate());
+    setPermFechaSalida('');
+    setShowPermFechaPicker(false);
+    setShowPermFechaSalidaPicker(false);
+    setPermCorreoCentro('');
+    setPermRegion('');
+    setPermLocalidad('');
+    setPermTecnico1('');
+    setPermTecnico2('');
+    setPermRecepciona('');
+    setPermPuntosGps('');
+    setPermDescripcionTrabajo('');
+  };
+
   const nuevaActa = () => {
     resetForm();
-    setClienteIdForm(filtroClienteId);
-    setCentroIdForm(filtroCentroId);
+    resetPermisoForm();
+    setEditId(null);
+    setPermClienteId(null);
+    setPermCentroId(null);
+    setPermBuscarCentro('');
+    setClienteIdForm(null);
+    setCentroIdForm(null);
+    setFechaRegistro(todayInputDate());
+    setShowEditor(true);
+  };
+
+  const nuevaActaDesdeInstalacion = () => {
+    const clienteSeleccionado = permClienteId;
+    const centroSeleccionado = permCentroId;
+    resetForm();
+    setEditId(null);
+    setClienteIdForm(clienteSeleccionado || null);
+    setCentroIdForm(centroSeleccionado || null);
     setFechaRegistro(todayInputDate());
     setShowEditor(true);
   };
@@ -327,9 +467,18 @@ export default function InformesScreen() {
     setRecepcionaNombre(acta.recepciona_nombre || '');
     setFirmaRecepciona(acta.firma_recepciona || '');
     setEquiposConsiderados(acta.equipos_considerados || '');
+    const clienteIdFromActa = Number(acta.cliente_id || 0) || null;
     const centroFromFiltro = centrosFiltro.find((c) => Number(c.id_centro ?? c.id ?? 0) === Number(centroId || 0));
     const clienteIdFromCentro = Number(centroFromFiltro?.cliente_id || 0) || null;
-    if (clienteIdFromCentro) setClienteIdForm(clienteIdFromCentro);
+    const nombreClienteActa = String(acta.empresa || acta.cliente || '').trim().toLowerCase();
+    const clientePorNombre = clientes.find(
+      (c) => String(c.nombre || c.razon_social || '').trim().toLowerCase() === nombreClienteActa
+    );
+    const clienteIdPorNombre = Number(clientePorNombre?.id_cliente ?? clientePorNombre?.id ?? 0) || null;
+    const clienteResuelto = clienteIdFromActa || clienteIdFromCentro || clienteIdPorNombre || filtroClienteId || null;
+    if (clienteResuelto) setClienteIdForm(clienteResuelto);
+    if (clienteResuelto) setPermClienteId(clienteResuelto);
+    if (centroId) setPermCentroId(centroId);
     setShowEditor(true);
   };
 
@@ -417,6 +566,28 @@ export default function InformesScreen() {
     if (target === 'recepciona') setFirmaRecepciona('');
   };
 
+  const handlePermFechaChange = (_event: DateTimePickerEvent, selectedDate?: Date) => {
+    setShowPermFechaPicker(false);
+    if (selectedDate) {
+      setPermFecha(
+        `${selectedDate.getFullYear()}-${String(selectedDate.getMonth() + 1).padStart(2, '0')}-${String(
+          selectedDate.getDate()
+        ).padStart(2, '0')}`
+      );
+    }
+  };
+
+  const handlePermFechaSalidaChange = (_event: DateTimePickerEvent, selectedDate?: Date) => {
+    setShowPermFechaSalidaPicker(false);
+    if (selectedDate) {
+      setPermFechaSalida(
+        `${selectedDate.getFullYear()}-${String(selectedDate.getMonth() + 1).padStart(2, '0')}-${String(
+          selectedDate.getDate()
+        ).padStart(2, '0')}`
+      );
+    }
+  };
+
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
@@ -449,48 +620,102 @@ export default function InformesScreen() {
         {moduloInforme === 'instalacion' && (
           <View style={styles.card}>
             <Text style={styles.label}>Instalacion</Text>
-            <View style={styles.row}>
-              <Pressable style={[styles.tabBtn, tipoInstalacion === 'acta_entrega' && styles.tabBtnActive]} onPress={() => setTipoInstalacion('acta_entrega')}>
-                <Ionicons name="reader-outline" size={14} color={tipoInstalacion === 'acta_entrega' ? '#fff' : '#1d4ed8'} />
-                <Text style={[styles.tabBtnText, tipoInstalacion === 'acta_entrega' && styles.tabBtnTextActive]}>Acta entrega</Text>
-              </Pressable>
-              <Pressable style={[styles.tabBtn, tipoInstalacion === 'informe_intervencion' && styles.tabBtnActive]} onPress={() => setTipoInstalacion('informe_intervencion')}>
-                <Ionicons name="clipboard-outline" size={14} color={tipoInstalacion === 'informe_intervencion' ? '#fff' : '#1d4ed8'} />
-                <Text style={[styles.tabBtnText, tipoInstalacion === 'informe_intervencion' && styles.tabBtnTextActive]}>Permiso de trabajo</Text>
-              </Pressable>
-            </View>
+            <Pressable
+              style={styles.addInstallBtn}
+              onPress={() => {
+                // Nuevo ingreso: limpiar cualquier contexto previo antes de mostrar la tarjeta.
+                resetForm();
+                resetPermisoForm();
+                setEditId(null);
+                setShowEditor(false);
+                setShowPermisoModal(false);
+                setPermClienteId(null);
+                setPermCentroId(null);
+                setPermBuscarCentro('');
+                setClienteIdForm(null);
+                setCentroIdForm(null);
+                setMostrarInstalacionForm(true);
+                setTipoInstalacion('acta_entrega');
+              }}>
+              <Ionicons name="add-circle-outline" size={16} color="#1d4ed8" />
+              <Text style={styles.addInstallBtnText}>Agregar instalacion</Text>
+            </Pressable>
           </View>
         )}
 
-        {moduloInforme === 'mantencion' && (
+        {moduloInforme === 'instalacion' && instalacionesCompletadas.length > 0 && (
           <View style={styles.card}>
-            <Text style={styles.label}>Mantenciones</Text>
-            <View style={styles.row}><Pressable style={[styles.tabBtn, styles.tabBtnActive]}><Text style={[styles.tabBtnText, styles.tabBtnTextActive]}>Informe de mantencion</Text></Pressable></View>
-            <Text style={styles.placeholderText}>Seccion de referencia (sin formulario por ahora).</Text>
-          </View>
-        )}
-
-        {moduloInforme === 'retiro' && (
-          <View style={styles.card}>
-            <Text style={styles.label}>Retiro</Text>
-            <View style={styles.row}><Pressable style={[styles.tabBtn, styles.tabBtnActive]}><Text style={[styles.tabBtnText, styles.tabBtnTextActive]}>Informe de retiro</Text></Pressable></View>
-            <Text style={styles.placeholderText}>Seccion de referencia (sin formulario por ahora).</Text>
-          </View>
-        )}
-
-        {moduloInforme === 'instalacion' && tipoInstalacion === 'informe_intervencion' && (
-          <View style={styles.card}>
-            <Text style={styles.placeholderTitle}>Permiso de trabajo</Text>
-            <View style={styles.requirementBox}>
-              <View style={styles.requirementRow}>
-                <Ionicons name={actaCentroSeleccionado ? 'checkmark-circle' : 'ellipse-outline'} size={14} color={actaCentroSeleccionado ? '#16a34a' : '#64748b'} />
-                <Text style={styles.requirementText}>Acta de entrega {actaCentroSeleccionado ? 'completada' : 'pendiente'}</Text>
+            <Text style={styles.sectionTitle}>Instalaciones completadas</Text>
+            {instalacionesCompletadas.map((item) => (
+              <View key={item.centroId} style={styles.installDoneCard}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.rowTitle}>{item.centro}</Text>
+                  <Text style={styles.rowSubtitle}>{item.cliente}</Text>
+                  <Text style={styles.rowMeta}>
+                    Acta: {formatDate(item.fechaActa)} | Permiso: {formatDate(item.fechaPermiso)}
+                  </Text>
+                </View>
+                <View style={styles.rowActions}>
+                  {item.actaId ? (
+                    <Pressable
+                      style={styles.actionBtn}
+                      onPress={() => {
+                        setTipoInstalacion('acta_entrega');
+                        const acta = actas.find((a) => Number(a.id_acta_entrega || 0) === Number(item.actaId || 0));
+                        if (acta) abrirActa(acta);
+                      }}>
+                      <Ionicons name="create-outline" size={16} color="#1d4ed8" />
+                    </Pressable>
+                  ) : null}
+                  {item.permisoId ? (
+                    <Pressable
+                      style={styles.actionBtn}
+                      onPress={() => {
+                        const clientePorNombre = clientes.find(
+                          (c) =>
+                            String(c.nombre || c.razon_social || '').trim().toLowerCase() ===
+                            String(item.cliente || '').trim().toLowerCase()
+                        );
+                        const clienteId = Number(clientePorNombre?.id_cliente ?? clientePorNombre?.id ?? 0) || null;
+                        if (clienteId) setPermClienteId(clienteId);
+                        setPermCentroId(item.centroId);
+                        setTipoInstalacion('informe_intervencion');
+                        setShowPermisoModal(true);
+                      }}>
+                      <Ionicons name="clipboard-outline" size={16} color="#1d4ed8" />
+                    </Pressable>
+                  ) : null}
+                  <Ionicons name="checkmark-circle" size={18} color="#16a34a" />
+                </View>
               </View>
-              <View style={styles.requirementRow}>
-                <Ionicons name="ellipse-outline" size={14} color="#64748b" />
-                <Text style={styles.requirementText}>Permiso de trabajo pendiente</Text>
+            ))}
+          </View>
+        )}
+
+        {moduloInforme === 'instalacion' && mostrarInstalacionForm && (
+          <View style={styles.card}>
+            <Text style={styles.label}>Instalacion</Text>
+            <View style={styles.stepperRow}>
+              <View style={styles.stepItem}>
+                <View style={[styles.stepDot, instalacionSeleccionada && styles.stepDotDone]}>
+                  <Ionicons name="business-outline" size={12} color={instalacionSeleccionada ? '#166534' : '#64748b'} />
+                </View>
+                <Text style={[styles.stepText, instalacionSeleccionada && styles.stepTextDone]}>Centro</Text>
               </View>
-              <Text style={styles.requirementHint}>Para cerrar instalacion, el centro debe tener ambos documentos: Acta + Permiso de trabajo.</Text>
+              <View style={styles.stepLine} />
+              <View style={styles.stepItem}>
+                <View style={[styles.stepDot, actaCompletada && styles.stepDotDone]}>
+                  <Ionicons name={actaCompletada ? 'checkmark' : 'reader-outline'} size={12} color={actaCompletada ? '#166534' : '#64748b'} />
+                </View>
+                <Text style={[styles.stepText, actaCompletada && styles.stepTextDone]}>Acta</Text>
+              </View>
+              <View style={styles.stepLine} />
+              <View style={styles.stepItem}>
+                <View style={[styles.stepDot, permisoCompletado && styles.stepDotDone]}>
+                  <Ionicons name={permisoCompletado ? 'checkmark' : 'clipboard-outline'} size={12} color={permisoCompletado ? '#166534' : '#64748b'} />
+                </View>
+                <Text style={[styles.stepText, permisoCompletado && styles.stepTextDone]}>Permiso</Text>
+              </View>
             </View>
 
             <View style={styles.inputBlock}>
@@ -507,7 +732,6 @@ export default function InformesScreen() {
                 })}
               </ScrollView>
             </View>
-
             <View style={styles.inputBlock}>
               <Text style={styles.selectLabel}>Centro</Text>
               {permCentroSel ? (
@@ -529,84 +753,160 @@ export default function InformesScreen() {
                         </Pressable>
                       );
                     })}
+                    {!permCentrosFiltrados.length && (
+                      <Text style={styles.dropdownEmptyText}>
+                        {permClienteId ? 'Sin centros para este cliente.' : 'Selecciona un cliente para ver sus centros.'}
+                      </Text>
+                    )}
                   </ScrollView>
                 </>
               )}
             </View>
 
+            <View style={styles.installSummaryBox}>
+              <Text style={styles.installSummaryTitle}>{permCentroSel?.nombre || 'Instalacion sin centro seleccionado'}</Text>
+              <Text style={styles.installSummaryMeta}>
+                {clientes.find((c) => Number(c.id_cliente ?? c.id ?? 0) === Number(permClienteId ?? 0))?.nombre || '-'}
+              </Text>
+              <View style={styles.installStateRow}>
+                <Text style={styles.installStateLabel}>Acta:</Text>
+                <Text style={[styles.installStateValue, actaCompletada ? styles.installStateOk : styles.installStateWarn]}>
+                  {actaCompletada ? `Completada (${formatDate(actaCentroSeleccionado?.fecha_registro)})` : 'Pendiente'}
+                </Text>
+              </View>
+              <View style={styles.installStateRow}>
+                <Text style={styles.installStateLabel}>Permiso:</Text>
+                <Text style={[styles.installStateValue, permisoCompletado ? styles.installStateOk : styles.installStateWarn]}>
+                  {permisoCompletado ? `Completado (${formatDate(permisoCentroSeleccionado?.fecha_ingreso)})` : 'Pendiente'}
+                </Text>
+              </View>
+            </View>
+
+            {!instalacionSeleccionada ? (
+              <Pressable style={[styles.saveBtn, styles.ctaDisabled]} disabled>
+                <Text style={styles.saveBtnText}>Selecciona cliente y centro</Text>
+              </Pressable>
+            ) : !actaCompletada ? (
+              <Pressable
+                style={styles.saveBtn}
+                onPress={() => {
+                  setTipoInstalacion('acta_entrega');
+                  if (instalacionSeleccionada) nuevaActaDesdeInstalacion();
+                  else nuevaActa();
+                }}>
+                <Text style={styles.saveBtnText}>Crear acta de entrega</Text>
+              </Pressable>
+            ) : !permisoCompletado ? (
+              <View />
+            ) : (
+              <Pressable style={[styles.saveBtn, styles.ctaDone]} disabled>
+                <Text style={styles.saveBtnText}>Instalacion completada</Text>
+              </Pressable>
+            )}
+
             <View style={styles.row}>
-              <View style={styles.inputCol}><Text style={styles.selectLabel}>Empresa</Text><TextInput style={[styles.input, styles.inputDisabled]} editable={false} value={clientes.find((c) => Number(c.id_cliente ?? c.id ?? 0) === Number(permClienteId ?? 0))?.nombre || ''} /></View>
-              <View style={styles.inputCol}><Text style={styles.selectLabel}>Codigo ponton</Text><TextInput style={[styles.input, styles.inputDisabled]} editable={false} value={permCentroSel?.nombre_ponton || ''} /></View>
+              <Pressable
+                style={[
+                  styles.tabBtn,
+                  actaCompletada ? styles.tabBtnDone : (tipoInstalacion === 'acta_entrega' && styles.tabBtnActive),
+                ]}
+                onPress={() => {
+                  setTipoInstalacion('acta_entrega');
+                  // Flujo esperado:
+                  // - Si ya existe acta del centro seleccionado => abrir para editar.
+                  // - Si no existe => abrir nueva acta precargada con cliente/centro de la tarjeta.
+                  if (actaCentroSeleccionado) {
+                    abrirActa(actaCentroSeleccionado);
+                    return;
+                  }
+                  if (instalacionSeleccionada) {
+                    nuevaActaDesdeInstalacion();
+                    return;
+                  }
+                  nuevaActa();
+                }}>
+                <Ionicons
+                  name={actaCompletada ? 'checkmark-circle' : 'reader-outline'}
+                  size={14}
+                  color={actaCompletada ? '#166534' : (tipoInstalacion === 'acta_entrega' ? '#fff' : '#1d4ed8')}
+                />
+                <Text
+                  style={[
+                    styles.tabBtnText,
+                    actaCompletada ? styles.tabBtnTextDone : (tipoInstalacion === 'acta_entrega' && styles.tabBtnTextActive),
+                  ]}>
+                  Acta entrega
+                </Text>
+              </Pressable>
+              <Pressable
+                style={[
+                  styles.tabBtn,
+                  permisoCompletado ? styles.tabBtnDone : (tipoInstalacion === 'informe_intervencion' && styles.tabBtnActive),
+                  !actaCompletada && styles.tabBtnDisabled,
+                ]}
+                onPress={() => {
+                  if (!actaCompletada) {
+                    Alert.alert(
+                      'Instalacion',
+                      'Primero completa y guarda el Acta de entrega del centro para habilitar Permiso de trabajo.'
+                    );
+                    setTipoInstalacion('acta_entrega');
+                    return;
+                  }
+                  setTipoInstalacion('informe_intervencion');
+                  setShowPermisoModal(true);
+                }}>
+                <Ionicons
+                  name={permisoCompletado ? 'checkmark-circle' : 'clipboard-outline'}
+                  size={14}
+                  color={
+                    permisoCompletado
+                      ? '#166534'
+                      : tipoInstalacion === 'informe_intervencion'
+                      ? '#fff'
+                      : !actaCompletada
+                      ? '#94a3b8'
+                      : '#1d4ed8'
+                  }
+                />
+                <Text
+                  style={[
+                    styles.tabBtnText,
+                    permisoCompletado ? styles.tabBtnTextDone : (tipoInstalacion === 'informe_intervencion' && styles.tabBtnTextActive),
+                  ]}>
+                  Permiso de trabajo
+                </Text>
+              </Pressable>
             </View>
-            <View style={styles.row}>
-              <View style={styles.inputCol}><Text style={styles.selectLabel}>Region (Area)</Text><TextInput style={[styles.input, styles.inputDisabled]} editable={false} value={permRegion} /></View>
-              <View style={styles.inputCol}><Text style={styles.selectLabel}>Localidad</Text><TextInput style={[styles.input, styles.inputDisabled]} editable={false} value={permLocalidad} /></View>
-            </View>
-            <View style={styles.row}>
-              <View style={styles.inputCol}><Text style={styles.selectLabel}>Tecnico 1</Text><TextInput style={styles.input} value={permTecnico1} onChangeText={setPermTecnico1} /></View>
-              <View style={styles.inputCol}><Text style={styles.selectLabel}>Tecnico 2</Text><TextInput style={styles.input} value={permTecnico2} onChangeText={setPermTecnico2} /></View>
-            </View>
-            <View style={styles.row}>
-              <View style={styles.inputCol}><Text style={styles.selectLabel}>Recepciona</Text><TextInput style={styles.input} value={permRecepciona} onChangeText={setPermRecepciona} /></View>
-              <View style={styles.inputCol}><Text style={styles.selectLabel}>Fecha</Text><TextInput style={styles.input} value={permFecha} onChangeText={setPermFecha} placeholder="YYYY-MM-DD" /></View>
-            </View>
-            <View style={styles.inputBlock}>
-              <Text style={styles.selectLabel}>Puntos GPS</Text>
-              <TextInput style={styles.input} value={permPuntosGps} onChangeText={setPermPuntosGps} placeholder="Ej: -41.47123, -72.93651" />
-            </View>
-            <View style={styles.inputBlock}>
-              <Text style={styles.selectLabel}>Descripcion del trabajo</Text>
-              <TextInput
-                style={[styles.input, styles.textArea]}
-                value={permDescripcionTrabajo}
-                onChangeText={setPermDescripcionTrabajo}
-                multiline
-                textAlignVertical="top"
-              />
-            </View>
-            <Pressable
-              style={styles.saveBtn}
-              onPress={() => {
-                if (!actaCentroSeleccionado) {
-                  Alert.alert('Permiso de trabajo', 'Primero debes tener un Acta de entrega para este centro.');
-                  return;
-                }
-                Alert.alert('Permiso de trabajo', 'Formulario listo. En el siguiente paso lo conectamos al backend.');
-              }}>
-              <Text style={styles.saveBtnText}>Guardar (proximo paso)</Text>
-            </Pressable>
+            {!actaCompletada ? (
+              <Text style={[styles.flowHint, styles.flowHintWarn]}>
+                Paso 1: completa Acta de entrega. Paso 2: se habilita Permiso de trabajo.
+              </Text>
+            ) : null}
+            {actaCompletada && !permisoCompletado ? (
+              <Text style={[styles.flowHint, styles.flowHintWarn]}>
+                Solo falta completar Permiso de trabajo.
+              </Text>
+            ) : null}
           </View>
         )}
 
-        {moduloInforme === 'instalacion' && tipoInstalacion === 'acta_entrega' && (
-          <>
-            <View style={[styles.card, styles.headerCard]}>
-              <View>
-                <Text style={styles.sectionTitle}>Actas de entrega</Text>
-                <Text style={styles.sectionSubTitle}>Total: {actasFiltradas.length}</Text>
-              </View>
-              <Pressable style={styles.newBtn} onPress={nuevaActa}>
-                <Ionicons name="add" size={16} color="#fff" />
-                <Text style={styles.newBtnText}>Nueva</Text>
-              </Pressable>
-            </View>
-            <View style={styles.card}>
-              {loading ? <ActivityIndicator color="#1d4ed8" /> : !actasFiltradas.length ? <Text style={styles.placeholderText}>No hay actas registradas.</Text> : actasFiltradas.map((acta, idx) => (
-                <View key={acta.id_acta_entrega || idx} style={styles.rowItem}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.rowTitle}>{acta.centro || 'Centro'}</Text>
-                    <Text style={styles.rowSubtitle}>{acta.empresa || '-'}</Text>
-                    <Text style={styles.rowMeta}>Fecha: {formatDate(acta.fecha_registro)}</Text>
-                  </View>
-                  <View style={styles.rowActions}>
-                    <Pressable style={styles.actionBtn} onPress={() => abrirActa(acta)}><Ionicons name="folder-open-outline" size={16} color="#1d4ed8" /></Pressable>
-                    <Pressable style={[styles.actionBtn, styles.actionBtnDelete]} onPress={() => eliminarActa(acta.id_acta_entrega)}><Ionicons name="trash-outline" size={16} color="#dc2626" /></Pressable>
-                  </View>
-                </View>
-              ))}
-            </View>
-          </>
+        {moduloInforme === 'mantencion' && (
+          <View style={styles.card}>
+            <Text style={styles.label}>Mantenciones</Text>
+            <View style={styles.row}><Pressable style={[styles.tabBtn, styles.tabBtnActive]}><Text style={[styles.tabBtnText, styles.tabBtnTextActive]}>Informe de mantencion</Text></Pressable></View>
+            <Text style={styles.placeholderText}>Seccion de referencia (sin formulario por ahora).</Text>
+          </View>
         )}
+
+        {moduloInforme === 'retiro' && (
+          <View style={styles.card}>
+            <Text style={styles.label}>Retiro</Text>
+            <View style={styles.row}><Pressable style={[styles.tabBtn, styles.tabBtnActive]}><Text style={[styles.tabBtnText, styles.tabBtnTextActive]}>Informe de retiro</Text></Pressable></View>
+            <Text style={styles.placeholderText}>Seccion de referencia (sin formulario por ahora).</Text>
+          </View>
+        )}
+
       </ScrollView>
 
       <Modal visible={showEditor} animationType="slide" transparent>
@@ -624,7 +924,14 @@ export default function InformesScreen() {
                     const id = Number(cl.id_cliente ?? cl.id ?? 0);
                     const active = id === clienteIdForm;
                     return (
-                      <Pressable key={id} style={[styles.pill, active && styles.pillActive]} onPress={() => setClienteIdForm(id)}>
+                      <Pressable
+                        key={id}
+                        style={[styles.pill, active && styles.pillActive]}
+                        onPress={() => {
+                          setClienteIdForm(id);
+                          setCentroIdForm(null);
+                          setBuscarCentroForm('');
+                        }}>
                         <Text style={[styles.pillText, active && styles.pillTextActive]}>{cl.nombre || cl.razon_social || `Cliente ${id}`}</Text>
                       </Pressable>
                     );
@@ -658,6 +965,11 @@ export default function InformesScreen() {
                           </Pressable>
                         );
                       })}
+                      {!centrosFormFiltrados.length && (
+                        <Text style={styles.dropdownEmptyText}>
+                          {clienteIdForm ? 'Sin centros para este cliente.' : 'Selecciona un cliente para ver sus centros.'}
+                        </Text>
+                      )}
                     </ScrollView>
                   </>
                 )}
@@ -729,6 +1041,160 @@ export default function InformesScreen() {
         </View>
       </Modal>
 
+      <Modal visible={showPermisoModal} animationType="slide" transparent>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Permiso de trabajo</Text>
+              <Pressable
+                onPress={() => {
+                  setShowPermisoModal(false);
+                  setTipoInstalacion('acta_entrega');
+                }}>
+                <Ionicons name="close" size={20} color="#334155" />
+              </Pressable>
+            </View>
+            <ScrollView showsVerticalScrollIndicator={false}>
+              <View style={styles.requirementBox}>
+                <View style={styles.requirementRow}>
+                  <Ionicons name={actaCentroSeleccionado ? 'checkmark-circle' : 'ellipse-outline'} size={14} color={actaCentroSeleccionado ? '#16a34a' : '#64748b'} />
+                  <Text style={styles.requirementText}>Acta de entrega {actaCentroSeleccionado ? 'completada' : 'pendiente'}</Text>
+                </View>
+                <View style={styles.requirementRow}>
+                  <Ionicons name="ellipse-outline" size={14} color="#64748b" />
+                  <Text style={styles.requirementText}>Permiso de trabajo pendiente</Text>
+                </View>
+                <Text style={styles.requirementHint}>Para cerrar instalacion, el centro debe tener ambos documentos: Acta + Permiso de trabajo.</Text>
+              </View>
+
+              <View style={styles.row}>
+                <View style={styles.inputCol}><Text style={styles.selectLabel}>Empresa</Text><TextInput style={[styles.input, styles.inputDisabled]} editable={false} value={clientes.find((c) => Number(c.id_cliente ?? c.id ?? 0) === Number(permClienteId ?? 0))?.nombre || ''} /></View>
+                <View style={styles.inputCol}><Text style={styles.selectLabel}>Codigo ponton</Text><TextInput style={[styles.input, styles.inputDisabled]} editable={false} value={permCentroSel?.nombre_ponton || ''} /></View>
+              </View>
+              <View style={styles.row}>
+                <View style={styles.inputCol}><Text style={styles.selectLabel}>Region (Area)</Text><TextInput style={[styles.input, styles.inputDisabled]} editable={false} value={permRegion} /></View>
+                <View style={styles.inputCol}><Text style={styles.selectLabel}>Localidad</Text><TextInput style={[styles.input, styles.inputDisabled]} editable={false} value={permLocalidad} /></View>
+              </View>
+              <View style={styles.row}>
+                <View style={styles.inputCol}><Text style={styles.selectLabel}>Tecnico 1</Text><TextInput style={styles.input} value={permTecnico1} onChangeText={setPermTecnico1} /></View>
+                <View style={styles.inputCol}><Text style={styles.selectLabel}>Tecnico 2</Text><TextInput style={styles.input} value={permTecnico2} onChangeText={setPermTecnico2} /></View>
+              </View>
+              <View style={styles.row}>
+                <View style={styles.inputCol}><Text style={styles.selectLabel}>Recepciona</Text><TextInput style={styles.input} value={permRecepciona} onChangeText={setPermRecepciona} /></View>
+                <View style={styles.inputCol}>
+                  <Text style={styles.selectLabel}>Fecha ingreso</Text>
+                  <Pressable style={styles.dateInput} onPress={() => setShowPermFechaPicker(true)}>
+                    <Text style={styles.dateInputText}>{permFecha || 'Seleccionar fecha'}</Text>
+                    <Ionicons name="calendar-outline" size={16} color="#1d4ed8" />
+                  </Pressable>
+                </View>
+              </View>
+              <View style={styles.row}>
+                <View style={styles.inputCol}>
+                  <Text style={styles.selectLabel}>Fecha salida</Text>
+                  <Pressable style={styles.dateInput} onPress={() => setShowPermFechaSalidaPicker(true)}>
+                    <Text style={styles.dateInputText}>{permFechaSalida || 'Seleccionar fecha'}</Text>
+                    <Ionicons name="calendar-outline" size={16} color="#1d4ed8" />
+                  </Pressable>
+                </View>
+                <View style={styles.inputCol}><Text style={styles.selectLabel}>Correo centro</Text><TextInput style={styles.input} value={permCorreoCentro} onChangeText={setPermCorreoCentro} placeholder="correo@centro.cl" autoCapitalize="none" /></View>
+              </View>
+              {showPermFechaPicker && (
+                <DateTimePicker
+                  value={inputDateToDate(permFecha)}
+                  mode="date"
+                  display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                  onChange={handlePermFechaChange}
+                />
+              )}
+              {showPermFechaSalidaPicker && (
+                <DateTimePicker
+                  value={inputDateToDate(permFechaSalida || permFecha)}
+                  mode="date"
+                  display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                  onChange={handlePermFechaSalidaChange}
+                />
+              )}
+              <View style={styles.inputBlock}>
+                <Text style={styles.selectLabel}>Puntos GPS</Text>
+                <TextInput style={styles.input} value={permPuntosGps} onChangeText={setPermPuntosGps} placeholder="Ej: -41.47123, -72.93651" />
+              </View>
+              <View style={styles.inputBlock}>
+                <Text style={styles.selectLabel}>Descripcion del trabajo</Text>
+                <TextInput
+                  style={[styles.input, styles.textArea]}
+                  value={permDescripcionTrabajo}
+                  onChangeText={setPermDescripcionTrabajo}
+                  multiline
+                  textAlignVertical="top"
+                />
+              </View>
+            </ScrollView>
+            <View style={styles.modalActions}>
+              <Pressable
+                style={styles.cancelBtn}
+                onPress={() => {
+                  setShowPermisoModal(false);
+                  setTipoInstalacion('acta_entrega');
+                }}>
+                <Text style={styles.cancelBtnText}>Cancelar</Text>
+              </Pressable>
+              <Pressable
+                style={styles.saveBtn}
+                onPress={async () => {
+                  if (!actaCentroSeleccionado) {
+                    Alert.alert('Permiso de trabajo', 'Primero debes tener un Acta de entrega para este centro.');
+                    return;
+                  }
+                  if (!permCentroId) {
+                    Alert.alert('Permiso de trabajo', 'Selecciona un centro.');
+                    return;
+                  }
+                  if (!permFecha) {
+                    Alert.alert('Permiso de trabajo', 'Fecha ingreso es obligatoria.');
+                    return;
+                  }
+                  try {
+                    const payload = {
+                      centro_id: permCentroId,
+                      acta_entrega_id: actaCentroSeleccionado.id_acta_entrega || null,
+                      fecha_ingreso: permFecha,
+                      fecha_salida: permFechaSalida || null,
+                      correo_centro: permCorreoCentro || null,
+                      region: permRegion || null,
+                      localidad: permLocalidad || null,
+                      tecnico_1: permTecnico1 || null,
+                      tecnico_2: permTecnico2 || null,
+                      recepciona_nombre: permRecepciona || null,
+                      puntos_gps: permPuntosGps || null,
+                      descripcion_trabajo: permDescripcionTrabajo || null,
+                    };
+                    if (permisoCentroSeleccionado?.id_permiso_trabajo) {
+                      await updatePermisoTrabajo(permisoCentroSeleccionado.id_permiso_trabajo, payload);
+                    } else {
+                      await createPermisoTrabajo(payload);
+                    }
+                    await cargarPermisos();
+                    setShowPermisoModal(false);
+                    setTipoInstalacion('acta_entrega');
+                    setMostrarInstalacionForm(false);
+                    Alert.alert('Permiso de trabajo', 'Guardado correctamente.');
+                  } catch (error: any) {
+                    const backendMsg =
+                      error?.response?.data?.error ||
+                      error?.response?.data?.message ||
+                      error?.message ||
+                      'No se pudo guardar el permiso de trabajo.';
+                    Alert.alert('Permiso de trabajo', backendMsg);
+                  }
+                }}>
+                <Text style={styles.saveBtnText}>Guardar</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       <Modal visible={firmaModalVisible} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
           <View style={styles.signatureModalCard}>
@@ -768,8 +1234,70 @@ const styles = StyleSheet.create({
   row: { flexDirection: 'row', gap: 8 },
   tabBtn: { flex: 1, minHeight: 40, borderRadius: 10, borderWidth: 1, borderColor: '#bfdbfe', backgroundColor: '#eff6ff', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
   tabBtnActive: { backgroundColor: '#1d4ed8', borderColor: '#1d4ed8' },
+  tabBtnDone: { borderColor: '#86efac', backgroundColor: '#f0fdf4' },
+  tabBtnDisabled: { borderColor: '#cbd5e1', backgroundColor: '#f8fafc' },
   tabBtnText: { color: '#1d4ed8', fontWeight: '700', fontSize: 12.5 },
   tabBtnTextActive: { color: '#fff' },
+  tabBtnTextDone: { color: '#166534' },
+  stepperRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
+  stepItem: { alignItems: 'center', gap: 4 },
+  stepDot: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    backgroundColor: '#f8fafc',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  stepDotDone: { borderColor: '#86efac', backgroundColor: '#f0fdf4' },
+  stepText: { color: '#64748b', fontWeight: '700', fontSize: 11.5 },
+  stepTextDone: { color: '#166534' },
+  stepLine: { flex: 1, height: 1, backgroundColor: '#e2e8f0', marginHorizontal: 6 },
+  installSummaryBox: {
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+    backgroundColor: '#f8fbff',
+    borderRadius: 10,
+    padding: 10,
+    gap: 4,
+  },
+  installSummaryTitle: { color: '#0f172a', fontWeight: '800', fontSize: 14 },
+  installSummaryMeta: { color: '#64748b', fontWeight: '600', marginBottom: 3 },
+  installStateRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  installStateLabel: { color: '#334155', fontWeight: '700', minWidth: 58 },
+  installStateValue: { fontWeight: '800' },
+  installStateOk: { color: '#166534' },
+  installStateWarn: { color: '#b45309' },
+  addInstallBtn: {
+    marginTop: 6,
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    backgroundColor: '#eff6ff',
+    borderRadius: 10,
+    minHeight: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 6,
+  },
+  addInstallBtnText: { color: '#1d4ed8', fontWeight: '800' },
+  installDoneCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
+    backgroundColor: '#f0fdf4',
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    marginTop: 6,
+  },
+  flowHint: { marginTop: 8, fontSize: 12.5, fontWeight: '700' },
+  flowHintOk: { color: '#166534' },
+  flowHintWarn: { color: '#b45309' },
   placeholderTitle: { color: '#0f172a', fontWeight: '800', fontSize: 15 },
   placeholderText: { color: '#64748b', fontWeight: '600' },
   requirementBox: {
@@ -803,6 +1331,18 @@ const styles = StyleSheet.create({
   pillTextActive: { color: '#fff' },
   inputCol: { flex: 1, gap: 6 },
   input: { borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 9, color: '#0f172a', fontWeight: '600', backgroundColor: '#fff' },
+  dateInput: {
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    backgroundColor: '#fff',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  dateInputText: { color: '#0f172a', fontWeight: '600' },
   inputDisabled: { backgroundColor: '#f8fafc', color: '#64748b' },
   headerCard: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   sectionTitle: { color: '#0f172a', fontWeight: '800', fontSize: 15 },
@@ -829,6 +1369,7 @@ const styles = StyleSheet.create({
   centerOptionActive: { backgroundColor: '#eff6ff' },
   centerOptionText: { color: '#0f172a', fontWeight: '600' },
   centerOptionTextActive: { color: '#1d4ed8', fontWeight: '800' },
+  dropdownEmptyText: { paddingHorizontal: 10, paddingVertical: 12, color: '#64748b', fontWeight: '600' },
   selectedCenterBox: {
     borderWidth: 1,
     borderColor: '#93c5fd',
@@ -911,5 +1452,7 @@ const styles = StyleSheet.create({
   cancelBtn: { borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 9, backgroundColor: '#f8fafc' },
   cancelBtnText: { color: '#334155', fontWeight: '700' },
   saveBtn: { borderRadius: 10, paddingHorizontal: 12, paddingVertical: 9, backgroundColor: '#1d4ed8' },
+  ctaDisabled: { backgroundColor: '#94a3b8' },
+  ctaDone: { backgroundColor: '#16a34a' },
   saveBtnText: { color: '#fff', fontWeight: '700' },
 });
