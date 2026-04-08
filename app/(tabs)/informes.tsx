@@ -26,6 +26,7 @@ import {
   fetchCentrosPorCliente,
   fetchClientes,
   fetchPermisosTrabajo,
+  getArmados,
   updateActaEntrega,
   updatePermisoTrabajo,
 } from '@/lib/api';
@@ -52,6 +53,7 @@ type Centro = {
 type Acta = {
   id_acta_entrega?: number;
   centro_id?: number;
+  armado_id?: number;
   cliente_id?: number;
   empresa?: string;
   cliente?: string;
@@ -69,6 +71,17 @@ type Acta = {
   firma_recepciona?: string;
   equipos_considerados?: string;
   centro_origen_traslado?: string;
+};
+type ArmadoResumen = {
+  id_armado?: number;
+  centro_id?: number;
+  estado?: string;
+  fecha_cierre?: string;
+  centro?: {
+    id_centro?: number;
+    nombre?: string;
+    cliente?: string;
+  };
 };
 type Permiso = {
   id_permiso_trabajo?: number;
@@ -104,8 +117,19 @@ type FirmaTarget = 'tecnico1' | 'tecnico2' | 'recepciona' | 'perm_recepciona' | 
 
 const toInputDate = (value?: string) => {
   if (!value) return '';
-  const m = String(value).match(/^(\d{4})-(\d{2})-(\d{2})/);
-  return m ? `${m[1]}-${m[2]}-${m[3]}` : '';
+  const raw = String(value).trim();
+  const iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+  const latam = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (latam) return `${latam[3]}-${latam[2]}-${latam[1]}`;
+  const parsed = new Date(raw);
+  if (!Number.isNaN(parsed.getTime())) {
+    const y = parsed.getFullYear();
+    const m = String(parsed.getMonth() + 1).padStart(2, '0');
+    const d = String(parsed.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+  return '';
 };
 
 const formatDate = (value?: string) => {
@@ -253,10 +277,18 @@ export default function InformesScreen() {
   const [permMedicionNeutroTierra, setPermMedicionNeutroTierra] = useState('');
   const [permHertz, setPermHertz] = useState('');
   const [permDescripcionTrabajo, setPermDescripcionTrabajo] = useState('');
+  const [armadosFinalizadosCentro, setArmadosFinalizadosCentro] = useState<ArmadoResumen[]>([]);
+  const [armadoSeleccionadoId, setArmadoSeleccionadoId] = useState<number | null>(null);
+  const [showArmadosModal, setShowArmadosModal] = useState(false);
+  const [vinculoActaId, setVinculoActaId] = useState<number | null>(null);
 
   const clienteForm = useMemo(
     () => clientes.find((c) => Number(c.id_cliente ?? c.id ?? 0) === Number(clienteIdForm ?? 0)) || null,
     [clientes, clienteIdForm]
+  );
+  const clientePermSel = useMemo(
+    () => clientes.find((c) => Number(c.id_cliente ?? c.id ?? 0) === Number(permClienteId ?? 0)) || null,
+    [clientes, permClienteId]
   );
 
   const centroSelForm = useMemo(
@@ -305,6 +337,8 @@ export default function InformesScreen() {
     return porCentro[0] || null;
   }, [permisos, permCentroId]);
   const permisoCompletado = !!permisoCentroSeleccionado;
+  const armadoVinculadoId = Number(actaCentroSeleccionado?.armado_id || armadoSeleccionadoId || 0) || null;
+  const armadoVinculado = armadosFinalizadosCentro.find((a) => Number(a.id_armado || 0) === Number(armadoVinculadoId || 0)) || null;
   const instalacionSeleccionada = !!(permClienteId && permCentroId);
   const instalacionesCompletadas = useMemo(() => {
     const ids = permisos
@@ -312,13 +346,15 @@ export default function InformesScreen() {
       .filter(Boolean)
       .filter((v, i, arr) => arr.indexOf(v) === i);
     return ids.map((centroId) => {
-      const acta = actas
-        .filter((a) => Number(a.centro_id || 0) === centroId)
+      const actasCentro = actas.filter((a) => Number(a.centro_id || 0) === centroId);
+      const acta = actasCentro
         .sort((a, b) => {
           const ta = new Date(a.fecha_registro || 0).getTime();
           const tb = new Date(b.fecha_registro || 0).getTime();
           return tb - ta;
         })[0];
+      const actaConArmado = actasCentro.find((a) => Number(a.armado_id || 0) > 0);
+      const hasArmadoVinculado = !!actaConArmado;
       const centro =
         acta?.centro ||
         permCentros.find((c) => Number(c.id_centro ?? c.id ?? 0) === centroId)?.nombre ||
@@ -329,6 +365,8 @@ export default function InformesScreen() {
         centroId,
         actaId: Number(acta?.id_acta_entrega || 0) || null,
         permisoId: Number(permisos.find((p) => Number(p.centro_id || 0) === centroId)?.id_permiso_trabajo || 0) || null,
+        armadoId: Number((actaConArmado?.armado_id || acta?.armado_id || 0)) || null,
+        hasArmadoVinculado,
         centro,
         cliente,
         fechaActa: acta?.fecha_registro || '',
@@ -462,6 +500,25 @@ export default function InformesScreen() {
   }, [permClienteId]);
 
   useEffect(() => {
+    if (!permCentroId) {
+      setArmadosFinalizadosCentro([]);
+      setArmadoSeleccionadoId(null);
+      return;
+    }
+    getArmados({ estado: 'finalizado', centro_id: permCentroId })
+      .then((lista) => {
+        const arr = Array.isArray(lista) ? lista : [];
+        const finalizados = arr.filter(
+          (a) => String(a?.estado || '').toLowerCase() === 'finalizado' && Number(a?.centro_id || 0) === Number(permCentroId)
+        );
+        setArmadosFinalizadosCentro(finalizados);
+      })
+      .catch(() => {
+        setArmadosFinalizadosCentro([]);
+      });
+  }, [permCentroId]);
+
+  useEffect(() => {
     if (!permCentroSel) {
       setPermCorreoCentro('');
       setPermRegion('');
@@ -480,6 +537,16 @@ export default function InformesScreen() {
     );
     setPermCantidadRadares(String(permCentroSel.cantidad_radares ?? ''));
   }, [permCentroSel]);
+
+  useEffect(() => {
+    if (actaCentroSeleccionado?.armado_id) {
+      setArmadoSeleccionadoId(Number(actaCentroSeleccionado.armado_id) || null);
+      return;
+    }
+    if (!actaCentroSeleccionado) {
+      setArmadoSeleccionadoId(null);
+    }
+  }, [actaCentroSeleccionado]);
 
   useEffect(() => {
     if (!actaCentroSeleccionado) return;
@@ -597,6 +664,7 @@ export default function InformesScreen() {
     setFirmaRecepciona(acta.firma_recepciona || '');
     setEquiposConsiderados(acta.equipos_considerados || '');
     setCentroOrigenTraslado(acta.centro_origen_traslado || '');
+    setArmadoSeleccionadoId(Number(acta.armado_id || 0) || null);
     const clienteIdFromActa = Number(acta.cliente_id || 0) || null;
     const centroFromFiltro = centrosFiltro.find((c) => Number(c.id_centro ?? c.id ?? 0) === Number(centroId || 0));
     const clienteIdFromCentro = Number(centroFromFiltro?.cliente_id || 0) || null;
@@ -631,6 +699,7 @@ export default function InformesScreen() {
       firma_recepciona: firmaRecepciona,
       equipos_considerados: equiposConsiderados,
       centro_origen_traslado: centroOrigenTraslado,
+      armado_id: armadoSeleccionadoId,
     };
     try {
       if (editId) await updateActaEntrega(editId, payload);
@@ -668,6 +737,40 @@ export default function InformesScreen() {
         },
       },
     ]);
+  };
+
+  const guardarVinculoArmado = async (armadoId: number | null) => {
+    const targetActaId = Number(vinculoActaId || actaCentroSeleccionado?.id_acta_entrega || 0) || null;
+    if (!targetActaId) {
+      Alert.alert('Instalacion', 'No se encontro el acta para guardar la vinculacion.');
+      return;
+    }
+    setSaving(true);
+    try {
+      const resp = await updateActaEntrega(targetActaId, { armado_id: armadoId });
+      const armadoGuardado = Number(resp?.acta?.armado_id || 0) || null;
+      if ((Number(armadoId || 0) || null) !== armadoGuardado) {
+        Alert.alert(
+          'Instalacion',
+          'El backend no guardo la vinculacion. Revisa que este actualizado y que la columna armado_id exista en actas_entrega.'
+        );
+        return;
+      }
+      await cargarActas();
+      setArmadoSeleccionadoId(armadoId);
+      setShowArmadosModal(false);
+      setVinculoActaId(null);
+      Alert.alert('Instalacion', 'Vinculacion guardada.');
+    } catch (error: any) {
+      const backendMsg =
+        error?.response?.data?.error ||
+        error?.response?.data?.message ||
+        error?.message ||
+        'No se pudo guardar la vinculacion.';
+      Alert.alert('Instalacion', backendMsg);
+    } finally {
+      setSaving(false);
+    }
   };
 
   const actasFiltradas = useMemo(() => {
@@ -818,6 +921,41 @@ export default function InformesScreen() {
                       <Ionicons name="clipboard-outline" size={16} color="#1d4ed8" />
                     </Pressable>
                   ) : null}
+                  <Pressable
+                    style={[styles.actionBtn, !item.hasArmadoVinculado && styles.actionBtnWarn]}
+                    onPress={async () => {
+                      const clientePorNombre = clientes.find(
+                        (c) =>
+                          String(c.nombre || c.razon_social || '').trim().toLowerCase() ===
+                          String(item.cliente || '').trim().toLowerCase()
+                      );
+                      const clienteId = Number(clientePorNombre?.id_cliente ?? clientePorNombre?.id ?? 0) || null;
+                      if (clienteId) setPermClienteId(clienteId);
+                      setPermCentroId(item.centroId);
+                      setMostrarInstalacionForm(true);
+                      setTipoInstalacion('acta_entrega');
+                      setArmadoSeleccionadoId(item.armadoId || null);
+                      setVinculoActaId(item.actaId || null);
+                      try {
+                        const lista = await getArmados({ estado: 'finalizado', centro_id: item.centroId });
+                        const arr = Array.isArray(lista) ? lista : [];
+                        const finalizados = arr.filter(
+                          (a) =>
+                            String(a?.estado || '').toLowerCase() === 'finalizado' &&
+                            Number(a?.centro_id || 0) === Number(item.centroId)
+                        );
+                        setArmadosFinalizadosCentro(finalizados);
+                        if (!finalizados.length) {
+                          Alert.alert('Instalacion', 'Este centro no tiene armados finalizados para vincular.');
+                          return;
+                        }
+                        setShowArmadosModal(true);
+                      } catch {
+                        Alert.alert('Instalacion', 'No se pudieron cargar los armados finalizados.');
+                      }
+                    }}>
+                    <Ionicons name="link-outline" size={16} color={!item.hasArmadoVinculado ? '#ffffff' : '#1d4ed8'} />
+                  </Pressable>
                   <Ionicons name="checkmark-circle" size={18} color="#16a34a" />
                 </View>
               </View>
@@ -913,6 +1051,42 @@ export default function InformesScreen() {
                   {permisoCompletado ? `Completado (${formatDate(permisoCentroSeleccionado?.fecha_ingreso)})` : 'Pendiente'}
                 </Text>
               </View>
+              <View style={styles.installStateRow}>
+                <Text style={styles.installStateLabel}>Armado:</Text>
+                <Text
+                  style={[
+                    styles.installStateValue,
+                    armadoVinculado ? styles.installStateOk : styles.installStateWarn,
+                  ]}>
+                  {armadoVinculado
+                    ? `${armadoVinculado.centro?.nombre || permCentroSel?.nombre || 'Centro'} (${formatDate(
+                        armadoVinculado.fecha_cierre
+                      )})`
+                    : armadosFinalizadosCentro.length
+                    ? 'Pendiente de vinculacion'
+                    : 'Sin armados finalizados'}
+                </Text>
+              </View>
+              <Pressable
+                style={[
+                  styles.linkArmadoBtn,
+                  !instalacionSeleccionada && styles.linkArmadoBtnDisabled,
+                ]}
+                disabled={!instalacionSeleccionada}
+                onPress={() => {
+                  if (!instalacionSeleccionada) return;
+                  if (!armadosFinalizadosCentro.length) {
+                    Alert.alert('Instalacion', 'Este centro no tiene armados finalizados para vincular.');
+                    return;
+                  }
+                  setVinculoActaId(Number(actaCentroSeleccionado?.id_acta_entrega || 0) || null);
+                  setShowArmadosModal(true);
+                }}>
+                <Ionicons name="link-outline" size={14} color={instalacionSeleccionada ? '#1d4ed8' : '#94a3b8'} />
+                <Text style={[styles.linkArmadoBtnText, !instalacionSeleccionada && styles.linkArmadoBtnTextDisabled]}>
+                  Vincular armado
+                </Text>
+              </Pressable>
             </View>
 
             {!instalacionSeleccionada ? (
@@ -1178,6 +1352,55 @@ export default function InformesScreen() {
             <View style={styles.modalActions}>
               <Pressable style={styles.cancelBtn} onPress={() => { setShowEditor(false); resetForm(); }}><Text style={styles.cancelBtnText}>Cancelar</Text></Pressable>
               <Pressable style={styles.saveBtn} onPress={guardarActa} disabled={saving}><Text style={styles.saveBtnText}>{saving ? 'Guardando...' : 'Guardar'}</Text></Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={showArmadosModal} animationType="fade" transparent>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Vincular armado finalizado</Text>
+              <Pressable
+                onPress={() => {
+                  setShowArmadosModal(false);
+                  setVinculoActaId(null);
+                }}>
+                <Ionicons name="close" size={20} color="#334155" />
+              </Pressable>
+            </View>
+            <ScrollView style={styles.centerDropdown} nestedScrollEnabled>
+              {armadosFinalizadosCentro.map((armado) => {
+                const armadoId = Number(armado.id_armado || 0);
+                const active = armadoId === Number(armadoSeleccionadoId || 0);
+                return (
+                  <Pressable
+                    key={armadoId}
+                    style={[styles.armadoOption, active && styles.armadoOptionActive]}
+                    onPress={() => {
+                      setArmadoSeleccionadoId(armadoId || null);
+                    }}>
+                    <Text style={[styles.armadoOptionTitle, active && styles.armadoOptionTitleActive]}>
+                      {armado.centro?.nombre || permCentroSel?.nombre || `Armado #${armadoId}`}
+                    </Text>
+                    <Text style={styles.armadoOptionMeta}>
+                      {armado.centro?.cliente || clientePermSel?.nombre || clientePermSel?.razon_social || '-'} | Cierre: {formatDate(armado.fecha_cierre)}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+            <View style={styles.modalActions}>
+              <Pressable
+                style={styles.cancelBtn}
+                disabled={saving}
+                onPress={() => guardarVinculoArmado(null)}>
+                <Text style={styles.cancelBtnText}>Quitar vinculo</Text>
+              </Pressable>
+              <Pressable style={styles.saveBtn} disabled={saving} onPress={() => guardarVinculoArmado(armadoSeleccionadoId)}>
+                <Text style={styles.saveBtnText}>{saving ? 'Guardando...' : 'Guardar'}</Text>
+              </Pressable>
             </View>
           </View>
         </View>
@@ -1693,6 +1916,25 @@ const styles = StyleSheet.create({
   installStateValue: { fontWeight: '800' },
   installStateOk: { color: '#166534' },
   installStateWarn: { color: '#b45309' },
+  linkArmadoBtn: {
+    marginTop: 6,
+    alignSelf: 'flex-start',
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    borderRadius: 8,
+    backgroundColor: '#eff6ff',
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  linkArmadoBtnDisabled: {
+    borderColor: '#cbd5e1',
+    backgroundColor: '#f8fafc',
+  },
+  linkArmadoBtnText: { color: '#1d4ed8', fontWeight: '700', fontSize: 12.5 },
+  linkArmadoBtnTextDisabled: { color: '#94a3b8' },
   addInstallBtn: {
     marginTop: 6,
     borderWidth: 1,
@@ -1779,6 +2021,7 @@ const styles = StyleSheet.create({
   rowMeta: { color: '#64748b', fontSize: 12, marginTop: 1 },
   rowActions: { flexDirection: 'row', gap: 6 },
   actionBtn: { width: 32, height: 32, borderRadius: 8, borderWidth: 1, borderColor: '#bfdbfe', backgroundColor: '#eff6ff', alignItems: 'center', justifyContent: 'center' },
+  actionBtnWarn: { borderColor: '#dc2626', backgroundColor: '#ef4444' },
   actionBtnDelete: {
     width: 30,
     height: 30,
@@ -1820,6 +2063,19 @@ const styles = StyleSheet.create({
   centerOptionActive: { backgroundColor: '#eff6ff' },
   centerOptionText: { color: '#0f172a', fontWeight: '600' },
   centerOptionTextActive: { color: '#1d4ed8', fontWeight: '800' },
+  armadoOption: {
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#eef2f7',
+    gap: 2,
+  },
+  armadoOptionActive: {
+    backgroundColor: '#eff6ff',
+  },
+  armadoOptionTitle: { color: '#0f172a', fontWeight: '800' },
+  armadoOptionTitleActive: { color: '#1d4ed8' },
+  armadoOptionMeta: { color: '#64748b', fontWeight: '600', fontSize: 12 },
   dropdownEmptyText: { paddingHorizontal: 10, paddingVertical: 12, color: '#64748b', fontWeight: '600' },
   selectedCenterBox: {
     borderWidth: 1,
