@@ -21,6 +21,7 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import { AuthContext } from '../_layout';
 import {
   createActaEntrega,
+  createCambioEquipoMantencion,
   createMantencionTerreno,
   createPermisoTrabajo,
   deleteActaEntrega,
@@ -30,6 +31,7 @@ import {
   fetchClientes,
   fetchPermisosTrabajo,
   getArmados,
+  getEquipos,
   updateActaEntrega,
   updateMantencionTerreno,
   updatePermisoTrabajo,
@@ -119,6 +121,13 @@ type Permiso = {
 };
 type GpsPoint = { lat: string; lng: string };
 type SelloItem = { ubicacion: string; numeroAnterior: string; numeroNuevo: string };
+type EquipoCentro = {
+  id_equipo?: number;
+  nombre?: string;
+  numero_serie?: string;
+  codigo?: string;
+  centro_id?: number;
+};
 
 type ModuloInforme = 'instalacion' | 'mantencion' | 'retiro';
 type TipoInstalacion = 'acta_entrega' | 'informe_intervencion';
@@ -328,14 +337,21 @@ export default function InformesScreen() {
   const [permEvidenciaFotos, setPermEvidenciaFotos] = useState<string[]>([]);
   const [evidenciaTargetIndex, setEvidenciaTargetIndex] = useState<number | null>(null);
   const [showCameraModal, setShowCameraModal] = useState(false);
+  const [showSerieScannerModal, setShowSerieScannerModal] = useState(false);
   const [cameraFacing, setCameraFacing] = useState<'front' | 'back'>('back');
   const cameraRef = useRef<CameraView | null>(null);
+  const scannedSerieOnce = useRef(false);
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const [armadosFinalizadosCentro, setArmadosFinalizadosCentro] = useState<ArmadoResumen[]>([]);
   const [armadoSeleccionadoId, setArmadoSeleccionadoId] = useState<number | null>(null);
   const [showArmadosModal, setShowArmadosModal] = useState(false);
   const [vinculoActaId, setVinculoActaId] = useState<number | null>(null);
   const [mantencionEditandoId, setMantencionEditandoId] = useState<number | null>(null);
+  const [showAllMantencionesRecientes, setShowAllMantencionesRecientes] = useState(false);
+  const [equiposCentro, setEquiposCentro] = useState<EquipoCentro[]>([]);
+  const [cambioEquipoEnabled, setCambioEquipoEnabled] = useState(false);
+  const [equipoCambioId, setEquipoCambioId] = useState<number | null>(null);
+  const [serieNuevaCambio, setSerieNuevaCambio] = useState('');
 
   const clienteForm = useMemo(
     () => clientes.find((c) => Number(c.id_cliente ?? c.id ?? 0) === Number(clienteIdForm ?? 0)) || null,
@@ -408,6 +424,11 @@ export default function InformesScreen() {
       ) || null
     );
   }, [permisosMantencion, mantencionEditandoId]);
+  const equipoCambioSeleccionado = useMemo(
+    () =>
+      equiposCentro.find((e) => Number(e.id_equipo || 0) === Number(equipoCambioId || 0)) || null,
+    [equiposCentro, equipoCambioId]
+  );
   const armadoVinculadoId = Number(actaCentroSeleccionado?.armado_id || armadoSeleccionadoId || 0) || null;
   const armadoVinculado = armadosFinalizadosCentro.find((a) => Number(a.id_armado || 0) === Number(armadoVinculadoId || 0)) || null;
   const instalacionSeleccionada = !!(permClienteId && permCentroId);
@@ -445,6 +466,10 @@ export default function InformesScreen() {
       };
     });
   }, [permisosInstalacion, actas, permCentros, centrosFiltro]);
+  const mantencionesRecientesVisibles = useMemo(
+    () => (showAllMantencionesRecientes ? permisosMantencion : permisosMantencion.slice(0, 3)),
+    [showAllMantencionesRecientes, permisosMantencion]
+  );
 
   const cargarClientes = async () => {
     if (!token) return;
@@ -610,6 +635,17 @@ export default function InformesScreen() {
   }, [permCentroId]);
 
   useEffect(() => {
+    if (permisoContexto !== 'mantencion' || !permCentroId) {
+      setEquiposCentro([]);
+      setEquipoCambioId(null);
+      return;
+    }
+    getEquipos(permCentroId)
+      .then((lista) => setEquiposCentro(Array.isArray(lista) ? lista : []))
+      .catch(() => setEquiposCentro([]));
+  }, [permisoContexto, permCentroId]);
+
+  useEffect(() => {
     if (!permCentroSel) {
       setPermCorreoCentro('');
       setPermRegion('');
@@ -771,6 +807,35 @@ export default function InformesScreen() {
     setPermDescripcionTrabajo('');
     setPermEvidenciaFotos([]);
     setEvidenciaTargetIndex(null);
+    setCambioEquipoEnabled(false);
+    setEquipoCambioId(null);
+    setSerieNuevaCambio('');
+  };
+
+  const abrirScannerSerieCambio = async () => {
+    if (!cameraPermission?.granted) {
+      const req = await requestCameraPermission();
+      if (!req.granted) {
+        Alert.alert('Escaner', 'Debes autorizar la camara para escanear el codigo.');
+        return;
+      }
+    }
+    scannedSerieOnce.current = false;
+    setShowSerieScannerModal(true);
+  };
+
+  const handleScanSerieCambio = ({ data }: { data: string }) => {
+    if (!showSerieScannerModal || scannedSerieOnce.current) return;
+    scannedSerieOnce.current = true;
+    const raw = String(data || '').trim();
+    if (!raw) return;
+    const soloNumeros = raw.replace(/\D+/g, '');
+    const serie = soloNumeros.length ? soloNumeros : raw;
+    setSerieNuevaCambio(serie);
+    setShowSerieScannerModal(false);
+    setTimeout(() => {
+      scannedSerieOnce.current = false;
+    }, 250);
   };
 
   const nuevaActa = () => {
@@ -1380,7 +1445,7 @@ export default function InformesScreen() {
         {moduloInforme === 'mantencion' && !!permisosMantencion.length && (
           <View style={styles.card}>
             <Text style={styles.sectionTitle}>Mantenciones recientes</Text>
-            {permisosMantencion.slice(0, 5).map((item) => (
+            {mantencionesRecientesVisibles.map((item) => (
               <View key={`mant-${item.id_mantencion_terreno || item.id_permiso_trabajo || item.centro_id}`} style={styles.installDoneCard}>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.rowTitle}>{item.centro || `Centro ${item.centro_id}`}</Text>
@@ -1401,6 +1466,9 @@ export default function InformesScreen() {
                       setPermCentroId(Number(item.centro_id || 0) || null);
                       setPermisoContexto('mantencion');
                       setMantencionEditandoId(Number(item.id_mantencion_terreno || 0) || null);
+                      setCambioEquipoEnabled(false);
+                      setEquipoCambioId(null);
+                      setSerieNuevaCambio('');
                       setShowPermisoModal(true);
                     }}>
                     <Ionicons name="create-outline" size={16} color="#1d4ed8" />
@@ -1408,6 +1476,15 @@ export default function InformesScreen() {
                 </View>
               </View>
             ))}
+            {permisosMantencion.length > 3 ? (
+              <Pressable
+                style={styles.moreMantBtn}
+                onPress={() => setShowAllMantencionesRecientes((prev) => !prev)}>
+                <Text style={styles.moreMantBtnText}>
+                  {showAllMantencionesRecientes ? 'Mostrar menos' : 'Mostrar más'}
+                </Text>
+              </Pressable>
+            ) : null}
           </View>
         )}
 
@@ -1623,6 +1700,9 @@ export default function InformesScreen() {
                   setShowPermisoModal(false);
                   setPermisoContexto('instalacion');
                   setMantencionEditandoId(null);
+                  setCambioEquipoEnabled(false);
+                  setEquipoCambioId(null);
+                  setSerieNuevaCambio('');
                   setTipoInstalacion('acta_entrega');
                 }}>
                 <Ionicons name="close" size={20} color="#334155" />
@@ -2028,6 +2108,80 @@ export default function InformesScreen() {
                   )}
                 </View>
               ) : null}
+              {permisoContexto === 'mantencion' ? (
+                <View style={styles.inputBlock}>
+                  <View style={styles.rowBetween}>
+                    <Text style={styles.sectionTitleBlue}>Cambio de equipo</Text>
+                    <View style={styles.toggleSeg}>
+                      <Pressable
+                        style={[styles.toggleOption, !cambioEquipoEnabled && styles.toggleOptionActive]}
+                        onPress={() => setCambioEquipoEnabled(false)}>
+                        <Text style={[styles.toggleOptionText, !cambioEquipoEnabled && styles.toggleOptionTextActive]}>
+                          No
+                        </Text>
+                      </Pressable>
+                      <Pressable
+                        style={[styles.toggleOption, cambioEquipoEnabled && styles.toggleOptionActive]}
+                        onPress={() => setCambioEquipoEnabled(true)}>
+                        <Text style={[styles.toggleOptionText, cambioEquipoEnabled && styles.toggleOptionTextActive]}>
+                          Si
+                        </Text>
+                      </Pressable>
+                    </View>
+                  </View>
+                  {cambioEquipoEnabled ? (
+                    <View style={{ gap: 8 }}>
+                      <Text style={styles.selectLabel}>Equipo del centro</Text>
+                      <View style={styles.equipoListBox}>
+                        <ScrollView nestedScrollEnabled style={{ maxHeight: 170 }}>
+                          {equiposCentro.map((eq) => {
+                            const id = Number(eq.id_equipo || 0);
+                            const selected = Number(equipoCambioId || 0) === id;
+                            return (
+                              <Pressable
+                                key={`eq-${id}`}
+                                style={[styles.equipoItem, selected && styles.equipoItemActive]}
+                                onPress={() => setEquipoCambioId(id)}>
+                                <Text style={[styles.equipoItemTitle, selected && styles.equipoItemTitleActive]}>
+                                  {eq.nombre || `Equipo ${id}`}
+                                </Text>
+                                <Text style={styles.equipoItemMeta}>
+                                  Serie: {eq.numero_serie || '-'}
+                                </Text>
+                              </Pressable>
+                            );
+                          })}
+                        </ScrollView>
+                      </View>
+                      <View style={styles.row}>
+                        <View style={styles.inputCol}>
+                          <Text style={styles.selectLabel}>N° serie actual</Text>
+                          <TextInput
+                            style={[styles.input, styles.readonlyInput]}
+                            value={String(equipoCambioSeleccionado?.numero_serie || '')}
+                            editable={false}
+                            placeholder="-"
+                          />
+                        </View>
+                        <View style={styles.inputCol}>
+                          <Text style={styles.selectLabel}>N° serie nuevo</Text>
+                          <View style={styles.scanSerieWrap}>
+                            <TextInput
+                              style={[styles.input, styles.scanSerieInput]}
+                              value={serieNuevaCambio}
+                              onChangeText={setSerieNuevaCambio}
+                              placeholder="Manual o escaneo"
+                            />
+                            <Pressable style={styles.scanSerieBtn} onPress={abrirScannerSerieCambio}>
+                              <Ionicons name="barcode-outline" size={17} color="#1d4ed8" />
+                            </Pressable>
+                          </View>
+                        </View>
+                      </View>
+                    </View>
+                  ) : null}
+                </View>
+              ) : null}
               <View style={styles.sectionDivider}>
                 <View style={styles.sectionLine} />
                 <Text style={styles.sectionTitleBlue}>Cliente</Text>
@@ -2148,16 +2302,24 @@ export default function InformesScreen() {
             <View style={styles.modalActions}>
               <Pressable
                 style={styles.cancelBtn}
+                disabled={saving}
                 onPress={() => {
+                  if (saving) return;
                   setShowPermisoModal(false);
                   setPermisoContexto('instalacion');
+                  setMantencionEditandoId(null);
+                  setCambioEquipoEnabled(false);
+                  setEquipoCambioId(null);
+                  setSerieNuevaCambio('');
                   setTipoInstalacion('acta_entrega');
                 }}>
                 <Text style={styles.cancelBtnText}>Cancelar</Text>
               </Pressable>
               <Pressable
-                style={styles.saveBtn}
+                style={[styles.saveBtn, saving && styles.ctaDisabled]}
+                disabled={saving}
                 onPress={async () => {
+                  if (saving) return;
                   const titulo = permisoContexto === 'mantencion' ? 'Informe de mantencion' : 'Permiso de trabajo';
                   if (permisoContexto === 'instalacion' && !actaCentroSeleccionado) {
                     Alert.alert(titulo, 'Primero debes tener un Acta de entrega para este centro.');
@@ -2198,7 +2360,18 @@ export default function InformesScreen() {
                     .filter((p) => p.lat && p.lng)
                     .map((p) => `${p.lat},${p.lng}`)
                     .join(' | ');
+                  if (permisoContexto === 'mantencion' && cambioEquipoEnabled) {
+                    if (!equipoCambioId) {
+                      Alert.alert(titulo, 'Selecciona el equipo a cambiar.');
+                      return;
+                    }
+                    if (!serieNuevaCambio.trim()) {
+                      Alert.alert(titulo, 'Ingresa N° serie nuevo.');
+                      return;
+                    }
+                  }
                   try {
+                    setSaving(true);
                     const payload = {
                       centro_id: permCentroId,
                       acta_entrega_id:
@@ -2230,14 +2403,34 @@ export default function InformesScreen() {
                       evidencia_foto:
                         permisoContexto === 'mantencion' ? serializeEvidencePhotos(permEvidenciaFotos) : null,
                     };
+                    let result: any = null;
                     if (permisoContexto === 'instalacion' && permisoCentroSeleccionado?.id_permiso_trabajo) {
-                      await updatePermisoTrabajo(permisoCentroSeleccionado.id_permiso_trabajo, payload);
+                      result = await updatePermisoTrabajo(permisoCentroSeleccionado.id_permiso_trabajo, payload);
                     } else if (permisoContexto === 'mantencion' && mantencionEditandoId) {
-                      await updateMantencionTerreno(mantencionEditandoId, payload);
+                      result = await updateMantencionTerreno(mantencionEditandoId, payload);
                     } else if (permisoContexto === 'mantencion') {
-                      await createMantencionTerreno(payload);
+                      result = await createMantencionTerreno(payload);
                     } else {
-                      await createPermisoTrabajo(payload);
+                      result = await createPermisoTrabajo(payload);
+                    }
+
+                    if (permisoContexto === 'mantencion' && cambioEquipoEnabled && equipoCambioId) {
+                      const mantId =
+                        Number(result?.mantencion?.id_mantencion_terreno || 0) ||
+                        Number(mantencionEditandoId || 0);
+                      if (mantId) {
+                        const serieTrim = serieNuevaCambio.trim();
+                        const soloNumerosSerie = serieTrim.replace(/\D+/g, '');
+                        const codigoDerivado =
+                          (soloNumerosSerie ? soloNumerosSerie.slice(0, 5) : serieTrim.slice(0, 5)) || undefined;
+                        await createCambioEquipoMantencion(mantId, {
+                          equipo_id: equipoCambioId,
+                          armado_id: armadoVinculadoId || undefined,
+                          serie_nueva: serieTrim || undefined,
+                          codigo_nuevo: codigoDerivado,
+                          tecnico: permTecnico1 || undefined,
+                        });
+                      }
                     }
                     await cargarPermisos();
                     await cargarMantencionesTerreno();
@@ -2282,9 +2475,50 @@ export default function InformesScreen() {
                       error?.message ||
                       'No se pudo guardar el permiso de trabajo.';
                     Alert.alert(titulo, backendMsg);
+                  } finally {
+                    setSaving(false);
                   }
                 }}>
-                <Text style={styles.saveBtnText}>Guardar</Text>
+                <Text style={styles.saveBtnText}>{saving ? 'Guardando...' : 'Guardar'}</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={showSerieScannerModal} animationType="fade" transparent>
+        <View style={styles.modalOverlay}>
+          <View style={styles.cameraModalCard}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Escanear N° serie</Text>
+              <Pressable
+                onPress={() => {
+                  scannedSerieOnce.current = false;
+                  setShowSerieScannerModal(false);
+                }}>
+                <Ionicons name="close" size={20} color="#334155" />
+              </Pressable>
+            </View>
+            <View style={styles.cameraWrap}>
+              {cameraPermission?.status !== 'granted' ? (
+                <Text style={styles.signatureEmptyText}>Sin permiso de cámara.</Text>
+              ) : (
+                <CameraView
+                  style={StyleSheet.absoluteFill}
+                  facing="back"
+                  onBarcodeScanned={showSerieScannerModal ? handleScanSerieCambio : undefined}
+                />
+              )}
+              <View pointerEvents="none" style={styles.scanFrame} />
+            </View>
+            <View style={styles.modalActions}>
+              <Pressable
+                style={styles.cancelBtn}
+                onPress={() => {
+                  scannedSerieOnce.current = false;
+                  setShowSerieScannerModal(false);
+                }}>
+                <Text style={styles.cancelBtnText}>Cerrar</Text>
               </Pressable>
             </View>
           </View>
@@ -2382,6 +2616,7 @@ const styles = StyleSheet.create({
   card: { backgroundColor: '#fff', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 14, padding: 12, gap: 10 },
   label: { color: '#0f172a', fontWeight: '800', fontSize: 14 },
   row: { flexDirection: 'row', gap: 8 },
+  rowBetween: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
   rowTopGap: { marginTop: 8 },
   tabBtn: { flex: 1, minHeight: 40, borderRadius: 10, borderWidth: 1, borderColor: '#bfdbfe', backgroundColor: '#eff6ff', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
   tabBtnActive: { backgroundColor: '#1d4ed8', borderColor: '#1d4ed8' },
@@ -2453,6 +2688,73 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   addInstallBtnText: { color: '#1d4ed8', fontWeight: '800' },
+  toggleSeg: {
+    flexDirection: 'row',
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    borderRadius: 999,
+    overflow: 'hidden',
+    backgroundColor: '#f8fafc',
+  },
+  toggleOption: {
+    minWidth: 56,
+    paddingHorizontal: 16,
+    paddingVertical: 9,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  toggleOptionActive: {
+    backgroundColor: '#dbeafe',
+  },
+  toggleOptionText: { color: '#475569', fontWeight: '700', fontSize: 13.5 },
+  toggleOptionTextActive: { color: '#1d4ed8' },
+  equipoListBox: {
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+    borderRadius: 10,
+    backgroundColor: '#f8fbff',
+    padding: 6,
+  },
+  equipoItem: {
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    borderRadius: 8,
+    backgroundColor: '#eff6ff',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    marginBottom: 6,
+  },
+  equipoItemActive: {
+    borderColor: '#1d4ed8',
+    backgroundColor: '#dbeafe',
+  },
+  equipoItemTitle: { color: '#1d4ed8', fontWeight: '800', fontSize: 12.5 },
+  equipoItemTitleActive: { color: '#1e3a8a' },
+  equipoItemMeta: { marginTop: 2, color: '#64748b', fontSize: 11.5, fontWeight: '600' },
+  chipsRow: { gap: 6, paddingVertical: 2 },
+  chip: {
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    backgroundColor: '#eff6ff',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  chipActive: { borderColor: '#1d4ed8', backgroundColor: '#dbeafe' },
+  chipText: { color: '#1d4ed8', fontWeight: '700', fontSize: 12 },
+  chipTextActive: { color: '#1e3a8a' },
+  readonlyInput: { backgroundColor: '#f8fafc', color: '#475569' },
+  moreMantBtn: {
+    marginTop: 10,
+    alignSelf: 'flex-start',
+    borderWidth: 1,
+    borderColor: '#c7d2fe',
+    backgroundColor: '#eef2ff',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+  },
+  moreMantBtnText: { color: '#1e40af', fontWeight: '800', fontSize: 12.5 },
   installDoneCard: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2502,6 +2804,21 @@ const styles = StyleSheet.create({
   pillTextActive: { color: '#fff' },
   inputCol: { flex: 1, gap: 6 },
   input: { borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 9, color: '#0f172a', fontWeight: '600', backgroundColor: '#fff' },
+  scanSerieWrap: { position: 'relative' },
+  scanSerieInput: { paddingRight: 52 },
+  scanSerieBtn: {
+    position: 'absolute',
+    right: 6,
+    top: 6,
+    width: 30,
+    height: 30,
+    borderWidth: 1,
+    borderColor: '#38bdf8',
+    backgroundColor: '#bae6fd',
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   dateInput: {
     borderWidth: 1,
     borderColor: '#cbd5e1',
@@ -2551,6 +2868,17 @@ const styles = StyleSheet.create({
   cameraModalCard: { backgroundColor: '#fff', borderRadius: 14, borderWidth: 1, borderColor: '#dbeafe', height: '78%', padding: 12, gap: 10 },
   signatureWrap: { flex: 1, borderRadius: 10, overflow: 'hidden', backgroundColor: '#fff' },
   cameraWrap: { flex: 1, borderRadius: 10, overflow: 'hidden', backgroundColor: '#000', position: 'relative' },
+  scanFrame: {
+    position: 'absolute',
+    top: '28%',
+    left: '12%',
+    right: '12%',
+    height: 140,
+    borderWidth: 2,
+    borderColor: '#60a5fa',
+    borderRadius: 12,
+    backgroundColor: 'transparent',
+  },
   modalHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: 1, borderBottomColor: '#e2e8f0', paddingBottom: 8 },
   modalTitle: { color: '#0f172a', fontWeight: '800', fontSize: 16 },
   inputBlock: { gap: 6, marginBottom: 8 },

@@ -195,3 +195,16 @@ export const deleteMantencionTerreno = async (idMantencion: string | number) => 
   const res = await api.delete(`/mantenciones_terreno/${idMantencion}`);
   return res.data;
 };
+
+export const fetchCambiosEquipoMantencion = async (idMantencion: string | number) => {
+  const res = await api.get(`/mantenciones_terreno/${idMantencion}/cambios_equipo`);
+  return res.data;
+};
+
+export const createCambioEquipoMantencion = async (
+  idMantencion: string | number,
+  payload: any
+) => {
+  const res = await api.post(`/mantenciones_terreno/${idMantencion}/cambios_equipo`, payload);
+  return res.data;
+};
