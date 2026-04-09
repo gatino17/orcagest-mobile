@@ -1,4 +1,4 @@
-import React, { useContext, useEffect, useMemo, useState } from 'react';
+import React, { useContext, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -17,17 +17,21 @@ import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/dat
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import SignatureScreen from 'react-native-signature-canvas';
+import { CameraView, useCameraPermissions } from 'expo-camera';
 import { AuthContext } from '../_layout';
 import {
   createActaEntrega,
+  createMantencionTerreno,
   createPermisoTrabajo,
   deleteActaEntrega,
+  fetchMantencionesTerreno,
   fetchActasEntrega,
   fetchCentrosPorCliente,
   fetchClientes,
   fetchPermisosTrabajo,
   getArmados,
   updateActaEntrega,
+  updateMantencionTerreno,
   updatePermisoTrabajo,
 } from '@/lib/api';
 
@@ -85,6 +89,7 @@ type ArmadoResumen = {
 };
 type Permiso = {
   id_permiso_trabajo?: number;
+  id_mantencion_terreno?: number;
   centro_id?: number;
   acta_entrega_id?: number;
   fecha_ingreso?: string;
@@ -92,8 +97,11 @@ type Permiso = {
   correo_centro?: string;
   region?: string;
   localidad?: string;
+  responsabilidad?: string;
   tecnico_1?: string;
+  firma_tecnico_1?: string;
   tecnico_2?: string;
+  firma_tecnico_2?: string;
   recepciona_nombre?: string;
   recepciona_rut?: string;
   firma_recepciona?: string;
@@ -104,16 +112,25 @@ type Permiso = {
   hertz?: string;
   sellos?: string;
   descripcion_trabajo?: string;
+  evidencia_foto?: string;
   empresa?: string;
   cliente?: string;
   centro?: string;
 };
 type GpsPoint = { lat: string; lng: string };
-type SelloItem = { ubicacion: string; numero: string };
+type SelloItem = { ubicacion: string; numeroAnterior: string; numeroNuevo: string };
 
 type ModuloInforme = 'instalacion' | 'mantencion' | 'retiro';
 type TipoInstalacion = 'acta_entrega' | 'informe_intervencion';
-type FirmaTarget = 'tecnico1' | 'tecnico2' | 'recepciona' | 'perm_recepciona' | null;
+type FirmaTarget =
+  | 'tecnico1'
+  | 'tecnico2'
+  | 'recepciona'
+  | 'perm_recepciona'
+  | 'perm_tecnico1'
+  | 'perm_tecnico2'
+  | null;
+type PermisoContexto = 'instalacion' | 'mantencion';
 
 const toInputDate = (value?: string) => {
   if (!value) return '';
@@ -196,20 +213,44 @@ const normalizeSelloNumero = (value?: string) => String(value || '').replace(/\D
 
 const parseSellos = (value?: string): SelloItem[] => {
   const raw = String(value || '').trim();
-  if (!raw) return [{ ubicacion: '', numero: '' }];
+  if (!raw) return [{ ubicacion: '', numeroAnterior: '', numeroNuevo: '' }];
   try {
     const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [{ ubicacion: '', numero: '' }];
+    if (!Array.isArray(parsed)) return [{ ubicacion: '', numeroAnterior: '', numeroNuevo: '' }];
     const items = parsed
       .map((it: any) => ({
         ubicacion: String(it?.ubicacion || '').trim(),
-        numero: String(it?.numero || '').trim(),
+        numeroAnterior: String(it?.numero_anterior || it?.numero || '').trim(),
+        numeroNuevo: String(it?.numero_nuevo || '').trim(),
       }))
-      .filter((it) => it.ubicacion || it.numero);
-    return items.length ? items : [{ ubicacion: '', numero: '' }];
+      .filter((it) => it.ubicacion || it.numeroAnterior || it.numeroNuevo);
+    return items.length ? items : [{ ubicacion: '', numeroAnterior: '', numeroNuevo: '' }];
   } catch {
-    return [{ ubicacion: '', numero: '' }];
+    return [{ ubicacion: '', numeroAnterior: '', numeroNuevo: '' }];
   }
+};
+
+const parseEvidencePhotos = (value?: string): string[] => {
+  const raw = String(value || '').trim();
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      return parsed
+        .map((v) => String(v || '').trim())
+        .filter(Boolean)
+        .slice(0, 3);
+    }
+  } catch {
+    // fallback below
+  }
+  return [raw];
+};
+
+const serializeEvidencePhotos = (photos: string[]): string | null => {
+  const clean = photos.map((p) => String(p || '').trim()).filter(Boolean).slice(0, 3);
+  if (!clean.length) return null;
+  return JSON.stringify(clean);
 };
 
 export default function InformesScreen() {
@@ -223,10 +264,12 @@ export default function InformesScreen() {
   const [centrosForm, setCentrosForm] = useState<Centro[]>([]);
   const [actas, setActas] = useState<Acta[]>([]);
   const [permisos, setPermisos] = useState<Permiso[]>([]);
+  const [mantencionesTerreno, setMantencionesTerreno] = useState<Permiso[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [showEditor, setShowEditor] = useState(false);
   const [showPermisoModal, setShowPermisoModal] = useState(false);
+  const [permisoContexto, setPermisoContexto] = useState<PermisoContexto>('instalacion');
   const [firmaModalVisible, setFirmaModalVisible] = useState(false);
   const [firmaTarget, setFirmaTarget] = useState<FirmaTarget>(null);
 
@@ -264,23 +307,35 @@ export default function InformesScreen() {
   const [permTelefonoCentro, setPermTelefonoCentro] = useState('');
   const [permBaseTierra, setPermBaseTierra] = useState('');
   const [permCantidadRadares, setPermCantidadRadares] = useState('');
+  const [permResponsabilidad, setPermResponsabilidad] = useState('');
   const [permRegion, setPermRegion] = useState('');
   const [permLocalidad, setPermLocalidad] = useState('');
   const [permTecnico1, setPermTecnico1] = useState('');
+  const [permFirmaTecnico1, setPermFirmaTecnico1] = useState('');
   const [permTecnico2, setPermTecnico2] = useState('');
+  const [permFirmaTecnico2, setPermFirmaTecnico2] = useState('');
   const [permRecepciona, setPermRecepciona] = useState('');
   const [permRecepcionaRut, setPermRecepcionaRut] = useState('');
   const [permFirmaRecepciona, setPermFirmaRecepciona] = useState('');
   const [permPuntosGpsList, setPermPuntosGpsList] = useState<GpsPoint[]>([{ lat: '', lng: '' }]);
-  const [permSellosList, setPermSellosList] = useState<SelloItem[]>([{ ubicacion: '', numero: '' }]);
+  const [permSellosList, setPermSellosList] = useState<SelloItem[]>([
+    { ubicacion: '', numeroAnterior: '', numeroNuevo: '' },
+  ]);
   const [permMedicionFaseNeutro, setPermMedicionFaseNeutro] = useState('');
   const [permMedicionNeutroTierra, setPermMedicionNeutroTierra] = useState('');
   const [permHertz, setPermHertz] = useState('');
   const [permDescripcionTrabajo, setPermDescripcionTrabajo] = useState('');
+  const [permEvidenciaFotos, setPermEvidenciaFotos] = useState<string[]>([]);
+  const [evidenciaTargetIndex, setEvidenciaTargetIndex] = useState<number | null>(null);
+  const [showCameraModal, setShowCameraModal] = useState(false);
+  const [cameraFacing, setCameraFacing] = useState<'front' | 'back'>('back');
+  const cameraRef = useRef<CameraView | null>(null);
+  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const [armadosFinalizadosCentro, setArmadosFinalizadosCentro] = useState<ArmadoResumen[]>([]);
   const [armadoSeleccionadoId, setArmadoSeleccionadoId] = useState<number | null>(null);
   const [showArmadosModal, setShowArmadosModal] = useState(false);
   const [vinculoActaId, setVinculoActaId] = useState<number | null>(null);
+  const [mantencionEditandoId, setMantencionEditandoId] = useState<number | null>(null);
 
   const clienteForm = useMemo(
     () => clientes.find((c) => Number(c.id_cliente ?? c.id ?? 0) === Number(clienteIdForm ?? 0)) || null,
@@ -325,9 +380,17 @@ export default function InformesScreen() {
     return porCentro[0] || null;
   }, [actas, permCentroId]);
   const actaCompletada = !!actaCentroSeleccionado;
+  const permisosInstalacion = useMemo(
+    () => permisos.filter((p) => Number(p.acta_entrega_id || 0) > 0),
+    [permisos]
+  );
+  const permisosMantencion = useMemo(
+    () => mantencionesTerreno,
+    [mantencionesTerreno]
+  );
   const permisoCentroSeleccionado = useMemo(() => {
     if (!permCentroId) return null;
-    const porCentro = permisos
+    const porCentro = permisosInstalacion
       .filter((p) => Number(p.centro_id || 0) === Number(permCentroId))
       .sort((a, b) => {
         const ta = new Date(a.fecha_ingreso || 0).getTime();
@@ -335,13 +398,21 @@ export default function InformesScreen() {
         return tb - ta;
       });
     return porCentro[0] || null;
-  }, [permisos, permCentroId]);
+  }, [permisosInstalacion, permCentroId]);
   const permisoCompletado = !!permisoCentroSeleccionado;
+  const mantencionEditandoSeleccionada = useMemo(() => {
+    if (!mantencionEditandoId) return null;
+    return (
+      permisosMantencion.find(
+        (p) => Number(p.id_mantencion_terreno || 0) === Number(mantencionEditandoId)
+      ) || null
+    );
+  }, [permisosMantencion, mantencionEditandoId]);
   const armadoVinculadoId = Number(actaCentroSeleccionado?.armado_id || armadoSeleccionadoId || 0) || null;
   const armadoVinculado = armadosFinalizadosCentro.find((a) => Number(a.id_armado || 0) === Number(armadoVinculadoId || 0)) || null;
   const instalacionSeleccionada = !!(permClienteId && permCentroId);
   const instalacionesCompletadas = useMemo(() => {
-    const ids = permisos
+    const ids = permisosInstalacion
       .map((p) => Number(p.centro_id || 0))
       .filter(Boolean)
       .filter((v, i, arr) => arr.indexOf(v) === i);
@@ -364,16 +435,16 @@ export default function InformesScreen() {
       return {
         centroId,
         actaId: Number(acta?.id_acta_entrega || 0) || null,
-        permisoId: Number(permisos.find((p) => Number(p.centro_id || 0) === centroId)?.id_permiso_trabajo || 0) || null,
+        permisoId: Number(permisosInstalacion.find((p) => Number(p.centro_id || 0) === centroId)?.id_permiso_trabajo || 0) || null,
         armadoId: Number((actaConArmado?.armado_id || acta?.armado_id || 0)) || null,
         hasArmadoVinculado,
         centro,
         cliente,
         fechaActa: acta?.fecha_registro || '',
-        fechaPermiso: permisos.find((p) => Number(p.centro_id || 0) === centroId)?.fecha_ingreso || '',
+        fechaPermiso: permisosInstalacion.find((p) => Number(p.centro_id || 0) === centroId)?.fecha_ingreso || '',
       };
     });
-  }, [permisos, actas, permCentros, centrosFiltro]);
+  }, [permisosInstalacion, actas, permCentros, centrosFiltro]);
 
   const cargarClientes = async () => {
     if (!token) return;
@@ -458,6 +529,25 @@ export default function InformesScreen() {
       Alert.alert('Informes', backendMsg);
     }
   };
+  const cargarMantencionesTerreno = async () => {
+    if (!token || moduloInforme !== 'mantencion') return;
+    try {
+      const data = await fetchMantencionesTerreno({
+        centro_id: filtroCentroId || undefined,
+        fecha_desde: filtroFechaDesde || undefined,
+        fecha_hasta: filtroFechaHasta || undefined,
+      });
+      setMantencionesTerreno(Array.isArray(data) ? data : []);
+    } catch (error: any) {
+      setMantencionesTerreno([]);
+      const backendMsg =
+        error?.response?.data?.error ||
+        error?.response?.data?.message ||
+        error?.message ||
+        'No se pudieron cargar las mantenciones en terreno.';
+      Alert.alert('Informes', backendMsg);
+    }
+  };
 
   useEffect(() => {
     cargarClientes();
@@ -486,6 +576,7 @@ export default function InformesScreen() {
   useEffect(() => {
     cargarActas();
     cargarPermisos();
+    cargarMantencionesTerreno();
   }, [moduloInforme, tipoInstalacion, filtroCentroId, filtroFechaDesde, filtroFechaHasta]);
 
   useEffect(() => {
@@ -549,13 +640,15 @@ export default function InformesScreen() {
   }, [actaCentroSeleccionado]);
 
   useEffect(() => {
+    if (permisoContexto !== 'instalacion') return;
     if (!actaCentroSeleccionado) return;
     setPermFecha(toInputDate(actaCentroSeleccionado.fecha_registro) || todayInputDate());
     setPermTecnico1(actaCentroSeleccionado.tecnico_1 || '');
     setPermTecnico2(actaCentroSeleccionado.tecnico_2 || '');
     setPermRecepciona(actaCentroSeleccionado.recepciona_nombre || '');
-  }, [actaCentroSeleccionado]);
+  }, [actaCentroSeleccionado, permisoContexto]);
   useEffect(() => {
+    if (permisoContexto !== 'instalacion') return;
     if (!permisoCentroSeleccionado) return;
     setPermFecha(toInputDate(permisoCentroSeleccionado.fecha_ingreso) || todayInputDate());
     setPermFechaSalida(toInputDate(permisoCentroSeleccionado.fecha_salida) || '');
@@ -573,15 +666,65 @@ export default function InformesScreen() {
       permCentroSel?.base_tierra === true ? 'si' : permCentroSel?.base_tierra === false ? 'no' : ''
     );
     setPermCantidadRadares(String(permCentroSel?.cantidad_radares ?? ''));
+    setPermResponsabilidad(permisoCentroSeleccionado.responsabilidad || '');
     setPermPuntosGpsList(parseGpsPoints(permisoCentroSeleccionado.puntos_gps));
     setPermSellosList(parseSellos(permisoCentroSeleccionado.sellos));
     setPermMedicionFaseNeutro(normalizeMeasureInput(permisoCentroSeleccionado.medicion_fase_neutro || ''));
     setPermMedicionNeutroTierra(normalizeMeasureInput(permisoCentroSeleccionado.medicion_neutro_tierra || ''));
     setPermHertz(normalizeMeasureInput(permisoCentroSeleccionado.hertz || ''));
     setPermDescripcionTrabajo(permisoCentroSeleccionado.descripcion_trabajo || '');
+    setPermEvidenciaFotos(parseEvidencePhotos(permisoCentroSeleccionado.evidencia_foto));
+    setPermFirmaTecnico1(permisoCentroSeleccionado.firma_tecnico_1 || '');
+    setPermFirmaTecnico2(permisoCentroSeleccionado.firma_tecnico_2 || '');
     setPermRecepcionaRut(permisoCentroSeleccionado.recepciona_rut || '');
     setPermFirmaRecepciona(permisoCentroSeleccionado.firma_recepciona || '');
-  }, [permisoCentroSeleccionado, permCentroSel]);
+  }, [permisoCentroSeleccionado, permCentroSel, permisoContexto]);
+  useEffect(() => {
+    if (permisoContexto !== 'mantencion') return;
+    const base = permCentroSel || permisoCentroSeleccionado || null;
+    if (!base) return;
+    const editingMantencion = !!mantencionEditandoId && !!mantencionEditandoSeleccionada;
+    const selectedMantencion = mantencionEditandoSeleccionada || null;
+    const gpsBase = selectedMantencion?.puntos_gps || permisoCentroSeleccionado?.puntos_gps || '';
+    const sellosBase = selectedMantencion?.sellos || permisoCentroSeleccionado?.sellos || '';
+
+    setPermFecha(editingMantencion ? toInputDate(selectedMantencion?.fecha_ingreso) || todayInputDate() : todayInputDate());
+    setPermFechaSalida(editingMantencion ? toInputDate(selectedMantencion?.fecha_salida) || '' : '');
+    setPermCorreoCentro(
+      String(permCentroSel?.correo_centro || permCentroSel?.correo || '') ||
+        permisoCentroSeleccionado?.correo_centro ||
+        ''
+    );
+    setPermTelefonoCentro(
+      String(permCentroSel?.telefono || permCentroSel?.telefono_centro || '') ||
+        permisoCentroSeleccionado?.telefono_centro ||
+        ''
+    );
+    setPermBaseTierra(
+      permCentroSel?.base_tierra === true ? 'si' : permCentroSel?.base_tierra === false ? 'no' : ''
+    );
+    setPermCantidadRadares(String(permCentroSel?.cantidad_radares ?? ''));
+    setPermResponsabilidad(editingMantencion ? selectedMantencion?.responsabilidad || '' : '');
+    setPermTecnico1(editingMantencion ? selectedMantencion?.tecnico_1 || '' : '');
+    setPermTecnico2(editingMantencion ? selectedMantencion?.tecnico_2 || '' : '');
+    setPermPuntosGpsList(parseGpsPoints(gpsBase));
+    // Prioriza mantencion; si no tiene, hereda los sellos del permiso previo.
+    setPermSellosList(parseSellos(sellosBase));
+    setPermMedicionFaseNeutro(
+      editingMantencion ? normalizeMeasureInput(selectedMantencion?.medicion_fase_neutro || '') : ''
+    );
+    setPermMedicionNeutroTierra(
+      editingMantencion ? normalizeMeasureInput(selectedMantencion?.medicion_neutro_tierra || '') : ''
+    );
+    setPermHertz(editingMantencion ? normalizeMeasureInput(selectedMantencion?.hertz || '') : '');
+    setPermDescripcionTrabajo(editingMantencion ? selectedMantencion?.descripcion_trabajo || '' : '');
+    setPermEvidenciaFotos(editingMantencion ? parseEvidencePhotos(selectedMantencion?.evidencia_foto) : []);
+    setPermFirmaTecnico1(editingMantencion ? selectedMantencion?.firma_tecnico_1 || '' : '');
+    setPermFirmaTecnico2(editingMantencion ? selectedMantencion?.firma_tecnico_2 || '' : '');
+    setPermRecepciona(editingMantencion ? selectedMantencion?.recepciona_nombre || '' : '');
+    setPermRecepcionaRut(editingMantencion ? selectedMantencion?.recepciona_rut || '' : '');
+    setPermFirmaRecepciona(editingMantencion ? selectedMantencion?.firma_recepciona || '' : '');
+  }, [mantencionEditandoId, mantencionEditandoSeleccionada, permisoCentroSeleccionado, permCentroSel, permisoContexto]);
 
   const resetForm = () => {
     setEditId(null);
@@ -610,19 +753,24 @@ export default function InformesScreen() {
     setPermTelefonoCentro('');
     setPermBaseTierra('');
     setPermCantidadRadares('');
+    setPermResponsabilidad('');
     setPermRegion('');
     setPermLocalidad('');
     setPermTecnico1('');
+    setPermFirmaTecnico1('');
     setPermTecnico2('');
+    setPermFirmaTecnico2('');
     setPermRecepciona('');
     setPermRecepcionaRut('');
     setPermFirmaRecepciona('');
     setPermPuntosGpsList([{ lat: '', lng: '' }]);
-    setPermSellosList([{ ubicacion: '', numero: '' }]);
+    setPermSellosList([{ ubicacion: '', numeroAnterior: '', numeroNuevo: '' }]);
     setPermMedicionFaseNeutro('');
     setPermMedicionNeutroTierra('');
     setPermHertz('');
     setPermDescripcionTrabajo('');
+    setPermEvidenciaFotos([]);
+    setEvidenciaTargetIndex(null);
   };
 
   const nuevaActa = () => {
@@ -647,6 +795,16 @@ export default function InformesScreen() {
     setCentroIdForm(centroSeleccionado || null);
     setFechaRegistro(todayInputDate());
     setShowEditor(true);
+  };
+
+  const nuevaMantencion = () => {
+    resetPermisoForm();
+    setPermisoContexto('mantencion');
+    setMantencionEditandoId(null);
+    setPermClienteId(null);
+    setPermCentroId(null);
+    setPermBuscarCentro('');
+    setShowPermisoModal(true);
   };
 
   const abrirActa = (acta: Acta) => {
@@ -791,15 +949,21 @@ export default function InformesScreen() {
     if (firmaTarget === 'tecnico2') setFirmaTecnico2(signature);
     if (firmaTarget === 'recepciona') setFirmaRecepciona(signature);
     if (firmaTarget === 'perm_recepciona') setPermFirmaRecepciona(signature);
+    if (firmaTarget === 'perm_tecnico1') setPermFirmaTecnico1(signature);
+    if (firmaTarget === 'perm_tecnico2') setPermFirmaTecnico2(signature);
     setFirmaModalVisible(false);
     setFirmaTarget(null);
   };
 
-  const limpiarFirma = (target: 'tecnico1' | 'tecnico2' | 'recepciona' | 'perm_recepciona') => {
+  const limpiarFirma = (
+    target: 'tecnico1' | 'tecnico2' | 'recepciona' | 'perm_recepciona' | 'perm_tecnico1' | 'perm_tecnico2'
+  ) => {
     if (target === 'tecnico1') setFirmaTecnico1('');
     if (target === 'tecnico2') setFirmaTecnico2('');
     if (target === 'recepciona') setFirmaRecepciona('');
     if (target === 'perm_recepciona') setPermFirmaRecepciona('');
+    if (target === 'perm_tecnico1') setPermFirmaTecnico1('');
+    if (target === 'perm_tecnico2') setPermFirmaTecnico2('');
   };
 
   const handlePermFechaChange = (_event: DateTimePickerEvent, selectedDate?: Date) => {
@@ -865,6 +1029,7 @@ export default function InformesScreen() {
                 setEditId(null);
                 setShowEditor(false);
                 setShowPermisoModal(false);
+                setMantencionEditandoId(null);
                 setPermClienteId(null);
                 setPermCentroId(null);
                 setPermBuscarCentro('');
@@ -913,11 +1078,13 @@ export default function InformesScreen() {
                             String(item.cliente || '').trim().toLowerCase()
                         );
                         const clienteId = Number(clientePorNombre?.id_cliente ?? clientePorNombre?.id ?? 0) || null;
-                        if (clienteId) setPermClienteId(clienteId);
-                        setPermCentroId(item.centroId);
-                        setTipoInstalacion('informe_intervencion');
-                        setShowPermisoModal(true);
-                      }}>
+	                      if (clienteId) setPermClienteId(clienteId);
+	                      setPermCentroId(item.centroId);
+	                      setTipoInstalacion('informe_intervencion');
+	                      setPermisoContexto('instalacion');
+	                      setMantencionEditandoId(null);
+	                      setShowPermisoModal(true);
+	                    }}>
                       <Ionicons name="clipboard-outline" size={16} color="#1d4ed8" />
                     </Pressable>
                   ) : null}
@@ -1160,9 +1327,11 @@ export default function InformesScreen() {
                     setTipoInstalacion('acta_entrega');
                     return;
                   }
-                  setTipoInstalacion('informe_intervencion');
-                  setShowPermisoModal(true);
-                }}>
+	                  setTipoInstalacion('informe_intervencion');
+	                  setPermisoContexto('instalacion');
+	                  setMantencionEditandoId(null);
+	                  setShowPermisoModal(true);
+	                }}>
                 <Ionicons
                   name={permisoCompletado ? 'checkmark-circle' : 'clipboard-outline'}
                   size={14}
@@ -1201,8 +1370,44 @@ export default function InformesScreen() {
         {moduloInforme === 'mantencion' && (
           <View style={styles.card}>
             <Text style={styles.label}>Mantenciones</Text>
-            <View style={styles.row}><Pressable style={[styles.tabBtn, styles.tabBtnActive]}><Text style={[styles.tabBtnText, styles.tabBtnTextActive]}>Informe de mantencion</Text></Pressable></View>
-            <Text style={styles.placeholderText}>Seccion de referencia (sin formulario por ahora).</Text>
+            <Pressable style={styles.addInstallBtn} onPress={nuevaMantencion}>
+              <Ionicons name="add-circle-outline" size={16} color="#1d4ed8" />
+              <Text style={styles.addInstallBtnText}>Agregar mantencion</Text>
+            </Pressable>
+          </View>
+        )}
+
+        {moduloInforme === 'mantencion' && !!permisosMantencion.length && (
+          <View style={styles.card}>
+            <Text style={styles.sectionTitle}>Mantenciones recientes</Text>
+            {permisosMantencion.slice(0, 5).map((item) => (
+              <View key={`mant-${item.id_mantencion_terreno || item.id_permiso_trabajo || item.centro_id}`} style={styles.installDoneCard}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.rowTitle}>{item.centro || `Centro ${item.centro_id}`}</Text>
+                  <Text style={styles.rowSubtitle}>{item.empresa || item.cliente || '-'}</Text>
+                  <Text style={styles.rowMeta}>Fecha: {formatDate(item.fecha_ingreso)}</Text>
+                </View>
+                <View style={styles.rowActions}>
+                  <Pressable
+                    style={styles.actionBtn}
+                    onPress={() => {
+                      const clientePorNombre = clientes.find(
+                        (c) =>
+                          String(c.nombre || c.razon_social || '').trim().toLowerCase() ===
+                          String(item.empresa || item.cliente || '').trim().toLowerCase()
+                      );
+                      const clienteId = Number(clientePorNombre?.id_cliente ?? clientePorNombre?.id ?? 0) || null;
+                      if (clienteId) setPermClienteId(clienteId);
+                      setPermCentroId(Number(item.centro_id || 0) || null);
+                      setPermisoContexto('mantencion');
+                      setMantencionEditandoId(Number(item.id_mantencion_terreno || 0) || null);
+                      setShowPermisoModal(true);
+                    }}>
+                    <Ionicons name="create-outline" size={16} color="#1d4ed8" />
+                  </Pressable>
+                </View>
+              </View>
+            ))}
           </View>
         )}
 
@@ -1410,27 +1615,101 @@ export default function InformesScreen() {
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Permiso de trabajo</Text>
+              <Text style={styles.modalTitle}>
+                {permisoContexto === 'mantencion' ? 'Informe de mantencion' : 'Permiso de trabajo'}
+              </Text>
               <Pressable
                 onPress={() => {
                   setShowPermisoModal(false);
+                  setPermisoContexto('instalacion');
+                  setMantencionEditandoId(null);
                   setTipoInstalacion('acta_entrega');
                 }}>
                 <Ionicons name="close" size={20} color="#334155" />
               </Pressable>
             </View>
             <ScrollView showsVerticalScrollIndicator={false}>
-              <View style={styles.requirementBox}>
-                <View style={styles.requirementRow}>
-                  <Ionicons name={actaCentroSeleccionado ? 'checkmark-circle' : 'ellipse-outline'} size={14} color={actaCentroSeleccionado ? '#16a34a' : '#64748b'} />
-                  <Text style={styles.requirementText}>Acta de entrega {actaCentroSeleccionado ? 'completada' : 'pendiente'}</Text>
+              {permisoContexto === 'instalacion' ? (
+                <View style={styles.requirementBox}>
+                  <View style={styles.requirementRow}>
+                    <Ionicons
+                      name={actaCentroSeleccionado ? 'checkmark-circle' : 'ellipse-outline'}
+                      size={14}
+                      color={actaCentroSeleccionado ? '#16a34a' : '#64748b'}
+                    />
+                    <Text style={styles.requirementText}>Acta de entrega {actaCentroSeleccionado ? 'completada' : 'pendiente'}</Text>
+                  </View>
+                  <View style={styles.requirementRow}>
+                    <Ionicons name="ellipse-outline" size={14} color="#64748b" />
+                    <Text style={styles.requirementText}>Permiso de trabajo pendiente</Text>
+                  </View>
+                  <Text style={styles.requirementHint}>
+                    Para cerrar instalacion, el centro debe tener ambos documentos: Acta + Permiso de trabajo.
+                  </Text>
                 </View>
-                <View style={styles.requirementRow}>
-                  <Ionicons name="ellipse-outline" size={14} color="#64748b" />
-                  <Text style={styles.requirementText}>Permiso de trabajo pendiente</Text>
+              ) : (
+                <View style={styles.inputBlock}>
+                  <Text style={styles.selectLabel}>Cliente</Text>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.pillsRow}>
+                    {clientes.map((cl) => {
+                      const id = Number(cl.id_cliente ?? cl.id ?? 0);
+                      const active = id === permClienteId;
+                      return (
+                        <Pressable
+                          key={`mant-cl-${id}`}
+                          style={[styles.pill, active && styles.pillActive]}
+                          onPress={() => {
+                            setPermClienteId(id);
+                            setPermCentroId(null);
+                            setPermBuscarCentro('');
+                          }}>
+                          <Text style={[styles.pillText, active && styles.pillTextActive]}>
+                            {cl.nombre || cl.razon_social || `Cliente ${id}`}
+                          </Text>
+                        </Pressable>
+                      );
+                    })}
+                  </ScrollView>
+                  <Text style={[styles.selectLabel, { marginTop: 8 }]}>Centro</Text>
+                  {permCentroSel ? (
+                    <View style={styles.selectedCenterBox}>
+                      <Text style={styles.selectedCenterText}>{permCentroSel.nombre || 'Centro seleccionado'}</Text>
+                      <Pressable
+                        style={styles.changeCenterBtn}
+                        onPress={() => {
+                          setPermCentroId(null);
+                          setPermBuscarCentro('');
+                        }}>
+                        <Text style={styles.changeCenterBtnText}>Cambiar</Text>
+                      </Pressable>
+                    </View>
+                  ) : (
+                    <>
+                      <TextInput
+                        style={styles.input}
+                        value={permBuscarCentro}
+                        onChangeText={setPermBuscarCentro}
+                        placeholder="Buscar centro..."
+                      />
+                      <ScrollView style={styles.centerDropdown} nestedScrollEnabled>
+                        {permCentrosFiltrados.map((ce) => {
+                          const id = Number(ce.id_centro ?? ce.id ?? 0);
+                          return (
+                            <Pressable key={`mant-ce-${id}`} style={styles.centerOption} onPress={() => setPermCentroId(id)}>
+                              <Text style={styles.centerOptionText}>{ce.nombre || `Centro ${id}`}</Text>
+                            </Pressable>
+                          );
+                        })}
+                        {!permCentrosFiltrados.length && (
+                          <Text style={styles.dropdownEmptyText}>
+                            {permClienteId ? 'Sin centros para este cliente.' : 'Selecciona un cliente para ver sus centros.'}
+                          </Text>
+                        )}
+                      </ScrollView>
+                    </>
+                  )}
                 </View>
-                <Text style={styles.requirementHint}>Para cerrar instalacion, el centro debe tener ambos documentos: Acta + Permiso de trabajo.</Text>
-              </View>
+              )}
 
               <View style={styles.row}>
                 <View style={styles.inputCol}><Text style={styles.selectLabel}>Empresa</Text><TextInput style={[styles.input, styles.inputDisabled]} editable={false} value={clientes.find((c) => Number(c.id_cliente ?? c.id ?? 0) === Number(permClienteId ?? 0))?.nombre || ''} /></View>
@@ -1475,6 +1754,21 @@ export default function InformesScreen() {
                     keyboardType="numeric"
                     maxLength={1}
                   />
+                </View>
+              </View>
+              <View style={[styles.inputBlock, styles.rowTopGap]}>
+                <Text style={styles.selectLabel}>Responsabilidad</Text>
+                <View style={styles.baseChoiceRow}>
+                  <Pressable
+                    style={[styles.baseChoiceBtn, permResponsabilidad.toLowerCase() === 'orca' && styles.baseChoiceBtnActive]}
+                    onPress={() => setPermResponsabilidad('orca')}>
+                    <Text style={[styles.baseChoiceText, permResponsabilidad.toLowerCase() === 'orca' && styles.baseChoiceTextActive]}>Orca</Text>
+                  </Pressable>
+                  <Pressable
+                    style={[styles.baseChoiceBtn, permResponsabilidad.toLowerCase() === 'cliente' && styles.baseChoiceBtnActive]}
+                    onPress={() => setPermResponsabilidad('cliente')}>
+                    <Text style={[styles.baseChoiceText, permResponsabilidad.toLowerCase() === 'cliente' && styles.baseChoiceTextActive]}>Cliente</Text>
+                  </Pressable>
                 </View>
               </View>
               <View style={[styles.row, styles.rowTopGap]}>
@@ -1606,44 +1900,62 @@ export default function InformesScreen() {
               </View>
               <View style={styles.inputBlock}>
                 {permSellosList.map((sello, idx) => (
-                  <View key={`sello-${idx}`} style={styles.row}>
-                    <View style={styles.inputCol}>
-                      <TextInput
-                        style={styles.input}
-                        value={sello.ubicacion}
-                        onChangeText={(val) =>
-                          setPermSellosList((prev) =>
-                            prev.map((s, i) => (i === idx ? { ...s, ubicacion: val } : s))
-                          )
-                        }
-                        placeholder={`Ubicacion sello ${idx + 1}`}
-                      />
-                    </View>
-                    <View style={styles.inputCol}>
-                      <TextInput
-                        style={styles.input}
-                        value={sello.numero}
-                        onChangeText={(val) =>
-                          setPermSellosList((prev) =>
-                            prev.map((s, i) => (i === idx ? { ...s, numero: normalizeSelloNumero(val) } : s))
-                          )
-                        }
-                        placeholder={`Numero sello ${idx + 1}`}
-                        keyboardType="numeric"
-                      />
+                  <View key={`sello-${idx}`} style={styles.selloCard}>
+                    <Text style={styles.miniFieldLabel}>Ubicacion</Text>
+                    <TextInput
+                      style={styles.input}
+                      value={sello.ubicacion}
+                      onChangeText={(val) =>
+                        setPermSellosList((prev) =>
+                          prev.map((s, i) => (i === idx ? { ...s, ubicacion: val } : s))
+                        )
+                      }
+                      placeholder={`Ubicacion sello ${idx + 1}`}
+                    />
+                    <View style={styles.row}>
+                      <View style={styles.inputCol}>
+                        <Text style={styles.miniFieldLabel}>Sello antiguo</Text>
+                        <TextInput
+                          style={styles.input}
+                          value={sello.numeroAnterior}
+                          onChangeText={(val) =>
+                            setPermSellosList((prev) =>
+                              prev.map((s, i) => (i === idx ? { ...s, numeroAnterior: normalizeSelloNumero(val) } : s))
+                            )
+                          }
+                          placeholder={`Antiguo ${idx + 1}`}
+                          keyboardType="numeric"
+                        />
+                      </View>
+                      <View style={styles.inputCol}>
+                        <Text style={styles.miniFieldLabel}>Sello nuevo</Text>
+                        <TextInput
+                          style={styles.input}
+                          value={sello.numeroNuevo}
+                          onChangeText={(val) =>
+                            setPermSellosList((prev) =>
+                              prev.map((s, i) => (i === idx ? { ...s, numeroNuevo: normalizeSelloNumero(val) } : s))
+                            )
+                          }
+                          placeholder={`Nuevo ${idx + 1}`}
+                          keyboardType="numeric"
+                        />
+                      </View>
                     </View>
                     {permSellosList.length > 1 ? (
-                      <Pressable
-                        style={styles.actionBtnDelete}
-                        onPress={() => setPermSellosList((prev) => prev.filter((_, i) => i !== idx))}>
-                        <Ionicons name="close" size={16} color="#dc2626" />
-                      </Pressable>
+                      <View style={{ alignItems: 'flex-end' }}>
+                        <Pressable
+                          style={styles.actionBtnDelete}
+                          onPress={() => setPermSellosList((prev) => prev.filter((_, i) => i !== idx))}>
+                          <Ionicons name="close" size={16} color="#dc2626" />
+                        </Pressable>
+                      </View>
                     ) : null}
                   </View>
                 ))}
                 <Pressable
                   style={styles.firmaBtn}
-                  onPress={() => setPermSellosList((prev) => [...prev, { ubicacion: '', numero: '' }])}>
+                  onPress={() => setPermSellosList((prev) => [...prev, { ubicacion: '', numeroAnterior: '', numeroNuevo: '' }])}>
                   <Text style={styles.firmaBtnText}>+ Agregar sello</Text>
                 </Pressable>
               </View>
@@ -1657,17 +1969,85 @@ export default function InformesScreen() {
                   textAlignVertical="top"
                 />
               </View>
+              {permisoContexto === 'mantencion' ? (
+                <View style={styles.inputBlock}>
+                  <Text style={styles.selectLabel}>Evidencia (1 a 3 fotos)</Text>
+                  <View style={styles.firmaActions}>
+                    <Pressable
+                      style={styles.firmaBtn}
+                      onPress={async () => {
+                        if (permEvidenciaFotos.length >= 3) {
+                          Alert.alert('Evidencia', 'Puedes adjuntar hasta 3 fotos.');
+                          return;
+                        }
+                        if (!cameraPermission?.granted) {
+                          const req = await requestCameraPermission();
+                          if (!req.granted) {
+                            Alert.alert('Evidencia', 'Debes autorizar la camara para capturar evidencia.');
+                            return;
+                          }
+                        }
+                        setEvidenciaTargetIndex(null);
+                        setShowCameraModal(true);
+                      }}>
+                      <Text style={styles.firmaBtnText}>Agregar evidencia</Text>
+                    </Pressable>
+                  </View>
+                  {permEvidenciaFotos.length ? (
+                    <View style={styles.evidenciaGrid}>
+                      {permEvidenciaFotos.map((foto, idx) => (
+                        <View key={`ev-${idx}`} style={styles.evidenciaItem}>
+                          <Image source={{ uri: foto }} style={styles.evidenciaPreview} resizeMode="cover" />
+                          <View style={styles.evidenciaActions}>
+                            <Pressable
+                              style={styles.firmaBtn}
+                              onPress={async () => {
+                                if (!cameraPermission?.granted) {
+                                  const req = await requestCameraPermission();
+                                  if (!req.granted) {
+                                    Alert.alert('Evidencia', 'Debes autorizar la camara para capturar evidencia.');
+                                    return;
+                                  }
+                                }
+                                setEvidenciaTargetIndex(idx);
+                                setShowCameraModal(true);
+                              }}>
+                              <Text style={styles.firmaBtnText}>Reemplazar</Text>
+                            </Pressable>
+                            <Pressable
+                              style={styles.firmaClearBtn}
+                              onPress={() => setPermEvidenciaFotos((prev) => prev.filter((_, i) => i !== idx))}>
+                              <Ionicons name="trash-outline" size={14} color="#dc2626" />
+                            </Pressable>
+                          </View>
+                        </View>
+                      ))}
+                    </View>
+                  ) : (
+                    <Text style={styles.signatureEmptyText}>Sin evidencia</Text>
+                  )}
+                </View>
+              ) : null}
               <View style={styles.sectionDivider}>
                 <View style={styles.sectionLine} />
                 <Text style={styles.sectionTitleBlue}>Cliente</Text>
                 <View style={styles.sectionLine} />
               </View>
               <View style={styles.inputBlock}>
-                <Text style={styles.sectionHint}>Tecnicos desde acta. Firma de cliente se registra aqui.</Text>
+                <Text style={styles.sectionHint}>
+                  {permisoContexto === 'mantencion'
+                    ? 'En mantencion los tecnicos y firmas se registran nuevamente.'
+                    : 'Tecnicos desde acta. Firma de cliente se registra aqui.'}
+                </Text>
                 <View style={styles.row}>
                   <View style={styles.inputCol}>
                     <Text style={styles.selectLabel}>Recepciona</Text>
-                    <TextInput style={styles.input} value={permRecepciona} onChangeText={setPermRecepciona} placeholder="Nombre recepciona" />
+                    <TextInput
+                      style={styles.input}
+                      value={permRecepciona}
+                      onChangeText={setPermRecepciona}
+                      placeholder="Nombre recepciona"
+                    />
                   </View>
                   <View style={styles.inputCol}>
                     <Text style={styles.selectLabel}>RUT recepciona</Text>
@@ -1698,26 +2078,71 @@ export default function InformesScreen() {
                     <Text style={styles.signatureEmptyText}>Sin firma</Text>
                   )}
                 </View>
-                <View style={styles.row}>
-                  <View style={styles.inputCol}>
-                    <Text style={styles.signatureFieldLabel}>Tecnico 1</Text>
-                    <Text style={styles.signatureNameText}>{permTecnico1 || actaCentroSeleccionado?.tecnico_1 || 'Sin nombre'}</Text>
-                    {actaCentroSeleccionado?.firma_tecnico_1 ? (
-                      <Image source={{ uri: actaCentroSeleccionado.firma_tecnico_1 }} style={styles.firmaPreview} resizeMode="contain" />
-                    ) : (
-                      <Text style={styles.signatureEmptyText}>Sin firma</Text>
-                    )}
+                {permisoContexto === 'mantencion' ? (
+                  <>
+                    <View style={styles.row}>
+                      <View style={styles.inputCol}>
+                        <Text style={styles.signatureFieldLabel}>Tecnico 1</Text>
+                        <Text style={styles.signatureNameText}>{permTecnico1 || 'Sin nombre'}</Text>
+                        <View style={styles.firmaActions}>
+                          <Pressable style={styles.firmaBtn} onPress={() => abrirFirma('perm_tecnico1')}>
+                            <Text style={styles.firmaBtnText}>{permFirmaTecnico1 ? 'Editar firma' : 'Firmar'}</Text>
+                          </Pressable>
+                          {!!permFirmaTecnico1 && (
+                            <Pressable style={styles.firmaClearBtn} onPress={() => limpiarFirma('perm_tecnico1')}>
+                              <Ionicons name="trash-outline" size={14} color="#dc2626" />
+                            </Pressable>
+                          )}
+                        </View>
+                        {permFirmaTecnico1 ? (
+                          <Image source={{ uri: permFirmaTecnico1 }} style={styles.firmaPreview} resizeMode="contain" />
+                        ) : (
+                          <Text style={styles.signatureEmptyText}>Sin firma</Text>
+                        )}
+                      </View>
+                      <View style={styles.inputCol}>
+                        <Text style={styles.signatureFieldLabel}>Tecnico 2</Text>
+                        <Text style={styles.signatureNameText}>{permTecnico2 || 'Sin nombre'}</Text>
+                        <View style={styles.firmaActions}>
+                          <Pressable style={styles.firmaBtn} onPress={() => abrirFirma('perm_tecnico2')}>
+                            <Text style={styles.firmaBtnText}>{permFirmaTecnico2 ? 'Editar firma' : 'Firmar'}</Text>
+                          </Pressable>
+                          {!!permFirmaTecnico2 && (
+                            <Pressable style={styles.firmaClearBtn} onPress={() => limpiarFirma('perm_tecnico2')}>
+                              <Ionicons name="trash-outline" size={14} color="#dc2626" />
+                            </Pressable>
+                          )}
+                        </View>
+                        {permFirmaTecnico2 ? (
+                          <Image source={{ uri: permFirmaTecnico2 }} style={styles.firmaPreview} resizeMode="contain" />
+                        ) : (
+                          <Text style={styles.signatureEmptyText}>Sin firma</Text>
+                        )}
+                      </View>
+                    </View>
+                  </>
+                ) : (
+                  <View style={styles.row}>
+                    <View style={styles.inputCol}>
+                      <Text style={styles.signatureFieldLabel}>Tecnico 1</Text>
+                      <Text style={styles.signatureNameText}>{permTecnico1 || actaCentroSeleccionado?.tecnico_1 || 'Sin nombre'}</Text>
+                      {actaCentroSeleccionado?.firma_tecnico_1 ? (
+                        <Image source={{ uri: actaCentroSeleccionado.firma_tecnico_1 }} style={styles.firmaPreview} resizeMode="contain" />
+                      ) : (
+                        <Text style={styles.signatureEmptyText}>Sin firma</Text>
+                      )}
+                    </View>
+                    <View style={styles.inputCol}>
+                      <Text style={styles.signatureFieldLabel}>Tecnico 2</Text>
+                      <Text style={styles.signatureNameText}>{permTecnico2 || actaCentroSeleccionado?.tecnico_2 || 'Sin nombre'}</Text>
+                      {actaCentroSeleccionado?.firma_tecnico_2 ? (
+                        <Image source={{ uri: actaCentroSeleccionado.firma_tecnico_2 }} style={styles.firmaPreview} resizeMode="contain" />
+                      ) : (
+                        <Text style={styles.signatureEmptyText}>Sin firma</Text>
+                      )}
+                    </View>
                   </View>
-                  <View style={styles.inputCol}>
-                    <Text style={styles.signatureFieldLabel}>Tecnico 2</Text>
-                    <Text style={styles.signatureNameText}>{permTecnico2 || actaCentroSeleccionado?.tecnico_2 || 'Sin nombre'}</Text>
-                    {actaCentroSeleccionado?.firma_tecnico_2 ? (
-                      <Image source={{ uri: actaCentroSeleccionado.firma_tecnico_2 }} style={styles.firmaPreview} resizeMode="contain" />
-                    ) : (
-                      <Text style={styles.signatureEmptyText}>Sin firma</Text>
-                    )}
-                  </View>
-                </View>
+                )}
               </View>
             </ScrollView>
             <View style={styles.modalActions}>
@@ -1725,6 +2150,7 @@ export default function InformesScreen() {
                 style={styles.cancelBtn}
                 onPress={() => {
                   setShowPermisoModal(false);
+                  setPermisoContexto('instalacion');
                   setTipoInstalacion('acta_entrega');
                 }}>
                 <Text style={styles.cancelBtnText}>Cancelar</Text>
@@ -1732,34 +2158,42 @@ export default function InformesScreen() {
               <Pressable
                 style={styles.saveBtn}
                 onPress={async () => {
-                  if (!actaCentroSeleccionado) {
-                    Alert.alert('Permiso de trabajo', 'Primero debes tener un Acta de entrega para este centro.');
+                  const titulo = permisoContexto === 'mantencion' ? 'Informe de mantencion' : 'Permiso de trabajo';
+                  if (permisoContexto === 'instalacion' && !actaCentroSeleccionado) {
+                    Alert.alert(titulo, 'Primero debes tener un Acta de entrega para este centro.');
                     return;
                   }
                   if (!permCentroId) {
-                    Alert.alert('Permiso de trabajo', 'Selecciona un centro.');
+                    Alert.alert(titulo, 'Selecciona un centro.');
                     return;
                   }
                   if (!permFecha) {
-                    Alert.alert('Permiso de trabajo', 'Fecha ingreso es obligatoria.');
+                    Alert.alert(titulo, 'Fecha ingreso es obligatoria.');
                     return;
                   }
                   const gpsRows = permPuntosGpsList.map((p) => ({ lat: p.lat.trim(), lng: p.lng.trim() }));
                   const hasPartialGps = gpsRows.some((p) => (p.lat && !p.lng) || (!p.lat && p.lng));
                   if (hasPartialGps) {
-                    Alert.alert('Permiso de trabajo', 'Completa latitud y longitud en cada punto GPS.');
+                    Alert.alert(titulo, 'Completa latitud y longitud en cada punto GPS.');
                     return;
                   }
                   const selloRows = permSellosList.map((s) => ({
                     ubicacion: s.ubicacion.trim(),
-                    numero: s.numero.trim(),
+                    numero_anterior: s.numeroAnterior.trim(),
+                    numero_nuevo: s.numeroNuevo.trim(),
                   }));
-                  const hasPartialSello = selloRows.some((s) => (s.ubicacion && !s.numero) || (!s.ubicacion && s.numero));
+                  const hasPartialSello = selloRows.some(
+                    (s) =>
+                      (!s.ubicacion && (s.numero_anterior || s.numero_nuevo)) ||
+                      (s.ubicacion && !s.numero_anterior && !s.numero_nuevo)
+                  );
                   if (hasPartialSello) {
-                    Alert.alert('Permiso de trabajo', 'Completa ubicacion y numero en cada sello.');
+                    Alert.alert(titulo, 'Completa ubicacion y al menos un numero de sello (antiguo o nuevo).');
                     return;
                   }
-                  const sellosSerialized = JSON.stringify(selloRows.filter((s) => s.ubicacion && s.numero));
+                  const sellosSerialized = JSON.stringify(
+                    selloRows.filter((s) => s.ubicacion && (s.numero_anterior || s.numero_nuevo))
+                  );
                   const gpsSerialized = gpsRows
                     .filter((p) => p.lat && p.lng)
                     .map((p) => `${p.lat},${p.lng}`)
@@ -1767,17 +2201,23 @@ export default function InformesScreen() {
                   try {
                     const payload = {
                       centro_id: permCentroId,
-                      acta_entrega_id: actaCentroSeleccionado.id_acta_entrega || null,
+                      acta_entrega_id:
+                        permisoContexto === 'instalacion'
+                          ? actaCentroSeleccionado?.id_acta_entrega || null
+                          : null,
                       fecha_ingreso: permFecha,
                       fecha_salida: permFechaSalida || null,
                       correo_centro: permCorreoCentro || null,
                       telefono_centro: permTelefonoCentro || null,
                       base_tierra: permBaseTierra || null,
                       cantidad_radares: permCantidadRadares ? Number(permCantidadRadares) : null,
+                      responsabilidad: permResponsabilidad || null,
                       region: permRegion || null,
                       localidad: permLocalidad || null,
                       tecnico_1: permTecnico1 || null,
+                      firma_tecnico_1: permFirmaTecnico1 || null,
                       tecnico_2: permTecnico2 || null,
+                      firma_tecnico_2: permFirmaTecnico2 || null,
                       recepciona_nombre: permRecepciona || null,
                       recepciona_rut: permRecepcionaRut || null,
                       firma_recepciona: permFirmaRecepciona || null,
@@ -1787,13 +2227,20 @@ export default function InformesScreen() {
                       medicion_neutro_tierra: normalizeMeasureInput(permMedicionNeutroTierra) || null,
                       hertz: normalizeMeasureInput(permHertz) || null,
                       descripcion_trabajo: permDescripcionTrabajo || null,
+                      evidencia_foto:
+                        permisoContexto === 'mantencion' ? serializeEvidencePhotos(permEvidenciaFotos) : null,
                     };
-                    if (permisoCentroSeleccionado?.id_permiso_trabajo) {
+                    if (permisoContexto === 'instalacion' && permisoCentroSeleccionado?.id_permiso_trabajo) {
                       await updatePermisoTrabajo(permisoCentroSeleccionado.id_permiso_trabajo, payload);
+                    } else if (permisoContexto === 'mantencion' && mantencionEditandoId) {
+                      await updateMantencionTerreno(mantencionEditandoId, payload);
+                    } else if (permisoContexto === 'mantencion') {
+                      await createMantencionTerreno(payload);
                     } else {
                       await createPermisoTrabajo(payload);
                     }
                     await cargarPermisos();
+                    await cargarMantencionesTerreno();
                     // Refresca centros para no seguir mostrando telefono/correo antiguos en la misma sesion.
                     if (permClienteId) {
                       try {
@@ -1821,19 +2268,77 @@ export default function InformesScreen() {
                       }
                     }
                     setShowPermisoModal(false);
+                    setPermisoContexto('instalacion');
+                    setMantencionEditandoId(null);
                     setTipoInstalacion('acta_entrega');
-                    setMostrarInstalacionForm(false);
-                    Alert.alert('Permiso de trabajo', 'Guardado correctamente.');
+                    if (permisoContexto === 'instalacion') {
+                      setMostrarInstalacionForm(false);
+                    }
+                    Alert.alert(titulo, 'Guardado correctamente.');
                   } catch (error: any) {
                     const backendMsg =
                       error?.response?.data?.error ||
                       error?.response?.data?.message ||
                       error?.message ||
                       'No se pudo guardar el permiso de trabajo.';
-                    Alert.alert('Permiso de trabajo', backendMsg);
+                    Alert.alert(titulo, backendMsg);
                   }
                 }}>
                 <Text style={styles.saveBtnText}>Guardar</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={showCameraModal} animationType="slide" transparent>
+        <View style={styles.modalOverlay}>
+          <View style={styles.cameraModalCard}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Capturar evidencia</Text>
+              <Pressable onPress={() => { setEvidenciaTargetIndex(null); setShowCameraModal(false); }}>
+                <Ionicons name="close" size={20} color="#334155" />
+              </Pressable>
+            </View>
+            <View style={styles.cameraWrap}>
+              <CameraView
+                ref={(r) => {
+                  cameraRef.current = r;
+                }}
+                style={StyleSheet.absoluteFill}
+                facing={cameraFacing}
+              />
+            </View>
+            <View style={styles.modalActions}>
+              <Pressable style={styles.cancelBtn} onPress={() => setCameraFacing((f) => (f === 'back' ? 'front' : 'back'))}>
+                <Text style={styles.cancelBtnText}>Girar</Text>
+              </Pressable>
+              <Pressable
+                style={styles.saveBtn}
+                onPress={async () => {
+                  try {
+                    const photo = await cameraRef.current?.takePictureAsync({ base64: true, quality: 0.5 });
+                    const newPhoto = photo?.base64 ? `data:image/jpeg;base64,${photo.base64}` : photo?.uri || '';
+                    if (!newPhoto) {
+                      Alert.alert('Evidencia', 'No se pudo capturar la foto.');
+                      return;
+                    }
+                    setPermEvidenciaFotos((prev) => {
+                      if (evidenciaTargetIndex !== null && evidenciaTargetIndex >= 0 && evidenciaTargetIndex < prev.length) {
+                        const next = [...prev];
+                        next[evidenciaTargetIndex] = newPhoto;
+                        return next;
+                      }
+                      if (prev.length >= 3) return prev;
+                      return [...prev, newPhoto];
+                    });
+                    setEvidenciaTargetIndex(null);
+                    setShowCameraModal(false);
+                  } catch {
+                    Alert.alert('Evidencia', 'No se pudo capturar la foto.');
+                  }
+                }}>
+                <Text style={styles.saveBtnText}>Capturar</Text>
               </Pressable>
             </View>
           </View>
@@ -2032,10 +2537,20 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  selloCard: {
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+    borderRadius: 10,
+    backgroundColor: '#f8fbff',
+    padding: 8,
+    gap: 6,
+  },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(15,23,42,0.45)', justifyContent: 'center', padding: 12 },
   modalCard: { backgroundColor: '#fff', borderRadius: 14, borderWidth: 1, borderColor: '#dbeafe', maxHeight: '92%', padding: 12, gap: 10 },
   signatureModalCard: { backgroundColor: '#fff', borderRadius: 14, borderWidth: 1, borderColor: '#dbeafe', height: '72%', padding: 12, gap: 10 },
+  cameraModalCard: { backgroundColor: '#fff', borderRadius: 14, borderWidth: 1, borderColor: '#dbeafe', height: '78%', padding: 12, gap: 10 },
   signatureWrap: { flex: 1, borderRadius: 10, overflow: 'hidden', backgroundColor: '#fff' },
+  cameraWrap: { flex: 1, borderRadius: 10, overflow: 'hidden', backgroundColor: '#000', position: 'relative' },
   modalHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: 1, borderBottomColor: '#e2e8f0', paddingBottom: 8 },
   modalTitle: { color: '#0f172a', fontWeight: '800', fontSize: 16 },
   inputBlock: { gap: 6, marginBottom: 8 },
@@ -2155,6 +2670,10 @@ const styles = StyleSheet.create({
   firmaBtnText: { color: '#1d4ed8', fontWeight: '700', fontSize: 12 },
   firmaClearBtn: { width: 32, height: 32, borderRadius: 8, borderWidth: 1, borderColor: '#fecaca', backgroundColor: '#fff1f2', alignItems: 'center', justifyContent: 'center' },
   firmaPreview: { marginTop: 8, width: '100%', height: 90, borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 8, backgroundColor: '#fff' },
+  evidenciaGrid: { marginTop: 8, gap: 10 },
+  evidenciaItem: { borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 10, padding: 8, backgroundColor: '#fff' },
+  evidenciaPreview: { width: '100%', height: 170, borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 8, backgroundColor: '#fff' },
+  evidenciaActions: { marginTop: 8, flexDirection: 'row', alignItems: 'center', gap: 8 },
   signatureFieldLabel: { color: '#94a3b8', fontWeight: '700', fontSize: 11.5 },
   signatureNameText: { marginTop: 1, color: '#0f172a', fontWeight: '700' },
   signatureEmptyText: { marginTop: 8, color: '#94a3b8', fontWeight: '700' },

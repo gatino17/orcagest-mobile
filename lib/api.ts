@@ -174,3 +174,24 @@ export const deletePermisoTrabajo = async (idPermiso: string | number) => {
   const res = await api.delete(`/permisos_trabajo/${idPermiso}`);
   return res.data;
 };
+
+// Informes centros - Mantenciones en terreno
+export const fetchMantencionesTerreno = async (params?: Record<string, any>) => {
+  const res = await api.get('/mantenciones_terreno/', { params });
+  return res.data;
+};
+
+export const createMantencionTerreno = async (payload: any) => {
+  const res = await api.post('/mantenciones_terreno/', payload);
+  return res.data;
+};
+
+export const updateMantencionTerreno = async (idMantencion: string | number, payload: any) => {
+  const res = await api.put(`/mantenciones_terreno/${idMantencion}`, payload);
+  return res.data;
+};
+
+export const deleteMantencionTerreno = async (idMantencion: string | number) => {
+  const res = await api.delete(`/mantenciones_terreno/${idMantencion}`);
+  return res.data;
+};
