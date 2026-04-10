@@ -81,6 +81,20 @@ export const updateEquipo = async (id_equipo: string | number, payload: any) => 
   return res.data;
 };
 
+export const validarSerieEquipo = async (
+  numero_serie: string,
+  params?: { exclude_equipo_id?: string | number; centro_id?: string | number }
+) => {
+  const res = await api.get('/equipos/validar-serie', {
+    params: {
+      numero_serie,
+      ...(params?.exclude_equipo_id ? { exclude_equipo_id: params.exclude_equipo_id } : {}),
+      ...(params?.centro_id ? { centro_id: params.centro_id } : {}),
+    },
+  });
+  return res.data;
+};
+
 // Consulta centro (mismos endpoints que el frontend web)
 export const fetchClientes = async () => {
   try {

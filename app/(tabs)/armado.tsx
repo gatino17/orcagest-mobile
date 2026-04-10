@@ -6,7 +6,7 @@ import { useColorScheme } from '@/hooks/use-color-scheme';
 import { Colors } from '@/constants/theme';
 import { AuthContext } from '../_layout';
 import { useLocalSearchParams } from 'expo-router';
-import { getEquipos, getMaterialesArmado, saveMaterialesArmado, updateEquipo, createEquipo, updateArmado } from '@/lib/api';
+import { getEquipos, getMaterialesArmado, saveMaterialesArmado, updateEquipo, createEquipo, updateArmado, validarSerieEquipo } from '@/lib/api';
 import { enqueueOfflineOp, syncOfflineQueue } from '@/lib/offline-queue';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as SecureStore from 'expo-secure-store';
@@ -169,6 +169,7 @@ export default function ArmadoScreen() {
   const [camEquipoNombre, setCamEquipoNombre] = useState<string | null>(null);
   const [camPerm, requestCamPerm] = useCameraPermissions();
   const scannedOnce = useRef(false);
+  const seriesConfirmadasRef = useRef<Set<string>>(new Set());
   const ignoreNextRealtimeRefreshRef = useRef(false);
   const equiposSnapshotRef = useRef<Record<string, string>>({});
   const materialesSnapshotRef = useRef<Record<string, string>>({});
@@ -293,6 +294,15 @@ export default function ArmadoScreen() {
     () => (cajas || []).filter((c) => !cajasConContenido.has(String(c || '').trim())),
     [cajas, cajasConContenido]
   );
+
+  const mostrarSerieDuplicada = useCallback((serie: string, conflicto: any) => {
+    const centro = conflicto?.equipo?.centro_nombre || "otro centro";
+    const equipo = conflicto?.equipo?.nombre || "equipo";
+    Alert.alert(
+      "Serie ya registrada",
+      `La serie ${serie} ya esta registrada en ${centro} (${equipo}).\n\nNo se puede asignar en este armado. Solicita el cambio al responsable.`
+    );
+  }, []);
 
   const readCache = useCallback(async () => {
     try {
@@ -539,7 +549,7 @@ export default function ArmadoScreen() {
     setCamVisible(true);
   };
 
-  const handleScan = ({ data }: { data: string }) => {
+  const handleScan = async ({ data }: { data: string }) => {
     if (!camVisible || !camEquipoId || scannedOnce.current) return;
     scannedOnce.current = true;
     const raw = (data || '').trim();
@@ -547,6 +557,23 @@ export default function ArmadoScreen() {
     const soloNumeros = raw.replace(/\D+/g, '');
     const serie = soloNumeros.length ? soloNumeros : raw;
     const codigo = soloNumeros.length ? soloNumeros.slice(0, 5) : raw.slice(0, 5);
+    if (serie && !seriesConfirmadasRef.current.has(serie)) {
+      try {
+        const esNumerico = /^\d+$/.test(String(camEquipoId || ''));
+        const validacion = await validarSerieEquipo(serie, {
+          ...(esNumerico ? { exclude_equipo_id: camEquipoId } : {}),
+          ...(centroId ? { centro_id: centroId } : {}),
+        });
+        if (validacion?.duplicado) {
+          mostrarSerieDuplicada(serie, validacion);
+          scannedOnce.current = false;
+          return;
+        }
+        seriesConfirmadasRef.current.add(serie);
+      } catch (_err) {
+        // Si no hay validacion disponible, permitimos continuar.
+      }
+    }
     actualizarEquipo(camEquipoId, { serie, codigo, nombre: camEquipoNombre || undefined });
     setCamVisible(false);
     setTimeout(() => {
@@ -597,6 +624,7 @@ export default function ArmadoScreen() {
     if (esFinalizado) return;
     try {
       setGuardandoEq(true);
+      const seriesAprobadas = new Set<string>(Array.from(seriesConfirmadasRef.current));
       if (cajasVacias.length) {
         Alert.alert(
           'Cajas vacias',
@@ -608,6 +636,23 @@ export default function ArmadoScreen() {
         const actualHash = hashEquipo(e);
         const previoHash = equiposSnapshotRef.current[idStr];
         const esNumerico = /^\d+$/.test(String(e.id));
+        const serie = String(e.serie || '').trim();
+        if (serie && !seriesAprobadas.has(serie)) {
+          try {
+            const validacion = await validarSerieEquipo(serie, {
+              ...(esNumerico ? { exclude_equipo_id: e.id } : {}),
+              ...(centroId ? { centro_id: centroId } : {}),
+            });
+            if (validacion?.duplicado) {
+              mostrarSerieDuplicada(serie, validacion);
+              continue;
+            }
+          } catch (_err) {
+            // Si no se puede validar (ej: sin red), no bloqueamos guardado.
+          }
+          seriesAprobadas.add(serie);
+          seriesConfirmadasRef.current.add(serie);
+        }
         if (esNumerico) {
           // No persistir equipos vacios (sin serie/codigo), aunque cambie solo la caja.
           if (!equipoTieneContenido(e)) continue;
@@ -747,7 +792,7 @@ export default function ArmadoScreen() {
 
   useEffect(() => {
     if (!cajas?.length) return;
-    setTotalCajas((prev) => Math.max(prev || 0, cajas.length));
+    setTotalCajas(Math.max(1, cajas.length));
   }, [cajas]);
 
   const siguienteCaja = (actual?: string) => {
