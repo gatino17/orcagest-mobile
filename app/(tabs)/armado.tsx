@@ -1,5 +1,5 @@
 ﻿import React, { useMemo, useState, useContext, useEffect, useCallback, useRef } from 'react';
-import { View, Text, StyleSheet, ScrollView, TextInput, ActivityIndicator, Pressable, StatusBar as RNStatusBar, Modal } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TextInput, ActivityIndicator, Pressable, StatusBar as RNStatusBar, Modal, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useColorScheme } from '@/hooks/use-color-scheme';
@@ -169,6 +169,7 @@ export default function ArmadoScreen() {
   const [camEquipoNombre, setCamEquipoNombre] = useState<string | null>(null);
   const [camPerm, requestCamPerm] = useCameraPermissions();
   const scannedOnce = useRef(false);
+  const ignoreNextRealtimeRefreshRef = useRef(false);
   const equiposSnapshotRef = useRef<Record<string, string>>({});
   const materialesSnapshotRef = useRef<Record<string, string>>({});
   const [modalCajasVisible, setModalCajasVisible] = useState(false);
@@ -266,6 +267,32 @@ export default function ArmadoScreen() {
     const caja = String(m.caja || 'Caja 1').trim();
     return `${cantidad}|${caja}`;
   }, []);
+
+  const equipoTieneContenido = useCallback((e: Pick<Equipo, 'serie' | 'codigo'>) => {
+    return String(e.serie || '').trim().length > 0 || String(e.codigo || '').trim().length > 0;
+  }, []);
+
+  const materialTieneContenido = useCallback((m: Pick<Material, 'cantidad'>) => {
+    return Number(m.cantidad || 0) > 0;
+  }, []);
+
+  const cajasConContenido = useMemo(() => {
+    const set = new Set<string>();
+    equipos.forEach((e) => {
+      if (!equipoTieneContenido(e)) return;
+      set.add(String(e.caja || 'Caja 1').trim());
+    });
+    materiales.forEach((m) => {
+      if (!materialTieneContenido(m)) return;
+      set.add(String(m.caja || 'Caja 1').trim());
+    });
+    return set;
+  }, [equipos, materiales, equipoTieneContenido, materialTieneContenido]);
+
+  const cajasVacias = useMemo(
+    () => (cajas || []).filter((c) => !cajasConContenido.has(String(c || '').trim())),
+    [cajas, cajasConContenido]
+  );
 
   const readCache = useCallback(async () => {
     try {
@@ -464,6 +491,10 @@ export default function ArmadoScreen() {
     if (!token || !armadoId) return;
     const onArmadoUpdated = (evt: any) => {
       if (Number(evt?.armado_id || 0) !== Number(armadoId)) return;
+      if (ignoreNextRealtimeRefreshRef.current && String(evt?.tipo || '') === 'armado') {
+        ignoreNextRealtimeRefreshRef.current = false;
+        return;
+      }
       cargarEquipos();
       cargarMat();
     };
@@ -531,8 +562,15 @@ export default function ArmadoScreen() {
     let payload: any[] = [];
     try {
       setGuardandoMat(true);
+      if (cajasVacias.length) {
+        Alert.alert(
+          'Cajas vacias',
+          `Se detectaron cajas sin elementos: ${cajasVacias.join(', ')}. Solo se guardaran cajas con contenido.`
+        );
+      }
       payload = materiales
         .filter((m) => {
+          if (!materialTieneContenido(m)) return false;
           const idStr = String(m.id);
           const actualHash = hashMaterial(m);
           const previoHash = materialesSnapshotRef.current[idStr];
@@ -559,12 +597,20 @@ export default function ArmadoScreen() {
     if (esFinalizado) return;
     try {
       setGuardandoEq(true);
+      if (cajasVacias.length) {
+        Alert.alert(
+          'Cajas vacias',
+          `Se detectaron cajas sin elementos: ${cajasVacias.join(', ')}. Solo se guardaran cajas con contenido.`
+        );
+      }
       for (const e of equipos) {
         const idStr = String(e.id);
         const actualHash = hashEquipo(e);
         const previoHash = equiposSnapshotRef.current[idStr];
         const esNumerico = /^\d+$/.test(String(e.id));
         if (esNumerico) {
+          // No persistir equipos vacios (sin serie/codigo), aunque cambie solo la caja.
+          if (!equipoTieneContenido(e)) continue;
           if (previoHash === actualHash) continue;
           const data = {
             numero_serie: e.serie,
@@ -581,10 +627,7 @@ export default function ArmadoScreen() {
           continue;
         }
         if (centroId) {
-          const tieneDatos =
-            String(e.serie || '').trim().length > 0 ||
-            String(e.codigo || '').trim().length > 0 ||
-            String(e.caja || 'Caja 1').trim() !== 'Caja 1';
+          const tieneDatos = equipoTieneContenido(e);
           if (!tieneDatos) continue;
           const data = {
             centro_id: centroId,
@@ -655,7 +698,12 @@ export default function ArmadoScreen() {
     setCajas((prev) => Array.from(new Set([...prev, ...nuevas])));
     setTotalCajas(totalNuevo);
     if (armadoId) {
+      ignoreNextRealtimeRefreshRef.current = true;
+      setTimeout(() => {
+        ignoreNextRealtimeRefreshRef.current = false;
+      }, 2000);
       updateArmado(armadoId, { total_cajas_manual: totalNuevo }).catch(async () => {
+        ignoreNextRealtimeRefreshRef.current = false;
         await enqueueOfflineOp('update_armado', { armadoId, data: { total_cajas_manual: totalNuevo } });
       });
     }
@@ -678,7 +726,12 @@ export default function ArmadoScreen() {
     const totalNuevo = Math.max(1, nextCajas.length);
     setTotalCajas(totalNuevo);
     if (armadoId) {
+      ignoreNextRealtimeRefreshRef.current = true;
+      setTimeout(() => {
+        ignoreNextRealtimeRefreshRef.current = false;
+      }, 2000);
       updateArmado(armadoId, { total_cajas_manual: totalNuevo }).catch(async () => {
+        ignoreNextRealtimeRefreshRef.current = false;
         await enqueueOfflineOp('update_armado', { armadoId, data: { total_cajas_manual: totalNuevo } });
       });
     }
