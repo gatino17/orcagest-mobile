@@ -24,17 +24,21 @@ import {
   createCambioEquipoMantencion,
   createMantencionTerreno,
   createPermisoTrabajo,
+  createRetiroTerreno,
   deleteActaEntrega,
+  deleteRetiroTerreno,
   fetchMantencionesTerreno,
   fetchActasEntrega,
   fetchCentrosPorCliente,
   fetchClientes,
   fetchPermisosTrabajo,
+  fetchRetirosTerreno,
   getArmados,
   getEquipos,
   updateActaEntrega,
   updateMantencionTerreno,
   updatePermisoTrabajo,
+  updateRetiroTerreno,
 } from '@/lib/api';
 
 type Cliente = { id_cliente?: number; id?: number; nombre?: string; razon_social?: string };
@@ -53,7 +57,7 @@ type Centro = {
   correo?: string;
   telefono?: string;
   telefono_centro?: string;
-  base_tierra?: string;
+  base_tierra?: string | boolean;
   cantidad_radares?: number;
 };
 type Acta = {
@@ -92,10 +96,12 @@ type ArmadoResumen = {
 type Permiso = {
   id_permiso_trabajo?: number;
   id_mantencion_terreno?: number;
+  id_retiro_terreno?: number;
   centro_id?: number;
   acta_entrega_id?: number;
   fecha_ingreso?: string;
   fecha_salida?: string;
+  fecha_retiro?: string;
   correo_centro?: string;
   region?: string;
   localidad?: string;
@@ -115,9 +121,14 @@ type Permiso = {
   sellos?: string;
   descripcion_trabajo?: string;
   evidencia_foto?: string;
+  checklist_equipos?: string;
+  tipo_retiro?: string;
+  estado_logistico?: string;
+  observacion?: string;
   empresa?: string;
   cliente?: string;
   centro?: string;
+  equipos?: RetiroEquipoChecklist[];
 };
 type GpsPoint = { lat: string; lng: string };
 type SelloItem = { ubicacion: string; numeroAnterior: string; numeroNuevo: string };
@@ -127,6 +138,22 @@ type EquipoCentro = {
   numero_serie?: string;
   codigo?: string;
   centro_id?: number;
+};
+type RetiroEquipoChecklist = {
+  id_retiro_equipo?: number;
+  equipo_id?: number;
+  equipo_nombre?: string;
+  numero_serie?: string;
+  codigo?: string;
+  retirado?: boolean;
+};
+type MantencionEquipoChecklist = {
+  equipo_id?: number;
+  equipo_nombre?: string;
+  numero_serie?: string;
+  codigo?: string;
+  revisado?: boolean;
+  observacion?: string;
 };
 
 type ModuloInforme = 'instalacion' | 'mantencion' | 'retiro';
@@ -139,7 +166,7 @@ type FirmaTarget =
   | 'perm_tecnico1'
   | 'perm_tecnico2'
   | null;
-type PermisoContexto = 'instalacion' | 'mantencion';
+type PermisoContexto = 'instalacion' | 'mantencion' | 'retiro';
 
 const toInputDate = (value?: string) => {
   if (!value) return '';
@@ -262,6 +289,27 @@ const serializeEvidencePhotos = (photos: string[]): string | null => {
   return JSON.stringify(clean);
 };
 
+const parseMantencionChecklist = (value?: string): MantencionEquipoChecklist[] => {
+  const raw = String(value || '').trim();
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((row: any) => ({
+        equipo_id: Number(row?.equipo_id || 0) || undefined,
+        equipo_nombre: String(row?.equipo_nombre || ''),
+        numero_serie: String(row?.numero_serie || ''),
+        codigo: String(row?.codigo || ''),
+        revisado: !!row?.revisado,
+        observacion: String(row?.observacion || ''),
+      }))
+      .filter((row: any) => row.equipo_id || row.equipo_nombre || row.numero_serie || row.codigo);
+  } catch {
+    return [];
+  }
+};
+
 export default function InformesScreen() {
   const { token } = useContext(AuthContext);
 
@@ -274,6 +322,7 @@ export default function InformesScreen() {
   const [actas, setActas] = useState<Acta[]>([]);
   const [permisos, setPermisos] = useState<Permiso[]>([]);
   const [mantencionesTerreno, setMantencionesTerreno] = useState<Permiso[]>([]);
+  const [retirosTerreno, setRetirosTerreno] = useState<Permiso[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [showEditor, setShowEditor] = useState(false);
@@ -347,11 +396,22 @@ export default function InformesScreen() {
   const [showArmadosModal, setShowArmadosModal] = useState(false);
   const [vinculoActaId, setVinculoActaId] = useState<number | null>(null);
   const [mantencionEditandoId, setMantencionEditandoId] = useState<number | null>(null);
+  const [retiroEditandoId, setRetiroEditandoId] = useState<number | null>(null);
   const [showAllMantencionesRecientes, setShowAllMantencionesRecientes] = useState(false);
+  const [showAllRetirosRecientes, setShowAllRetirosRecientes] = useState(false);
+  const [showRetiroTipoModal, setShowRetiroTipoModal] = useState(false);
+  const [showMantencionChecklistModal, setShowMantencionChecklistModal] = useState(false);
+  const [showCambioEquipoModal, setShowCambioEquipoModal] = useState(false);
   const [equiposCentro, setEquiposCentro] = useState<EquipoCentro[]>([]);
+  const [retiroEquiposChecklist, setRetiroEquiposChecklist] = useState<RetiroEquipoChecklist[]>([]);
+  const [retiroTipo, setRetiroTipo] = useState<'parcial' | 'completo'>('parcial');
+  const [retiroEstado, setRetiroEstado] = useState<'retirado_centro' | 'en_transito'>('en_transito');
   const [cambioEquipoEnabled, setCambioEquipoEnabled] = useState(false);
   const [equipoCambioId, setEquipoCambioId] = useState<number | null>(null);
   const [serieNuevaCambio, setSerieNuevaCambio] = useState('');
+  const [mantencionChecklistEnabled, setMantencionChecklistEnabled] = useState(false);
+  const [mantencionEquiposChecklist, setMantencionEquiposChecklist] = useState<MantencionEquipoChecklist[]>([]);
+  const [mantencionChecklistQuery, setMantencionChecklistQuery] = useState('');
 
   const clienteForm = useMemo(
     () => clientes.find((c) => Number(c.id_cliente ?? c.id ?? 0) === Number(clienteIdForm ?? 0)) || null,
@@ -404,6 +464,10 @@ export default function InformesScreen() {
     () => mantencionesTerreno,
     [mantencionesTerreno]
   );
+  const permisosRetiro = useMemo(
+    () => retirosTerreno,
+    [retirosTerreno]
+  );
   const permisoCentroSeleccionado = useMemo(() => {
     if (!permCentroId) return null;
     const porCentro = permisosInstalacion
@@ -424,6 +488,14 @@ export default function InformesScreen() {
       ) || null
     );
   }, [permisosMantencion, mantencionEditandoId]);
+  const retiroEditandoSeleccionado = useMemo(() => {
+    if (!retiroEditandoId) return null;
+    return (
+      permisosRetiro.find(
+        (p) => Number(p.id_retiro_terreno || 0) === Number(retiroEditandoId)
+      ) || null
+    );
+  }, [permisosRetiro, retiroEditandoId]);
   const equipoCambioSeleccionado = useMemo(
     () =>
       equiposCentro.find((e) => Number(e.id_equipo || 0) === Number(equipoCambioId || 0)) || null,
@@ -470,6 +542,24 @@ export default function InformesScreen() {
     () => (showAllMantencionesRecientes ? permisosMantencion : permisosMantencion.slice(0, 3)),
     [showAllMantencionesRecientes, permisosMantencion]
   );
+  const retirosRecientesVisibles = useMemo(
+    () => (showAllRetirosRecientes ? permisosRetiro : permisosRetiro.slice(0, 3)),
+    [showAllRetirosRecientes, permisosRetiro]
+  );
+  const checklistRevisadosCount = useMemo(
+    () => mantencionEquiposChecklist.filter((item) => !!item.revisado).length,
+    [mantencionEquiposChecklist]
+  );
+  const mantencionChecklistFiltrado = useMemo(() => {
+    const q = String(mantencionChecklistQuery || '').trim().toLowerCase();
+    const base = mantencionEquiposChecklist.map((item, idx) => ({ ...item, _idx: idx }));
+    if (!q) return base;
+    return base.filter((item) => {
+      const nombre = String(item.equipo_nombre || '').toLowerCase();
+      const serie = String(item.numero_serie || '').toLowerCase();
+      return nombre.includes(q) || serie.includes(q);
+    });
+  }, [mantencionEquiposChecklist, mantencionChecklistQuery]);
 
   const cargarClientes = async () => {
     if (!token) return;
@@ -573,6 +663,25 @@ export default function InformesScreen() {
       Alert.alert('Informes', backendMsg);
     }
   };
+  const cargarRetirosTerreno = async () => {
+    if (!token || moduloInforme !== 'retiro') return;
+    try {
+      const data = await fetchRetirosTerreno({
+        centro_id: filtroCentroId || undefined,
+        fecha_desde: filtroFechaDesde || undefined,
+        fecha_hasta: filtroFechaHasta || undefined,
+      });
+      setRetirosTerreno(Array.isArray(data) ? data : []);
+    } catch (error: any) {
+      setRetirosTerreno([]);
+      const backendMsg =
+        error?.response?.data?.error ||
+        error?.response?.data?.message ||
+        error?.message ||
+        'No se pudieron cargar los retiros en terreno.';
+      Alert.alert('Informes', backendMsg);
+    }
+  };
 
   useEffect(() => {
     cargarClientes();
@@ -602,6 +711,7 @@ export default function InformesScreen() {
     cargarActas();
     cargarPermisos();
     cargarMantencionesTerreno();
+    cargarRetirosTerreno();
   }, [moduloInforme, tipoInstalacion, filtroCentroId, filtroFechaDesde, filtroFechaHasta]);
 
   useEffect(() => {
@@ -635,9 +745,10 @@ export default function InformesScreen() {
   }, [permCentroId]);
 
   useEffect(() => {
-    if (permisoContexto !== 'mantencion' || !permCentroId) {
+    if ((permisoContexto !== 'mantencion' && permisoContexto !== 'retiro') || !permCentroId) {
       setEquiposCentro([]);
       setEquipoCambioId(null);
+      setRetiroEquiposChecklist([]);
       return;
     }
     getEquipos(permCentroId)
@@ -760,7 +871,132 @@ export default function InformesScreen() {
     setPermRecepciona(editingMantencion ? selectedMantencion?.recepciona_nombre || '' : '');
     setPermRecepcionaRut(editingMantencion ? selectedMantencion?.recepciona_rut || '' : '');
     setPermFirmaRecepciona(editingMantencion ? selectedMantencion?.firma_recepciona || '' : '');
+    if (editingMantencion) {
+      const checklistGuardado = parseMantencionChecklist(selectedMantencion?.checklist_equipos);
+      if (checklistGuardado.length) {
+        setMantencionChecklistEnabled(true);
+        setMantencionEquiposChecklist(checklistGuardado);
+      } else {
+        setMantencionChecklistEnabled(false);
+        setMantencionEquiposChecklist([]);
+      }
+    } else {
+      setMantencionChecklistEnabled(false);
+      setMantencionEquiposChecklist([]);
+    }
   }, [mantencionEditandoId, mantencionEditandoSeleccionada, permisoCentroSeleccionado, permCentroSel, permisoContexto]);
+  useEffect(() => {
+    if (permisoContexto !== 'retiro') return;
+    const base = permCentroSel || null;
+    if (!base) return;
+    const editingRetiro = !!retiroEditandoId && !!retiroEditandoSeleccionado;
+    const selectedRetiro = retiroEditandoSeleccionado || null;
+
+    setPermFecha(editingRetiro ? toInputDate(selectedRetiro?.fecha_retiro) || todayInputDate() : todayInputDate());
+    setPermFechaSalida('');
+    setPermCorreoCentro(String(permCentroSel?.correo_centro || permCentroSel?.correo || ''));
+    setPermTelefonoCentro(String(permCentroSel?.telefono || permCentroSel?.telefono_centro || ''));
+    setPermRegion(String(permCentroSel?.area || permCentroSel?.region || ''));
+    setPermLocalidad(String(permCentroSel?.ubicacion || permCentroSel?.localidad || permCentroSel?.direccion || ''));
+    setPermTecnico1(editingRetiro ? selectedRetiro?.tecnico_1 || '' : '');
+    setPermTecnico2(editingRetiro ? selectedRetiro?.tecnico_2 || '' : '');
+    setPermFirmaTecnico1(editingRetiro ? selectedRetiro?.firma_tecnico_1 || '' : '');
+    setPermFirmaTecnico2(editingRetiro ? selectedRetiro?.firma_tecnico_2 || '' : '');
+    setPermRecepciona(editingRetiro ? selectedRetiro?.recepciona_nombre || '' : '');
+    setPermRecepcionaRut(editingRetiro ? selectedRetiro?.recepciona_rut || '' : '');
+    setPermFirmaRecepciona(editingRetiro ? selectedRetiro?.firma_recepciona || '' : '');
+    setPermDescripcionTrabajo(editingRetiro ? selectedRetiro?.observacion || '' : '');
+    setRetiroTipo((editingRetiro ? String(selectedRetiro?.tipo_retiro || '') : 'parcial') === 'completo' ? 'completo' : 'parcial');
+    setRetiroEstado(
+      (editingRetiro ? String(selectedRetiro?.estado_logistico || '') : 'en_transito') === 'en_transito'
+        ? 'en_transito'
+        : 'retirado_centro'
+    );
+  }, [retiroEditandoId, retiroEditandoSeleccionado, permCentroSel, permisoContexto]);
+
+  useEffect(() => {
+    if (permisoContexto !== 'retiro') return;
+    if (!equiposCentro.length) {
+      setRetiroEquiposChecklist([]);
+      return;
+    }
+
+    const currentById = new Map<number, EquipoCentro>();
+    equiposCentro.forEach((e) => {
+      const id = Number(e.id_equipo || 0);
+      if (id) currentById.set(id, e);
+    });
+
+    const fromRetiro = (retiroEditandoSeleccionado?.equipos || []).map((eq) => ({
+      id_retiro_equipo: Number(eq.id_retiro_equipo || 0) || undefined,
+      equipo_id: Number(eq.equipo_id || 0) || undefined,
+      equipo_nombre: eq.equipo_nombre || currentById.get(Number(eq.equipo_id || 0))?.nombre || '',
+      numero_serie:
+        eq.numero_serie ||
+        currentById.get(Number(eq.equipo_id || 0))?.numero_serie ||
+        '',
+      codigo: eq.codigo || currentById.get(Number(eq.equipo_id || 0))?.codigo || '',
+      retirado: !!eq.retirado,
+    }));
+
+    if (fromRetiro.length) {
+      const existentes = new Set(fromRetiro.map((r) => Number(r.equipo_id || 0)));
+      const faltantes = equiposCentro
+        .filter((e) => !existentes.has(Number(e.id_equipo || 0)))
+        .map((e) => ({
+          equipo_id: Number(e.id_equipo || 0) || undefined,
+          equipo_nombre: e.nombre || '',
+          numero_serie: e.numero_serie || '',
+          codigo: e.codigo || '',
+          retirado: false,
+        }));
+      setRetiroEquiposChecklist([...fromRetiro, ...faltantes]);
+      return;
+    }
+
+    setRetiroEquiposChecklist(
+      equiposCentro.map((e) => ({
+        equipo_id: Number(e.id_equipo || 0) || undefined,
+        equipo_nombre: e.nombre || '',
+        numero_serie: e.numero_serie || '',
+        codigo: e.codigo || '',
+        retirado: false,
+      }))
+    );
+  }, [equiposCentro, retiroEditandoSeleccionado, permisoContexto]);
+
+  useEffect(() => {
+    if (permisoContexto !== 'mantencion' || !mantencionChecklistEnabled) {
+      setMantencionEquiposChecklist([]);
+      return;
+    }
+    if (!equiposCentro.length) {
+      setMantencionEquiposChecklist([]);
+      return;
+    }
+    setMantencionEquiposChecklist((prev) => {
+      const revisadosPrev = new Map<number, boolean>();
+      const observacionesPrev = new Map<number, string>();
+      prev.forEach((item) => {
+        const id = Number(item.equipo_id || 0);
+        if (id) {
+          revisadosPrev.set(id, !!item.revisado);
+          observacionesPrev.set(id, String(item.observacion || ''));
+        }
+      });
+      return equiposCentro.map((e) => {
+        const id = Number(e.id_equipo || 0) || undefined;
+        return {
+          equipo_id: id,
+          equipo_nombre: e.nombre || '',
+          numero_serie: e.numero_serie || '',
+          codigo: e.codigo || '',
+          revisado: id ? revisadosPrev.get(id) || false : false,
+          observacion: id ? observacionesPrev.get(id) || '' : '',
+        };
+      });
+    });
+  }, [equiposCentro, permisoContexto, mantencionChecklistEnabled]);
 
   const resetForm = () => {
     setEditId(null);
@@ -806,10 +1042,18 @@ export default function InformesScreen() {
     setPermHertz('');
     setPermDescripcionTrabajo('');
     setPermEvidenciaFotos([]);
+    setRetiroTipo('parcial');
+    setRetiroEstado('en_transito');
+    setRetiroEquiposChecklist([]);
     setEvidenciaTargetIndex(null);
     setCambioEquipoEnabled(false);
     setEquipoCambioId(null);
     setSerieNuevaCambio('');
+    setMantencionChecklistEnabled(false);
+    setMantencionEquiposChecklist([]);
+    setMantencionChecklistQuery('');
+    setShowMantencionChecklistModal(false);
+    setShowCambioEquipoModal(false);
   };
 
   const abrirScannerSerieCambio = async () => {
@@ -870,6 +1114,16 @@ export default function InformesScreen() {
     setPermCentroId(null);
     setPermBuscarCentro('');
     setShowPermisoModal(true);
+  };
+
+  const nuevoRetiro = () => {
+    resetPermisoForm();
+    setPermisoContexto('retiro');
+    setRetiroEditandoId(null);
+    setPermClienteId(null);
+    setPermCentroId(null);
+    setPermBuscarCentro('');
+    setShowRetiroTipoModal(true);
   };
 
   const abrirActa = (acta: Acta) => {
@@ -1465,6 +1719,7 @@ export default function InformesScreen() {
                       if (clienteId) setPermClienteId(clienteId);
                       setPermCentroId(Number(item.centro_id || 0) || null);
                       setPermisoContexto('mantencion');
+                      setMantencionChecklistEnabled(true);
                       setMantencionEditandoId(Number(item.id_mantencion_terreno || 0) || null);
                       setCambioEquipoEnabled(false);
                       setEquipoCambioId(null);
@@ -1490,9 +1745,79 @@ export default function InformesScreen() {
 
         {moduloInforme === 'retiro' && (
           <View style={styles.card}>
-            <Text style={styles.label}>Retiro</Text>
-            <View style={styles.row}><Pressable style={[styles.tabBtn, styles.tabBtnActive]}><Text style={[styles.tabBtnText, styles.tabBtnTextActive]}>Informe de retiro</Text></Pressable></View>
-            <Text style={styles.placeholderText}>Seccion de referencia (sin formulario por ahora).</Text>
+            <Text style={styles.label}>Retiros</Text>
+            <Pressable style={styles.addInstallBtn} onPress={nuevoRetiro}>
+              <Ionicons name="add-circle-outline" size={16} color="#1d4ed8" />
+              <Text style={styles.addInstallBtnText}>Agregar retiro</Text>
+            </Pressable>
+          </View>
+        )}
+
+        {moduloInforme === 'retiro' && !!permisosRetiro.length && (
+          <View style={styles.card}>
+            <Text style={styles.sectionTitle}>Retiros recientes</Text>
+            {retirosRecientesVisibles.map((item) => (
+              <View key={`ret-${item.id_retiro_terreno || item.centro_id}`} style={styles.installDoneCard}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.rowTitle}>{item.centro || `Centro ${item.centro_id}`}</Text>
+                  <Text style={styles.rowSubtitle}>{item.empresa || item.cliente || '-'}</Text>
+                  <Text style={styles.rowMeta}>
+                    Fecha: {formatDate(item.fecha_retiro)} | Tipo: {item.tipo_retiro === 'completo' ? 'Completo' : 'Parcial'}
+                  </Text>
+                </View>
+                <View style={styles.rowActions}>
+                  <Pressable
+                    style={styles.actionBtn}
+                    onPress={() => {
+                      const clientePorNombre = clientes.find(
+                        (c) =>
+                          String(c.nombre || c.razon_social || '').trim().toLowerCase() ===
+                          String(item.empresa || item.cliente || '').trim().toLowerCase()
+                      );
+                      const clienteId = Number(clientePorNombre?.id_cliente ?? clientePorNombre?.id ?? 0) || null;
+                      if (clienteId) setPermClienteId(clienteId);
+                      setPermCentroId(Number(item.centro_id || 0) || null);
+                      setPermisoContexto('retiro');
+                      setRetiroEditandoId(Number(item.id_retiro_terreno || 0) || null);
+                      setShowPermisoModal(true);
+                    }}>
+                    <Ionicons name="create-outline" size={16} color="#1d4ed8" />
+                  </Pressable>
+                  <Pressable
+                    style={styles.actionBtn}
+                    onPress={() => {
+                      const retiroId = Number(item.id_retiro_terreno || 0) || null;
+                      if (!retiroId) return;
+                      Alert.alert('Eliminar retiro', 'Quieres eliminar este retiro?', [
+                        { text: 'Cancelar', style: 'cancel' },
+                        {
+                          text: 'Eliminar',
+                          style: 'destructive',
+                          onPress: async () => {
+                            try {
+                              await deleteRetiroTerreno(retiroId);
+                              await cargarRetirosTerreno();
+                            } catch {
+                              Alert.alert('Informes', 'No se pudo eliminar el retiro.');
+                            }
+                          },
+                        },
+                      ]);
+                    }}>
+                    <Ionicons name="trash-outline" size={16} color="#dc2626" />
+                  </Pressable>
+                </View>
+              </View>
+            ))}
+            {permisosRetiro.length > 3 ? (
+              <Pressable
+                style={styles.moreMantBtn}
+                onPress={() => setShowAllRetirosRecientes((prev) => !prev)}>
+                <Text style={styles.moreMantBtnText}>
+                  {showAllRetirosRecientes ? 'Mostrar menos' : 'Mostrar mas'}
+                </Text>
+              </Pressable>
+            ) : null}
           </View>
         )}
 
@@ -1688,21 +2013,221 @@ export default function InformesScreen() {
         </View>
       </Modal>
 
+      <Modal visible={showRetiroTipoModal} animationType="fade" transparent>
+        <View style={styles.modalOverlay}>
+          <View style={styles.tipoMantencionCard}>
+            <Text style={styles.tipoMantencionTitle}>Tipo de retiro</Text>
+            <Text style={styles.tipoMantencionHint}>Selecciona como deseas registrar este retiro</Text>
+
+            <View style={styles.tipoMantencionActions}>
+              <Pressable
+                style={[styles.tipoMantencionBtn, styles.tipoMantencionBtnPrimary]}
+                onPress={() => {
+                  setRetiroTipo('parcial');
+                  setShowRetiroTipoModal(false);
+                  setShowPermisoModal(true);
+                }}>
+                <Ionicons name="remove-circle-outline" size={16} color="#ffffff" />
+                <Text style={[styles.tipoMantencionBtnText, styles.tipoMantencionBtnTextPrimary]}>
+                  Parcial
+                </Text>
+              </Pressable>
+
+              <Pressable
+                style={styles.tipoMantencionBtn}
+                onPress={() => {
+                  setRetiroTipo('completo');
+                  setShowRetiroTipoModal(false);
+                  setShowPermisoModal(true);
+                }}>
+                <Ionicons name="layers-outline" size={16} color="#1d4ed8" />
+                <Text style={styles.tipoMantencionBtnText}>Completo</Text>
+              </Pressable>
+            </View>
+
+            <Pressable
+              style={styles.tipoMantencionCancel}
+              onPress={() => setShowRetiroTipoModal(false)}>
+              <Text style={styles.tipoMantencionCancelText}>Cancelar</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={showMantencionChecklistModal} animationType="slide" transparent>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Checklist de equipos</Text>
+              <Pressable onPress={() => setShowMantencionChecklistModal(false)}>
+                <Ionicons name="close" size={20} color="#334155" />
+              </Pressable>
+            </View>
+            <View style={styles.inputBlock}>
+              <TextInput
+                style={styles.input}
+                value={mantencionChecklistQuery}
+                onChangeText={setMantencionChecklistQuery}
+                placeholder="Buscar equipo o serie..."
+              />
+              <View style={styles.firmaActions}>
+                <Pressable
+                  style={styles.firmaBtn}
+                  onPress={() =>
+                    setMantencionEquiposChecklist((prev) => prev.map((row) => ({ ...row, revisado: true })))
+                  }>
+                  <Text style={styles.firmaBtnText}>Marcar todos</Text>
+                </Pressable>
+                <Pressable
+                  style={styles.firmaBtn}
+                  onPress={() =>
+                    setMantencionEquiposChecklist((prev) => prev.map((row) => ({ ...row, revisado: false })))
+                  }>
+                  <Text style={styles.firmaBtnText}>Limpiar</Text>
+                </Pressable>
+              </View>
+            </View>
+            <View style={styles.equipoListBox}>
+              <ScrollView nestedScrollEnabled style={{ maxHeight: 300 }}>
+                {mantencionChecklistFiltrado.map((eq) => {
+                  const idx = Number(eq._idx || 0);
+                  const id = Number(eq.equipo_id || 0) || idx + 1;
+                  const revisado = !!eq.revisado;
+                  return (
+                    <View key={`mant-check-${id}`} style={[styles.equipoItem, revisado && styles.equipoItemActive]}>
+                      <Pressable
+                        style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}
+                        onPress={() =>
+                          setMantencionEquiposChecklist((prev) =>
+                            prev.map((row, i) => (i === idx ? { ...row, revisado: !row.revisado } : row))
+                          )
+                        }>
+                        <View style={{ flex: 1 }}>
+                          <Text style={[styles.equipoItemTitle, revisado && styles.equipoItemTitleActive]}>
+                            {eq.equipo_nombre || `Equipo ${idx + 1}`}
+                          </Text>
+                          <Text style={styles.equipoItemMeta}>Serie: {eq.numero_serie || '-'}</Text>
+                        </View>
+                        <Ionicons
+                          name={revisado ? 'checkbox' : 'square-outline'}
+                          size={20}
+                          color={revisado ? '#0ea5e9' : '#94a3b8'}
+                        />
+                      </Pressable>
+                      {revisado ? (
+                        <View style={{ marginTop: 8 }}>
+                          <Text style={styles.miniFieldLabel}>Observacion (opcional)</Text>
+                          <TextInput
+                            style={styles.input}
+                            value={String(eq.observacion || '')}
+                            onChangeText={(value) =>
+                              setMantencionEquiposChecklist((prev) =>
+                                prev.map((row, i) => (i === idx ? { ...row, observacion: value } : row))
+                              )
+                            }
+                            placeholder="Ej: conexion inestable / limpieza pendiente"
+                            multiline
+                          />
+                        </View>
+                      ) : null}
+                    </View>
+                  );
+                })}
+                {!mantencionChecklistFiltrado.length ? (
+                  <Text style={styles.dropdownEmptyText}>Sin equipos para el filtro ingresado.</Text>
+                ) : null}
+              </ScrollView>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={showCambioEquipoModal} animationType="slide" transparent>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Cambio de equipo</Text>
+              <Pressable onPress={() => setShowCambioEquipoModal(false)}>
+                <Ionicons name="close" size={20} color="#334155" />
+              </Pressable>
+            </View>
+            <View style={{ gap: 8 }}>
+              <Text style={styles.selectLabel}>Equipo del centro</Text>
+              <View style={styles.equipoListBox}>
+                <ScrollView nestedScrollEnabled style={{ maxHeight: 170 }}>
+                  {equiposCentro.map((eq) => {
+                    const id = Number(eq.id_equipo || 0);
+                    const selected = Number(equipoCambioId || 0) === id;
+                    return (
+                      <Pressable
+                        key={`eq-${id}`}
+                        style={[styles.equipoItem, selected && styles.equipoItemActive]}
+                        onPress={() => setEquipoCambioId(id)}>
+                        <Text style={[styles.equipoItemTitle, selected && styles.equipoItemTitleActive]}>
+                          {eq.nombre || `Equipo ${id}`}
+                        </Text>
+                        <Text style={styles.equipoItemMeta}>Serie: {eq.numero_serie || '-'}</Text>
+                      </Pressable>
+                    );
+                  })}
+                </ScrollView>
+              </View>
+              <View style={styles.row}>
+                <View style={styles.inputCol}>
+                  <Text style={styles.selectLabel}>N° serie actual</Text>
+                  <TextInput
+                    style={[styles.input, styles.readonlyInput]}
+                    value={String(equipoCambioSeleccionado?.numero_serie || '')}
+                    editable={false}
+                    placeholder="-"
+                  />
+                </View>
+                <View style={styles.inputCol}>
+                  <Text style={styles.selectLabel}>N° serie nuevo</Text>
+                  <View style={styles.scanSerieWrap}>
+                    <TextInput
+                      style={[styles.input, styles.scanSerieInput]}
+                      value={serieNuevaCambio}
+                      onChangeText={setSerieNuevaCambio}
+                      placeholder="Manual o escaneo"
+                    />
+                    <Pressable style={styles.scanSerieBtn} onPress={abrirScannerSerieCambio}>
+                      <Ionicons name="barcode-outline" size={17} color="#1d4ed8" />
+                    </Pressable>
+                  </View>
+                </View>
+              </View>
+              <Pressable style={styles.checklistOpenBtn} onPress={() => setShowCambioEquipoModal(false)}>
+                <Ionicons name="save-outline" size={15} color="#0b67d0" />
+                <Text style={styles.checklistOpenBtnText}>Guardar seleccion</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       <Modal visible={showPermisoModal} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>
-                {permisoContexto === 'mantencion' ? 'Informe de mantencion' : 'Permiso de trabajo'}
+                {permisoContexto === 'mantencion'
+                  ? 'Informe de mantencion'
+                  : permisoContexto === 'retiro'
+                  ? 'Informe de retiro'
+                  : 'Permiso de trabajo'}
               </Text>
               <Pressable
                 onPress={() => {
                   setShowPermisoModal(false);
                   setPermisoContexto('instalacion');
                   setMantencionEditandoId(null);
+                  setRetiroEditandoId(null);
                   setCambioEquipoEnabled(false);
                   setEquipoCambioId(null);
                   setSerieNuevaCambio('');
+                  setMantencionChecklistEnabled(false);
+                  setShowMantencionChecklistModal(false);
                   setTipoInstalacion('acta_entrega');
                 }}>
                 <Ionicons name="close" size={20} color="#334155" />
@@ -1791,13 +2316,101 @@ export default function InformesScreen() {
                 </View>
               )}
 
-              <View style={styles.row}>
-                <View style={styles.inputCol}><Text style={styles.selectLabel}>Empresa</Text><TextInput style={[styles.input, styles.inputDisabled]} editable={false} value={clientes.find((c) => Number(c.id_cliente ?? c.id ?? 0) === Number(permClienteId ?? 0))?.nombre || ''} /></View>
-                <View style={styles.inputCol}><Text style={styles.selectLabel}>Codigo ponton</Text><TextInput style={[styles.input, styles.inputDisabled]} editable={false} value={permCentroSel?.nombre_ponton || ''} /></View>
-              </View>
-              <View style={styles.row}>
-                <View style={styles.inputCol}><Text style={styles.selectLabel}>Region (Area)</Text><TextInput style={[styles.input, styles.inputDisabled]} editable={false} value={permRegion} /></View>
-                <View style={styles.inputCol}><Text style={styles.selectLabel}>Localidad</Text><TextInput style={[styles.input, styles.inputDisabled]} editable={false} value={permLocalidad} /></View>
+              {permisoContexto === 'retiro' ? (
+                <View style={styles.inputBlock}>
+                  <View style={styles.row}>
+                    <View style={styles.inputCol}>
+                      <Text style={styles.selectLabel}>Tipo de retiro</Text>
+                      <View style={styles.baseChoiceRow}>
+                        <Pressable
+                          style={[styles.baseChoiceBtn, retiroTipo === 'parcial' && styles.baseChoiceBtnActive]}
+                          onPress={() => setRetiroTipo('parcial')}>
+                          <Text style={[styles.baseChoiceText, retiroTipo === 'parcial' && styles.baseChoiceTextActive]}>Parcial</Text>
+                        </Pressable>
+                        <Pressable
+                          style={[styles.baseChoiceBtn, retiroTipo === 'completo' && styles.baseChoiceBtnActive]}
+                          onPress={() => setRetiroTipo('completo')}>
+                          <Text style={[styles.baseChoiceText, retiroTipo === 'completo' && styles.baseChoiceTextActive]}>Completo</Text>
+                        </Pressable>
+                      </View>
+                    </View>
+                    <View style={styles.inputCol}>
+                      <Text style={styles.selectLabel}>Estado</Text>
+                      <View style={styles.baseChoiceRow}>
+                        <Pressable
+                          style={[styles.baseChoiceBtn, retiroEstado === 'retirado_centro' && styles.baseChoiceBtnActive]}
+                          onPress={() => setRetiroEstado('retirado_centro')}>
+                          <Text style={[styles.baseChoiceText, retiroEstado === 'retirado_centro' && styles.baseChoiceTextActive]}>Retirado</Text>
+                        </Pressable>
+                        <Pressable
+                          style={[styles.baseChoiceBtn, retiroEstado === 'en_transito' && styles.baseChoiceBtnActive]}
+                          onPress={() => setRetiroEstado('en_transito')}>
+                          <Text style={[styles.baseChoiceText, retiroEstado === 'en_transito' && styles.baseChoiceTextActive]}>Transito</Text>
+                        </Pressable>
+                      </View>
+                    </View>
+                  </View>
+
+                  <Text style={[styles.selectLabel, { marginTop: 10 }]}>Checklist de equipos</Text>
+                  <View style={[styles.centerDropdown, { maxHeight: 200 }]}>
+                    <ScrollView nestedScrollEnabled>
+                      {retiroEquiposChecklist.map((eq, idx) => (
+                        <Pressable
+                          key={`ret-eq-${Number(eq.equipo_id || 0) || idx}`}
+                          style={styles.equipoItem}
+                          onPress={() =>
+                            setRetiroEquiposChecklist((prev) =>
+                              prev.map((row, i) =>
+                                i === idx ? { ...row, retirado: !row.retirado } : row
+                              )
+                            )
+                          }>
+                          <View style={{ flex: 1 }}>
+                            <Text style={styles.equipoItemTitle}>{eq.equipo_nombre || `Equipo ${idx + 1}`}</Text>
+                            <Text style={styles.equipoItemMeta}>Serie: {eq.numero_serie || '-'} | Codigo: {eq.codigo || '-'}</Text>
+                          </View>
+                          <Ionicons
+                            name={eq.retirado ? 'checkbox' : 'square-outline'}
+                            size={20}
+                            color={eq.retirado ? '#16a34a' : '#64748b'}
+                          />
+                        </Pressable>
+                      ))}
+                      {!retiroEquiposChecklist.length ? (
+                        <Text style={styles.dropdownEmptyText}>Sin equipos para este centro.</Text>
+                      ) : null}
+                    </ScrollView>
+                  </View>
+                </View>
+              ) : null}
+
+              <View style={styles.centerInfoPanel}>
+                <View style={styles.centerInfoHeader}>
+                  <Ionicons name="business-outline" size={15} color="#1d4ed8" />
+                  <Text style={styles.centerInfoTitle}>Informacion del centro</Text>
+                </View>
+                <View style={styles.row}>
+                  <View style={styles.centerInfoItem}>
+                    <Text style={styles.centerInfoLabel}>Empresa</Text>
+                    <Text style={styles.centerInfoValue}>
+                      {clientes.find((c) => Number(c.id_cliente ?? c.id ?? 0) === Number(permClienteId ?? 0))?.nombre || '-'}
+                    </Text>
+                  </View>
+                  <View style={styles.centerInfoItem}>
+                    <Text style={styles.centerInfoLabel}>Codigo ponton</Text>
+                    <Text style={styles.centerInfoValue}>{permCentroSel?.nombre_ponton || '-'}</Text>
+                  </View>
+                </View>
+                <View style={styles.row}>
+                  <View style={styles.centerInfoItem}>
+                    <Text style={styles.centerInfoLabel}>Region (Area)</Text>
+                    <Text style={styles.centerInfoValue}>{permRegion || '-'}</Text>
+                  </View>
+                  <View style={styles.centerInfoItem}>
+                    <Text style={styles.centerInfoLabel}>Localidad</Text>
+                    <Text style={styles.centerInfoValue}>{permLocalidad || '-'}</Text>
+                  </View>
+                </View>
               </View>
               <View style={styles.row}>
                 <View style={styles.inputCol}><Text style={styles.selectLabel}>Correo centro</Text><TextInput style={styles.input} value={permCorreoCentro} onChangeText={setPermCorreoCentro} placeholder="correo@centro.cl" autoCapitalize="none" /></View>
@@ -1852,10 +2465,6 @@ export default function InformesScreen() {
                 </View>
               </View>
               <View style={[styles.row, styles.rowTopGap]}>
-                <View style={styles.inputCol}><Text style={styles.miniFieldLabel}>Tecnico 1</Text><TextInput style={styles.input} value={permTecnico1} onChangeText={setPermTecnico1} /></View>
-                <View style={styles.inputCol}><Text style={styles.miniFieldLabel}>Tecnico 2</Text><TextInput style={styles.input} value={permTecnico2} onChangeText={setPermTecnico2} /></View>
-              </View>
-              <View style={[styles.row, styles.rowTopGap]}>
                 <View style={styles.inputCol}>
                   <Text style={styles.selectLabel}>Fecha ingreso</Text>
                   <Pressable style={styles.dateInput} onPress={() => setShowPermFechaPicker(true)}>
@@ -1870,6 +2479,10 @@ export default function InformesScreen() {
                     <Ionicons name="calendar-outline" size={16} color="#1d4ed8" />
                   </Pressable>
                 </View>
+              </View>
+              <View style={[styles.row, styles.rowTopGap]}>
+                <View style={styles.inputCol}><Text style={styles.miniFieldLabel}>Tecnico 1</Text><TextInput style={styles.input} value={permTecnico1} onChangeText={setPermTecnico1} /></View>
+                <View style={styles.inputCol}><Text style={styles.miniFieldLabel}>Tecnico 2</Text><TextInput style={styles.input} value={permTecnico2} onChangeText={setPermTecnico2} /></View>
               </View>
               {showPermFechaPicker && (
                 <DateTimePicker
@@ -2039,16 +2652,6 @@ export default function InformesScreen() {
                   <Text style={styles.firmaBtnText}>+ Agregar sello</Text>
                 </Pressable>
               </View>
-              <View style={styles.inputBlock}>
-                <Text style={styles.selectLabel}>Descripcion del trabajo</Text>
-                <TextInput
-                  style={[styles.input, styles.textArea]}
-                  value={permDescripcionTrabajo}
-                  onChangeText={setPermDescripcionTrabajo}
-                  multiline
-                  textAlignVertical="top"
-                />
-              </View>
               {permisoContexto === 'mantencion' ? (
                 <View style={styles.inputBlock}>
                   <Text style={styles.selectLabel}>Evidencia (1 a 3 fotos)</Text>
@@ -2109,79 +2712,117 @@ export default function InformesScreen() {
                 </View>
               ) : null}
               {permisoContexto === 'mantencion' ? (
-                <View style={styles.inputBlock}>
+                <View style={[styles.inputBlock, styles.checklistCard]}>
                   <View style={styles.rowBetween}>
-                    <Text style={styles.sectionTitleBlue}>Cambio de equipo</Text>
-                    <View style={styles.toggleSeg}>
-                      <Pressable
-                        style={[styles.toggleOption, !cambioEquipoEnabled && styles.toggleOptionActive]}
-                        onPress={() => setCambioEquipoEnabled(false)}>
-                        <Text style={[styles.toggleOptionText, !cambioEquipoEnabled && styles.toggleOptionTextActive]}>
-                          No
-                        </Text>
-                      </Pressable>
-                      <Pressable
-                        style={[styles.toggleOption, cambioEquipoEnabled && styles.toggleOptionActive]}
-                        onPress={() => setCambioEquipoEnabled(true)}>
-                        <Text style={[styles.toggleOptionText, cambioEquipoEnabled && styles.toggleOptionTextActive]}>
-                          Si
-                        </Text>
-                      </Pressable>
+                    <View style={styles.checklistTitleWrap}>
+                      <Ionicons name="checkmark-done-outline" size={16} color="#0b67d0" />
+                      <Text style={styles.sectionTitleBlue}>Checklist de equipos instalados</Text>
                     </View>
+                    <Text style={styles.sectionHint}>
+                      {mantencionChecklistEnabled
+                        ? `${checklistRevisadosCount}/${mantencionEquiposChecklist.length} revisados`
+                        : 'No activo'}
+                    </Text>
+                  </View>
+                  <View style={styles.baseChoiceRow}>
+                    <Pressable
+                      style={[styles.baseChoiceBtn, !mantencionChecklistEnabled && styles.baseChoiceBtnActive]}
+                      onPress={() => {
+                        setMantencionChecklistEnabled(false);
+                        setShowMantencionChecklistModal(false);
+                      }}>
+                      <Text style={[styles.baseChoiceText, !mantencionChecklistEnabled && styles.baseChoiceTextActive]}>
+                        No
+                      </Text>
+                    </Pressable>
+                    <Pressable
+                      style={[styles.baseChoiceBtn, mantencionChecklistEnabled && styles.baseChoiceBtnActive]}
+                      onPress={() => {
+                        setMantencionChecklistEnabled(true);
+                        setShowMantencionChecklistModal(true);
+                      }}>
+                      <Text style={[styles.baseChoiceText, mantencionChecklistEnabled && styles.baseChoiceTextActive]}>
+                        Si
+                      </Text>
+                    </Pressable>
+                  </View>
+                  {mantencionChecklistEnabled ? (
+                    checklistRevisadosCount > 0 ? (
+                      <Pressable style={styles.checklistViewBtn} onPress={() => setShowMantencionChecklistModal(true)}>
+                        <Ionicons name="eye-outline" size={15} color="#0b67d0" />
+                        <Text style={styles.checklistViewBtnText}>Ver</Text>
+                      </Pressable>
+                    ) : (
+                      <Pressable style={styles.checklistOpenBtn} onPress={() => setShowMantencionChecklistModal(true)}>
+                        <Ionicons name="open-outline" size={15} color="#0b67d0" />
+                        <Text style={styles.checklistOpenBtnText}>Abrir checklist</Text>
+                      </Pressable>
+                    )
+                  ) : null}
+                </View>
+              ) : null}
+
+                            {permisoContexto === 'mantencion' ? (
+                <View style={[styles.inputBlock, styles.cambioEquipoCard]}>
+                  <View style={styles.checklistTitleWrap}>
+                    <Ionicons name="sync-outline" size={16} color="#0b67d0" />
+                    <Text style={styles.sectionTitleBlue}>Cambio de equipo</Text>
+                  </View>
+                  <View style={[styles.baseChoiceRow, styles.choiceRowTop]}>
+                    <Pressable
+                      style={[styles.baseChoiceBtn, !cambioEquipoEnabled && styles.baseChoiceBtnActive]}
+                      onPress={() => {
+                        setCambioEquipoEnabled(false);
+                        setShowCambioEquipoModal(false);
+                        setEquipoCambioId(null);
+                        setSerieNuevaCambio('');
+                      }}>
+                      <Text style={[styles.baseChoiceText, !cambioEquipoEnabled && styles.baseChoiceTextActive]}>
+                        No
+                      </Text>
+                    </Pressable>
+                    <Pressable
+                      style={[styles.baseChoiceBtn, cambioEquipoEnabled && styles.baseChoiceBtnActive]}
+                      onPress={() => {
+                        setCambioEquipoEnabled(true);
+                        setShowCambioEquipoModal(true);
+                      }}>
+                      <Text style={[styles.baseChoiceText, cambioEquipoEnabled && styles.baseChoiceTextActive]}>
+                        Si
+                      </Text>
+                    </Pressable>
                   </View>
                   {cambioEquipoEnabled ? (
                     <View style={{ gap: 8 }}>
-                      <Text style={styles.selectLabel}>Equipo del centro</Text>
-                      <View style={styles.equipoListBox}>
-                        <ScrollView nestedScrollEnabled style={{ maxHeight: 170 }}>
-                          {equiposCentro.map((eq) => {
-                            const id = Number(eq.id_equipo || 0);
-                            const selected = Number(equipoCambioId || 0) === id;
-                            return (
-                              <Pressable
-                                key={`eq-${id}`}
-                                style={[styles.equipoItem, selected && styles.equipoItemActive]}
-                                onPress={() => setEquipoCambioId(id)}>
-                                <Text style={[styles.equipoItemTitle, selected && styles.equipoItemTitleActive]}>
-                                  {eq.nombre || `Equipo ${id}`}
-                                </Text>
-                                <Text style={styles.equipoItemMeta}>
-                                  Serie: {eq.numero_serie || '-'}
-                                </Text>
-                              </Pressable>
-                            );
-                          })}
-                        </ScrollView>
-                      </View>
-                      <View style={styles.row}>
-                        <View style={styles.inputCol}>
-                          <Text style={styles.selectLabel}>N° serie actual</Text>
-                          <TextInput
-                            style={[styles.input, styles.readonlyInput]}
-                            value={String(equipoCambioSeleccionado?.numero_serie || '')}
-                            editable={false}
-                            placeholder="-"
-                          />
-                        </View>
-                        <View style={styles.inputCol}>
-                          <Text style={styles.selectLabel}>N° serie nuevo</Text>
-                          <View style={styles.scanSerieWrap}>
-                            <TextInput
-                              style={[styles.input, styles.scanSerieInput]}
-                              value={serieNuevaCambio}
-                              onChangeText={setSerieNuevaCambio}
-                              placeholder="Manual o escaneo"
-                            />
-                            <Pressable style={styles.scanSerieBtn} onPress={abrirScannerSerieCambio}>
-                              <Ionicons name="barcode-outline" size={17} color="#1d4ed8" />
-                            </Pressable>
-                          </View>
-                        </View>
-                      </View>
+                      <Text style={styles.sectionHint}>
+                        {equipoCambioSeleccionado
+                          ? `Equipo: ${equipoCambioSeleccionado?.nombre || '-'} | Serie actual: ${equipoCambioSeleccionado?.numero_serie || '-'}`
+                          : 'Selecciona en el modal el equipo que deseas cambiar.'}
+                      </Text>
+                      <Pressable style={styles.checklistOpenBtn} onPress={() => setShowCambioEquipoModal(true)}>
+                        <Ionicons name="open-outline" size={15} color="#0b67d0" />
+                        <Text style={styles.checklistOpenBtnText}>
+                          {equipoCambioSeleccionado ? 'Ver cambio de equipo' : 'Seleccionar equipo'}
+                        </Text>
+                      </Pressable>
                     </View>
                   ) : null}
                 </View>
               ) : null}
+              <View style={[styles.inputBlock, styles.descripcionCard]}>
+                <View style={styles.descripcionHeader}>
+                  <Ionicons name="document-text-outline" size={16} color="#1d4ed8" />
+                  <Text style={styles.descripcionLabel}>Descripcion del trabajo</Text>
+                </View>
+                <TextInput
+                  style={[styles.input, styles.textArea]}
+                  value={permDescripcionTrabajo}
+                  onChangeText={setPermDescripcionTrabajo}
+                  placeholder="Escribe el resultado final de la mantencion..."
+                  multiline
+                  textAlignVertical="top"
+                />
+              </View>
               <View style={styles.sectionDivider}>
                 <View style={styles.sectionLine} />
                 <Text style={styles.sectionTitleBlue}>Cliente</Text>
@@ -2308,6 +2949,7 @@ export default function InformesScreen() {
                   setShowPermisoModal(false);
                   setPermisoContexto('instalacion');
                   setMantencionEditandoId(null);
+                  setRetiroEditandoId(null);
                   setCambioEquipoEnabled(false);
                   setEquipoCambioId(null);
                   setSerieNuevaCambio('');
@@ -2320,7 +2962,12 @@ export default function InformesScreen() {
                 disabled={saving}
                 onPress={async () => {
                   if (saving) return;
-                  const titulo = permisoContexto === 'mantencion' ? 'Informe de mantencion' : 'Permiso de trabajo';
+                  const titulo =
+                    permisoContexto === 'mantencion'
+                      ? 'Informe de mantencion'
+                      : permisoContexto === 'retiro'
+                      ? 'Informe de retiro'
+                      : 'Permiso de trabajo';
                   if (permisoContexto === 'instalacion' && !actaCentroSeleccionado) {
                     Alert.alert(titulo, 'Primero debes tener un Acta de entrega para este centro.');
                     return;
@@ -2332,6 +2979,13 @@ export default function InformesScreen() {
                   if (!permFecha) {
                     Alert.alert(titulo, 'Fecha ingreso es obligatoria.');
                     return;
+                  }
+                  if (permisoContexto === 'retiro') {
+                    const anyChecked = retiroEquiposChecklist.some((eq) => !!eq.retirado);
+                    if (!anyChecked) {
+                      Alert.alert(titulo, 'Marca al menos un equipo retirado en el checklist.');
+                      return;
+                    }
                   }
                   const gpsRows = permPuntosGpsList.map((p) => ({ lat: p.lat.trim(), lng: p.lng.trim() }));
                   const hasPartialGps = gpsRows.some((p) => (p.lat && !p.lng) || (!p.lat && p.lng));
@@ -2402,6 +3056,21 @@ export default function InformesScreen() {
                       descripcion_trabajo: permDescripcionTrabajo || null,
                       evidencia_foto:
                         permisoContexto === 'mantencion' ? serializeEvidencePhotos(permEvidenciaFotos) : null,
+                      checklist_equipos:
+                        permisoContexto === 'mantencion'
+                          ? mantencionChecklistEnabled
+                            ? JSON.stringify(
+                                mantencionEquiposChecklist.map((item) => ({
+                                  equipo_id: item.equipo_id || null,
+                                  equipo_nombre: item.equipo_nombre || null,
+                                  numero_serie: item.numero_serie || null,
+                                  codigo: item.codigo || null,
+                                  revisado: !!item.revisado,
+                                  observacion: String(item.observacion || '').trim() || null,
+                                }))
+                              )
+                            : null
+                          : null,
                     };
                     let result: any = null;
                     if (permisoContexto === 'instalacion' && permisoCentroSeleccionado?.id_permiso_trabajo) {
@@ -2410,6 +3079,50 @@ export default function InformesScreen() {
                       result = await updateMantencionTerreno(mantencionEditandoId, payload);
                     } else if (permisoContexto === 'mantencion') {
                       result = await createMantencionTerreno(payload);
+                    } else if (permisoContexto === 'retiro' && retiroEditandoId) {
+                      result = await updateRetiroTerreno(retiroEditandoId, {
+                        centro_id: permCentroId,
+                        fecha_retiro: permFecha,
+                        tipo_retiro: retiroTipo,
+                        estado_logistico: retiroEstado,
+                        observacion: permDescripcionTrabajo || null,
+                        tecnico_1: permTecnico1 || null,
+                        firma_tecnico_1: permFirmaTecnico1 || null,
+                        tecnico_2: permTecnico2 || null,
+                        firma_tecnico_2: permFirmaTecnico2 || null,
+                        recepciona_nombre: permRecepciona || null,
+                        recepciona_rut: permRecepcionaRut || null,
+                        firma_recepciona: permFirmaRecepciona || null,
+                        equipos: retiroEquiposChecklist.map((eq) => ({
+                          equipo_id: eq.equipo_id || null,
+                          equipo_nombre: eq.equipo_nombre || null,
+                          numero_serie: eq.numero_serie || null,
+                          codigo: eq.codigo || null,
+                          retirado: !!eq.retirado,
+                        })),
+                      });
+                    } else if (permisoContexto === 'retiro') {
+                      result = await createRetiroTerreno({
+                        centro_id: permCentroId,
+                        fecha_retiro: permFecha,
+                        tipo_retiro: retiroTipo,
+                        estado_logistico: retiroEstado,
+                        observacion: permDescripcionTrabajo || null,
+                        tecnico_1: permTecnico1 || null,
+                        firma_tecnico_1: permFirmaTecnico1 || null,
+                        tecnico_2: permTecnico2 || null,
+                        firma_tecnico_2: permFirmaTecnico2 || null,
+                        recepciona_nombre: permRecepciona || null,
+                        recepciona_rut: permRecepcionaRut || null,
+                        firma_recepciona: permFirmaRecepciona || null,
+                        equipos: retiroEquiposChecklist.map((eq) => ({
+                          equipo_id: eq.equipo_id || null,
+                          equipo_nombre: eq.equipo_nombre || null,
+                          numero_serie: eq.numero_serie || null,
+                          codigo: eq.codigo || null,
+                          retirado: !!eq.retirado,
+                        })),
+                      });
                     } else {
                       result = await createPermisoTrabajo(payload);
                     }
@@ -2434,6 +3147,7 @@ export default function InformesScreen() {
                     }
                     await cargarPermisos();
                     await cargarMantencionesTerreno();
+                    await cargarRetirosTerreno();
                     // Refresca centros para no seguir mostrando telefono/correo antiguos en la misma sesion.
                     if (permClienteId) {
                       try {
@@ -2463,6 +3177,7 @@ export default function InformesScreen() {
                     setShowPermisoModal(false);
                     setPermisoContexto('instalacion');
                     setMantencionEditandoId(null);
+                    setRetiroEditandoId(null);
                     setTipoInstalacion('acta_entrega');
                     if (permisoContexto === 'instalacion') {
                       setMostrarInstalacionForm(false);
@@ -2864,6 +3579,42 @@ const styles = StyleSheet.create({
   },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(15,23,42,0.45)', justifyContent: 'center', padding: 12 },
   modalCard: { backgroundColor: '#fff', borderRadius: 14, borderWidth: 1, borderColor: '#dbeafe', maxHeight: '92%', padding: 12, gap: 10 },
+  tipoMantencionCard: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    padding: 14,
+    gap: 10,
+    shadowColor: '#0f172a',
+    shadowOpacity: 0.18,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 5,
+  },
+  tipoMantencionTitle: { color: '#0f172a', fontWeight: '800', fontSize: 17 },
+  tipoMantencionHint: { color: '#64748b', fontWeight: '600', fontSize: 12.5 },
+  tipoMantencionActions: { flexDirection: 'row', gap: 10, marginTop: 4 },
+  tipoMantencionBtn: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    backgroundColor: '#eff6ff',
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 6,
+  },
+  tipoMantencionBtnPrimary: {
+    borderColor: '#1d4ed8',
+    backgroundColor: '#1d4ed8',
+  },
+  tipoMantencionBtnText: { color: '#1d4ed8', fontWeight: '800', fontSize: 13 },
+  tipoMantencionBtnTextPrimary: { color: '#ffffff' },
+  tipoMantencionCancel: { alignSelf: 'flex-end', paddingHorizontal: 8, paddingVertical: 4 },
+  tipoMantencionCancelText: { color: '#64748b', fontWeight: '700' },
   signatureModalCard: { backgroundColor: '#fff', borderRadius: 14, borderWidth: 1, borderColor: '#dbeafe', height: '72%', padding: 12, gap: 10 },
   cameraModalCard: { backgroundColor: '#fff', borderRadius: 14, borderWidth: 1, borderColor: '#dbeafe', height: '78%', padding: 12, gap: 10 },
   signatureWrap: { flex: 1, borderRadius: 10, overflow: 'hidden', backgroundColor: '#fff' },
@@ -2881,7 +3632,103 @@ const styles = StyleSheet.create({
   },
   modalHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: 1, borderBottomColor: '#e2e8f0', paddingBottom: 8 },
   modalTitle: { color: '#0f172a', fontWeight: '800', fontSize: 16 },
+  checklistCard: {
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    borderRadius: 12,
+    backgroundColor: '#f0f8ff',
+    padding: 12,
+    marginTop: 4,
+  },
+  cambioEquipoCard: {
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    borderRadius: 12,
+    backgroundColor: '#f4faff',
+    padding: 12,
+    marginTop: 4,
+  },
+  checklistTitleWrap: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  choiceRowTop: { marginTop: 6 },
+  checklistToggleWrap: { marginTop: 6, marginBottom: 2 },
+  checklistOpenBtn: {
+    marginTop: 10,
+    borderWidth: 1,
+    borderColor: '#93c5fd',
+    backgroundColor: '#dbeafe',
+    borderRadius: 10,
+    paddingVertical: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 6,
+  },
+  checklistOpenBtnText: { color: '#0b67d0', fontWeight: '800', fontSize: 12.5 },
+  checklistViewBtn: {
+    marginTop: 10,
+    alignSelf: 'flex-start',
+    borderWidth: 1,
+    borderColor: '#93c5fd',
+    backgroundColor: '#eff6ff',
+    borderRadius: 999,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 4,
+  },
+  checklistViewBtnText: { color: '#0b67d0', fontWeight: '800', fontSize: 12 },
+  centerInfoPanel: {
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    borderRadius: 12,
+    backgroundColor: '#f8fbff',
+    padding: 10,
+    gap: 8,
+    marginBottom: 8,
+  },
+  centerInfoHeader: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  centerInfoTitle: {
+    color: '#1d4ed8',
+    fontSize: 12.5,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+    letterSpacing: 0.3,
+  },
+  centerInfoItem: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+    borderRadius: 10,
+    backgroundColor: '#ffffff',
+    paddingHorizontal: 9,
+    paddingVertical: 8,
+    gap: 3,
+  },
+  centerInfoLabel: {
+    color: '#64748b',
+    fontSize: 10.5,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.3,
+  },
+  centerInfoValue: { color: '#0f172a', fontSize: 12.5, fontWeight: '700' },
   inputBlock: { gap: 6, marginBottom: 8 },
+  descripcionCard: {
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    borderRadius: 12,
+    backgroundColor: '#f8fbff',
+    padding: 10,
+  },
+  descripcionHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 2 },
+  descripcionLabel: {
+    color: '#1d4ed8',
+    fontSize: 13,
+    fontWeight: '800',
+    letterSpacing: 0.2,
+  },
   sectionDivider: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8, marginBottom: 6 },
   sectionLine: { flex: 1, height: 1, backgroundColor: '#bfdbfe' },
   sectionTitleBlue: { color: '#1d4ed8', fontWeight: '800', fontSize: 13.5, letterSpacing: 0.4 },
@@ -3013,3 +3860,4 @@ const styles = StyleSheet.create({
   ctaDone: { backgroundColor: '#16a34a' },
   saveBtnText: { color: '#fff', fontWeight: '700' },
 });
+
