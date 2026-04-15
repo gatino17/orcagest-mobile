@@ -222,3 +222,24 @@ export const createCambioEquipoMantencion = async (
   const res = await api.post(`/mantenciones_terreno/${idMantencion}/cambios_equipo`, payload);
   return res.data;
 };
+
+// Informes centros - Retiros en terreno
+export const fetchRetirosTerreno = async (params?: Record<string, any>) => {
+  const res = await api.get('/retiros_terreno/', { params });
+  return res.data;
+};
+
+export const createRetiroTerreno = async (payload: any) => {
+  const res = await api.post('/retiros_terreno/', payload);
+  return res.data;
+};
+
+export const updateRetiroTerreno = async (idRetiro: string | number, payload: any) => {
+  const res = await api.put(`/retiros_terreno/${idRetiro}`, payload);
+  return res.data;
+};
+
+export const deleteRetiroTerreno = async (idRetiro: string | number) => {
+  const res = await api.delete(`/retiros_terreno/${idRetiro}`);
+  return res.data;
+};
