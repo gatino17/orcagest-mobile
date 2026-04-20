@@ -28,6 +28,7 @@ import {
   deleteActaEntrega,
   deleteRetiroTerreno,
   fetchMantencionesTerreno,
+  fetchActividadesMias,
   fetchActasEntrega,
   fetchCentrosPorCliente,
   fetchClientes,
@@ -36,6 +37,7 @@ import {
   getArmados,
   getEquipos,
   updateActaEntrega,
+  updateActividadCalendario,
   updateMantencionTerreno,
   updatePermisoTrabajo,
   updateRetiroTerreno,
@@ -64,6 +66,7 @@ type Acta = {
   id_acta_entrega?: number;
   centro_id?: number;
   armado_id?: number;
+  actividad_id?: number;
   cliente_id?: number;
   empresa?: string;
   cliente?: string;
@@ -77,11 +80,14 @@ type Acta = {
   firma_tecnico_1?: string;
   tecnico_2?: string;
   firma_tecnico_2?: string;
+  firmas_tecnicos_adicionales?: Array<{ nombre?: string; firma?: string }> | string;
   recepciona_nombre?: string;
   firma_recepciona?: string;
   equipos_considerados?: string;
   centro_origen_traslado?: string;
+  tipo_instalacion?: 'instalacion' | 'reapuntamiento' | string;
 };
+type FirmaTecnicoExtra = { nombre: string; firma: string };
 type ArmadoResumen = {
   id_armado?: number;
   centro_id?: number;
@@ -155,12 +161,45 @@ type MantencionEquipoChecklist = {
   revisado?: boolean;
   observacion?: string;
 };
+type ActividadAsignada = {
+  id_actividad?: number;
+  nombre_actividad?: string;
+  area?: string;
+  estado?: string;
+  fecha_inicio?: string;
+  fecha_termino?: string;
+  centro_id?: number;
+  centro?: {
+    id_centro?: number;
+    nombre?: string;
+    cliente?: string;
+    cliente_id?: number;
+    area?: string;
+    ubicacion?: string;
+    correo_centro?: string;
+    telefono?: string;
+  };
+  encargado_principal?: {
+    id_encargado?: number;
+    nombre_encargado?: string;
+  };
+  encargado_ayudante?: {
+    id_encargado?: number;
+    nombre_encargado?: string;
+  };
+  tecnicos_asignados?: Array<{
+    id_encargado?: number;
+    nombre_encargado?: string;
+  }>;
+};
 
 type ModuloInforme = 'instalacion' | 'mantencion' | 'retiro';
 type TipoInstalacion = 'acta_entrega' | 'informe_intervencion';
+type TipoRegistroInstalacion = 'instalacion' | 'reapuntamiento';
 type FirmaTarget =
   | 'tecnico1'
   | 'tecnico2'
+  | 'tecnico_extra'
   | 'recepciona'
   | 'perm_recepciona'
   | 'perm_tecnico1'
@@ -177,9 +216,11 @@ const toInputDate = (value?: string) => {
   if (latam) return `${latam[3]}-${latam[2]}-${latam[1]}`;
   const parsed = new Date(raw);
   if (!Number.isNaN(parsed.getTime())) {
-    const y = parsed.getFullYear();
-    const m = String(parsed.getMonth() + 1).padStart(2, '0');
-    const d = String(parsed.getDate()).padStart(2, '0');
+    // Si la fecha viene con zona horaria (GMT/UTC/Z), usar UTC para evitar desfase de -1 dia en mobile.
+    const hasTimezoneInfo = /(?:gmt|utc|z|[+\-]\d{2}:?\d{2})/i.test(raw);
+    const y = hasTimezoneInfo ? parsed.getUTCFullYear() : parsed.getFullYear();
+    const m = String((hasTimezoneInfo ? parsed.getUTCMonth() : parsed.getMonth()) + 1).padStart(2, '0');
+    const d = String(hasTimezoneInfo ? parsed.getUTCDate() : parsed.getDate()).padStart(2, '0');
     return `${y}-${m}-${d}`;
   }
   return '';
@@ -310,12 +351,38 @@ const parseMantencionChecklist = (value?: string): MantencionEquipoChecklist[] =
   }
 };
 
+const parseFirmasTecnicosAdicionales = (
+  value?: Array<{ nombre?: string; firma?: string }> | string
+): FirmaTecnicoExtra[] => {
+  if (!value) return [];
+  try {
+    const raw = Array.isArray(value) ? value : JSON.parse(String(value));
+    if (!Array.isArray(raw)) return [];
+    return raw
+      .map((row) => ({
+        nombre: String(row?.nombre || '').trim(),
+        firma: String(row?.firma || ''),
+      }))
+      .filter((row) => !!row.nombre);
+  } catch {
+    return [];
+  }
+};
+
 export default function InformesScreen() {
-  const { token } = useContext(AuthContext);
+  const { token, role } = useContext(AuthContext);
 
   const [moduloInforme, setModuloInforme] = useState<ModuloInforme>('instalacion');
   const [mostrarInstalacionForm, setMostrarInstalacionForm] = useState(false);
   const [tipoInstalacion, setTipoInstalacion] = useState<TipoInstalacion>('acta_entrega');
+  const [tipoRegistroInstalacion, setTipoRegistroInstalacion] = useState<TipoRegistroInstalacion>('instalacion');
+  const [showInstalacionTipoModal, setShowInstalacionTipoModal] = useState(false);
+  const [actividadesAsignadas, setActividadesAsignadas] = useState<ActividadAsignada[]>([]);
+  const [loadingActividadesAsignadas, setLoadingActividadesAsignadas] = useState(false);
+  const [actividadAsignadaActiva, setActividadAsignadaActiva] = useState<ActividadAsignada | null>(null);
+  const [tecnicosAsignadosExtra, setTecnicosAsignadosExtra] = useState<string[]>([]);
+  const [firmasTecnicosExtra, setFirmasTecnicosExtra] = useState<FirmaTecnicoExtra[]>([]);
+  const [firmaExtraIndex, setFirmaExtraIndex] = useState<number | null>(null);
   const [clientes, setClientes] = useState<Cliente[]>([]);
   const [centrosFiltro, setCentrosFiltro] = useState<Centro[]>([]);
   const [centrosForm, setCentrosForm] = useState<Centro[]>([]);
@@ -341,6 +408,8 @@ export default function InformesScreen() {
   const [centroIdForm, setCentroIdForm] = useState<number | null>(null);
   const [buscarCentroForm, setBuscarCentroForm] = useState('');
   const [fechaRegistro, setFechaRegistro] = useState('');
+  const [showActaFechaPicker, setShowActaFechaPicker] = useState(false);
+  const [codigoPontonActa, setCodigoPontonActa] = useState('');
   const [region, setRegion] = useState('');
   const [localidad, setLocalidad] = useState('');
   const [tecnico1, setTecnico1] = useState('');
@@ -446,15 +515,20 @@ export default function InformesScreen() {
 
   const actaCentroSeleccionado = useMemo(() => {
     if (!permCentroId) return null;
+    const tipoObjetivo = tipoRegistroInstalacion;
     const porCentro = actas
       .filter((a) => Number(a.centro_id || 0) === Number(permCentroId))
+      .filter((a) => {
+        const tipo = String(a.tipo_instalacion || 'instalacion').toLowerCase();
+        return tipoObjetivo === 'reapuntamiento' ? tipo === 'reapuntamiento' : tipo !== 'reapuntamiento';
+      })
       .sort((a, b) => {
         const ta = new Date(a.fecha_registro || 0).getTime();
         const tb = new Date(b.fecha_registro || 0).getTime();
         return tb - ta;
       });
     return porCentro[0] || null;
-  }, [actas, permCentroId]);
+  }, [actas, permCentroId, tipoRegistroInstalacion]);
   const actaCompletada = !!actaCentroSeleccionado;
   const permisosInstalacion = useMemo(
     () => permisos.filter((p) => Number(p.acta_entrega_id || 0) > 0),
@@ -470,15 +544,17 @@ export default function InformesScreen() {
   );
   const permisoCentroSeleccionado = useMemo(() => {
     if (!permCentroId) return null;
+    const actaId = Number(actaCentroSeleccionado?.id_acta_entrega || 0);
     const porCentro = permisosInstalacion
       .filter((p) => Number(p.centro_id || 0) === Number(permCentroId))
+      .filter((p) => (actaId ? Number(p.acta_entrega_id || 0) === actaId : true))
       .sort((a, b) => {
         const ta = new Date(a.fecha_ingreso || 0).getTime();
         const tb = new Date(b.fecha_ingreso || 0).getTime();
         return tb - ta;
       });
     return porCentro[0] || null;
-  }, [permisosInstalacion, permCentroId]);
+  }, [permisosInstalacion, permCentroId, actaCentroSeleccionado]);
   const permisoCompletado = !!permisoCentroSeleccionado;
   const mantencionEditandoSeleccionada = useMemo(() => {
     if (!mantencionEditandoId) return null;
@@ -525,6 +601,10 @@ export default function InformesScreen() {
         centrosFiltro.find((c) => Number(c.id_centro ?? c.id ?? 0) === centroId)?.nombre ||
         `Centro ${centroId}`;
       const cliente = acta?.empresa || acta?.cliente || '-';
+      const tipoInstalacionItem =
+        String(acta?.tipo_instalacion || '').toLowerCase() === 'reapuntamiento'
+          ? 'reapuntamiento'
+          : 'instalacion';
       return {
         centroId,
         actaId: Number(acta?.id_acta_entrega || 0) || null,
@@ -533,11 +613,70 @@ export default function InformesScreen() {
         hasArmadoVinculado,
         centro,
         cliente,
+        tipoInstalacion: tipoInstalacionItem,
         fechaActa: acta?.fecha_registro || '',
         fechaPermiso: permisosInstalacion.find((p) => Number(p.centro_id || 0) === centroId)?.fecha_ingreso || '',
       };
     });
   }, [permisosInstalacion, actas, permCentros, centrosFiltro]);
+  const instalacionesEnProceso = useMemo(() => {
+    const actividadesVigentes = new Set(
+      actividadesAsignadas
+        .map((a) => Number(a.id_actividad || 0))
+        .filter((id) => id > 0)
+    );
+    const actasConPermiso = new Set(
+      permisosInstalacion
+        .map((p) => Number(p.acta_entrega_id || 0))
+        .filter((id) => id > 0)
+    );
+    const base = actas
+      .filter((a) => {
+        const actaId = Number(a.id_acta_entrega || 0);
+        if (!actaId) return false;
+        const actividadId = Number(a.actividad_id || 0);
+        // Si el acta viene de una actividad programada y esa actividad ya no existe,
+        // ocultar el registro de "en proceso" para evitar residuos por asignacion eliminada.
+        if (actividadId > 0 && !actividadesVigentes.has(actividadId)) return false;
+        return !actasConPermiso.has(actaId);
+      })
+      .sort((a, b) => {
+        const ta = new Date(a.fecha_registro || 0).getTime();
+        const tb = new Date(b.fecha_registro || 0).getTime();
+        return tb - ta;
+      })
+      .map((acta) => {
+        const centroId = Number(acta.centro_id || 0) || null;
+        const tipoInstalacionItem =
+          String(acta?.tipo_instalacion || '').toLowerCase() === 'reapuntamiento'
+            ? 'reapuntamiento'
+            : 'instalacion';
+        const centro =
+          acta.centro ||
+          permCentros.find((c) => Number(c.id_centro ?? c.id ?? 0) === Number(centroId || 0))?.nombre ||
+          centrosFiltro.find((c) => Number(c.id_centro ?? c.id ?? 0) === Number(centroId || 0))?.nombre ||
+          `Centro ${centroId || '-'}`;
+        return {
+          centroId,
+          actaId: Number(acta.id_acta_entrega || 0) || null,
+          armadoId: Number(acta.armado_id || 0) || null,
+          hasArmadoVinculado: Number(acta.armado_id || 0) > 0,
+          centro,
+          cliente: acta.empresa || acta.cliente || '-',
+          tipoInstalacion: tipoInstalacionItem,
+          fechaActa: acta.fecha_registro || '',
+        };
+      });
+    const porCentro = new Map<number, (typeof base)[number]>();
+    base.forEach((item) => {
+      const key = Number(item.centroId || 0);
+      if (!key) return;
+      if (!porCentro.has(key)) porCentro.set(key, item);
+    });
+    return Array.from(porCentro.values());
+  }, [actas, permisosInstalacion, permCentros, centrosFiltro, actividadesAsignadas]);
+  const mostrarAsignadasEnProceso = moduloInforme !== 'instalacion';
+  const mostrarAsignadasCompletadas = moduloInforme !== 'instalacion';
   const mantencionesRecientesVisibles = useMemo(
     () => (showAllMantencionesRecientes ? permisosMantencion : permisosMantencion.slice(0, 3)),
     [showAllMantencionesRecientes, permisosMantencion]
@@ -560,6 +699,77 @@ export default function InformesScreen() {
       return nombre.includes(q) || serie.includes(q);
     });
   }, [mantencionEquiposChecklist, mantencionChecklistQuery]);
+  const nombreRegistroInstalacion =
+    tipoRegistroInstalacion === 'reapuntamiento' ? 'Reapuntamiento' : 'Instalacion';
+  const nombreDocumentoActa =
+    tipoRegistroInstalacion === 'reapuntamiento' ? 'Acta de reapuntamiento' : 'Acta de entrega';
+  const roleNorm = String(role || '').trim().toLowerCase();
+  const canCrearInstalacionManual = roleNorm === 'admin' || roleNorm === 'operaciones' || roleNorm === 'superadmin';
+  const nombresBloqueadosPorProgramacion = !!actividadAsignadaActiva;
+  const estadoActividad = (value?: string) => {
+    const est = String(value || '').trim().toLowerCase();
+    if (est === 'finalizado') return 'finalizado';
+    if (est === 'en progreso' || est === 'en_progreso') return 'en_progreso';
+    return 'pendiente';
+  };
+  const actividadesAsignadasFiltradas = useMemo(() => {
+    const targetModulo = moduloInforme;
+    return actividadesAsignadas.filter((item) => {
+      const area = String(item.area || '').trim().toLowerCase();
+      const nombre = String(item.nombre_actividad || '').trim().toLowerCase();
+      if (targetModulo === 'instalacion') {
+        return (
+          area.startsWith('instal') ||
+          area.startsWith('reap') ||
+          nombre.includes('instal') ||
+          nombre.includes('reap')
+        );
+      }
+      if (targetModulo === 'mantencion') return area.startsWith('manten') || nombre.includes('manten');
+      if (targetModulo === 'retiro') return area.startsWith('retir') || nombre.includes('retir');
+      return false;
+    });
+  }, [actividadesAsignadas, moduloInforme]);
+  const actividadesProgramadas = useMemo(
+    () => {
+      const actividadesConActa = new Set(
+        actas
+          .map((a) => Number(a.actividad_id || 0))
+          .filter((id) => id > 0)
+      );
+      return actividadesAsignadasFiltradas.filter((a) => {
+        const idActividad = Number(a.id_actividad || 0);
+        const estado = estadoActividad(a.estado);
+        const esActiva = Number(actividadAsignadaActiva?.id_actividad || 0) === idActividad;
+        if (esActiva) return false;
+        if (estado === 'pendiente') return true;
+        // Compatibilidad operativa: si en web dejaron "En progreso" pero aun no existe acta,
+        // en mobile se sigue mostrando como pendiente de iniciar.
+        if (estado === 'en_progreso' && !actividadesConActa.has(idActividad)) return true;
+        return false;
+      });
+    },
+    [actividadesAsignadasFiltradas, actividadAsignadaActiva, actas]
+  );
+  const actividadesEnProceso = useMemo(
+    () => {
+      const actividadesConActa = new Set(
+        actas
+          .map((a) => Number(a.actividad_id || 0))
+          .filter((id) => id > 0)
+      );
+      return actividadesAsignadasFiltradas.filter((a) => {
+        const idActividad = Number(a.id_actividad || 0);
+        if (Number(actividadAsignadaActiva?.id_actividad || 0) === idActividad) return true;
+        return estadoActividad(a.estado) === 'en_progreso' && actividadesConActa.has(idActividad);
+      });
+    },
+    [actividadesAsignadasFiltradas, actividadAsignadaActiva, actas]
+  );
+  const actividadesCompletadas = useMemo(
+    () => actividadesAsignadasFiltradas.filter((a) => estadoActividad(a.estado) === 'finalizado'),
+    [actividadesAsignadasFiltradas]
+  );
 
   const cargarClientes = async () => {
     if (!token) return;
@@ -682,9 +892,128 @@ export default function InformesScreen() {
       Alert.alert('Informes', backendMsg);
     }
   };
+  const cargarActividadesAsignadas = async () => {
+    if (!token) return;
+    setLoadingActividadesAsignadas(true);
+    try {
+      const data = await fetchActividadesMias();
+      const lista = (Array.isArray(data) ? data : []).filter((item) => {
+        const estado = String(item?.estado || '').trim().toLowerCase();
+        return estado !== 'cancelado';
+      });
+      setActividadesAsignadas(lista);
+    } catch {
+      setActividadesAsignadas([]);
+    } finally {
+      setLoadingActividadesAsignadas(false);
+    }
+  };
+
+  const aplicarActividadAsignada = (actividad: ActividadAsignada) => {
+    const area = String(actividad.area || '').trim().toLowerCase();
+    const centroId = Number(actividad.centro?.id_centro || actividad.centro_id || 0) || null;
+    const clienteId = Number(actividad.centro?.cliente_id || 0) || null;
+    if (!centroId || !clienteId) {
+      Alert.alert('Informes', 'La actividad no tiene centro/cliente asociado correctamente.');
+      return;
+    }
+
+    setActividadAsignadaActiva(actividad);
+    setPermClienteId(clienteId);
+    setPermCentroId(centroId);
+    setClienteIdForm(clienteId);
+    setCentroIdForm(centroId);
+    setPermBuscarCentro('');
+    setBuscarCentroForm('');
+
+    const tecnicoPrincipal = String(actividad.encargado_principal?.nombre_encargado || '').trim();
+    const tecnicoAyudante = String(actividad.encargado_ayudante?.nombre_encargado || '').trim();
+    const extras = (Array.isArray(actividad.tecnicos_asignados) ? actividad.tecnicos_asignados : [])
+      .map((t) => String(t?.nombre_encargado || '').trim())
+      .filter((name) => !!name && name !== tecnicoPrincipal && name !== tecnicoAyudante);
+    setTecnicosAsignadosExtra(extras);
+    setFirmasTecnicosExtra(extras.map((nombre) => ({ nombre, firma: '' })));
+    if (tecnicoPrincipal) {
+      setTecnico1(tecnicoPrincipal);
+      setPermTecnico1(tecnicoPrincipal);
+    }
+    if (tecnicoAyudante) {
+      setTecnico2(tecnicoAyudante);
+      setPermTecnico2(tecnicoAyudante);
+    }
+
+    const fechaActividad = toInputDate(actividad.fecha_inicio) || todayInputDate();
+    const actividadId = Number(actividad.id_actividad || 0) || null;
+    const est = estadoActividad(actividad.estado);
+    if (actividadId && est === 'pendiente') {
+      updateActividadCalendario(actividadId, { estado: 'En progreso' })
+        .then(() => cargarActividadesAsignadas())
+        .catch(() => {});
+    }
+    if (area.startsWith('instal') || area.startsWith('reap')) {
+      // Flujo solicitado: al seleccionar trabajo programado abrir directamente modal,
+      // no la tarjeta inline bajo "Instalaciones completadas".
+      resetForm();
+      resetPermisoForm();
+      if (tecnicoPrincipal) setTecnico1(tecnicoPrincipal);
+      if (tecnicoAyudante) setTecnico2(tecnicoAyudante);
+      if (tecnicoPrincipal) setPermTecnico1(tecnicoPrincipal);
+      if (tecnicoAyudante) setPermTecnico2(tecnicoAyudante);
+      setTipoRegistroInstalacion(area.startsWith('reap') ? 'reapuntamiento' : 'instalacion');
+      setMostrarInstalacionForm(false);
+      setTipoInstalacion('acta_entrega');
+      setEditId(null);
+      setClienteIdForm(clienteId);
+      setCentroIdForm(centroId);
+      setFechaRegistro(fechaActividad);
+      setShowEditor(true);
+      return;
+    }
+    if (area.startsWith('manten')) {
+      resetPermisoForm();
+      if (tecnicoPrincipal) setPermTecnico1(tecnicoPrincipal);
+      if (tecnicoAyudante) setPermTecnico2(tecnicoAyudante);
+      setPermisoContexto('mantencion');
+      setPermFecha(fechaActividad);
+      setMantencionEditandoId(null);
+      setShowPermisoModal(true);
+      return;
+    }
+    if (area.startsWith('retir')) {
+      resetPermisoForm();
+      if (tecnicoPrincipal) setPermTecnico1(tecnicoPrincipal);
+      if (tecnicoAyudante) setPermTecnico2(tecnicoAyudante);
+      setPermisoContexto('retiro');
+      setPermFecha(fechaActividad);
+      setRetiroEditandoId(null);
+      // Flujo directo: abrir modal de retiro ya seleccionado desde la actividad programada.
+      setShowRetiroTipoModal(false);
+      setShowPermisoModal(true);
+    }
+  };
+
+  const marcarActividadFinalizadaSiCorresponde = async () => {
+    const actividadId = Number(actividadAsignadaActiva?.id_actividad || 0) || null;
+    if (!actividadId) return;
+    try {
+      await updateActividadCalendario(actividadId, { estado: 'Finalizado' });
+      await cargarActividadesAsignadas();
+    } catch {
+      // silencioso para no bloquear guardado de informe
+    }
+  };
 
   useEffect(() => {
     cargarClientes();
+    cargarActividadesAsignadas();
+  }, [token]);
+
+  useEffect(() => {
+    if (!token) return;
+    const timer = setInterval(() => {
+      cargarActividadesAsignadas();
+    }, 12000);
+    return () => clearInterval(timer);
   }, [token]);
 
   useEffect(() => {
@@ -701,11 +1030,40 @@ export default function InformesScreen() {
     if (!centroSelForm) {
       setRegion('');
       setLocalidad('');
+      setCodigoPontonActa('');
       return;
     }
+    setCodigoPontonActa(String(centroSelForm.nombre_ponton || ''));
     setRegion(String(centroSelForm.area || centroSelForm.region || ''));
     setLocalidad(String(centroSelForm.ubicacion || centroSelForm.localidad || centroSelForm.direccion || ''));
   }, [centroSelForm]);
+
+  useEffect(() => {
+    if (!actividadAsignadaActiva) return;
+    const area = String(actividadAsignadaActiva.area || '').trim().toLowerCase();
+    const compatible =
+      (moduloInforme === 'instalacion' && (area.startsWith('instal') || area.startsWith('reap'))) ||
+      (moduloInforme === 'mantencion' && area.startsWith('manten')) ||
+      (moduloInforme === 'retiro' && area.startsWith('retir'));
+    if (!compatible) {
+      setActividadAsignadaActiva(null);
+      setTecnicosAsignadosExtra([]);
+    }
+  }, [moduloInforme, actividadAsignadaActiva]);
+
+  useEffect(() => {
+    if (!actividadAsignadaActiva) return;
+    const idActivo = Number(actividadAsignadaActiva.id_actividad || 0);
+    const sigueExistiendo = actividadesAsignadas.some((a) => Number(a.id_actividad || 0) === idActivo);
+    if (sigueExistiendo) return;
+    // Si eliminaron la actividad en web, limpiar el flujo local para que desaparezca en mobile.
+    setActividadAsignadaActiva(null);
+    setTecnicosAsignadosExtra([]);
+    setMostrarInstalacionForm(false);
+    setShowEditor(false);
+    setShowPermisoModal(false);
+    setShowRetiroTipoModal(false);
+  }, [actividadesAsignadas, actividadAsignadaActiva]);
 
   useEffect(() => {
     cargarActas();
@@ -1004,6 +1362,7 @@ export default function InformesScreen() {
     setCentroIdForm(null);
     setBuscarCentroForm('');
     setFechaRegistro('');
+    setCodigoPontonActa('');
     setRegion('');
     setLocalidad('');
     setTecnico1('');
@@ -1014,6 +1373,8 @@ export default function InformesScreen() {
     setFirmaRecepciona('');
     setEquiposConsiderados('');
     setCentroOrigenTraslado('');
+    setFirmasTecnicosExtra([]);
+    setFirmaExtraIndex(null);
   };
 
   const resetPermisoForm = () => {
@@ -1083,6 +1444,8 @@ export default function InformesScreen() {
   };
 
   const nuevaActa = () => {
+    setActividadAsignadaActiva(null);
+    setTecnicosAsignadosExtra([]);
     resetForm();
     resetPermisoForm();
     setEditId(null);
@@ -1107,6 +1470,8 @@ export default function InformesScreen() {
   };
 
   const nuevaMantencion = () => {
+    setActividadAsignadaActiva(null);
+    setTecnicosAsignadosExtra([]);
     resetPermisoForm();
     setPermisoContexto('mantencion');
     setMantencionEditandoId(null);
@@ -1117,6 +1482,8 @@ export default function InformesScreen() {
   };
 
   const nuevoRetiro = () => {
+    setActividadAsignadaActiva(null);
+    setTecnicosAsignadosExtra([]);
     resetPermisoForm();
     setPermisoContexto('retiro');
     setRetiroEditandoId(null);
@@ -1131,16 +1498,23 @@ export default function InformesScreen() {
     const centroId = Number(acta.centro_id || 0) || null;
     setCentroIdForm(centroId);
     setFechaRegistro(toInputDate(acta.fecha_registro));
+    setCodigoPontonActa(String(acta.codigo_ponton || ''));
     setRegion(acta.region || '');
     setLocalidad(acta.localidad || '');
     setTecnico1(acta.tecnico_1 || '');
     setFirmaTecnico1(acta.firma_tecnico_1 || '');
     setTecnico2(acta.tecnico_2 || '');
     setFirmaTecnico2(acta.firma_tecnico_2 || '');
+    const extrasFirmas = parseFirmasTecnicosAdicionales(acta.firmas_tecnicos_adicionales);
+    setFirmasTecnicosExtra(extrasFirmas);
+    setTecnicosAsignadosExtra(extrasFirmas.map((item) => item.nombre));
     setRecepcionaNombre(acta.recepciona_nombre || '');
     setFirmaRecepciona(acta.firma_recepciona || '');
     setEquiposConsiderados(acta.equipos_considerados || '');
     setCentroOrigenTraslado(acta.centro_origen_traslado || '');
+    setTipoRegistroInstalacion(
+      String(acta.tipo_instalacion || '').toLowerCase() === 'reapuntamiento' ? 'reapuntamiento' : 'instalacion'
+    );
     setArmadoSeleccionadoId(Number(acta.armado_id || 0) || null);
     const clienteIdFromActa = Number(acta.cliente_id || 0) || null;
     const centroFromFiltro = centrosFiltro.find((c) => Number(c.id_centro ?? c.id ?? 0) === Number(centroId || 0));
@@ -1165,23 +1539,28 @@ export default function InformesScreen() {
     setSaving(true);
     const payload = {
       centro_id: centroIdForm,
+      actividad_id: Number(actividadAsignadaActiva?.id_actividad || 0) || null,
       fecha_registro: fechaRegistro,
+      codigo_ponton: codigoPontonActa || null,
       region,
       localidad,
       tecnico_1: tecnico1,
       firma_tecnico_1: firmaTecnico1,
       tecnico_2: tecnico2,
       firma_tecnico_2: firmaTecnico2,
+      firmas_tecnicos_adicionales: firmasTecnicosExtra,
       recepciona_nombre: recepcionaNombre,
       firma_recepciona: firmaRecepciona,
       equipos_considerados: equiposConsiderados,
       centro_origen_traslado: centroOrigenTraslado,
       armado_id: armadoSeleccionadoId,
+      tipo_instalacion: tipoRegistroInstalacion,
     };
     try {
       if (editId) await updateActaEntrega(editId, payload);
       else await createActaEntrega(payload);
       await cargarActas();
+      await cargarActividadesAsignadas();
       setShowEditor(false);
       resetForm();
       Alert.alert('Informes', 'Acta guardada correctamente.');
@@ -1237,6 +1616,9 @@ export default function InformesScreen() {
       setArmadoSeleccionadoId(armadoId);
       setShowArmadosModal(false);
       setVinculoActaId(null);
+      if (permisoCompletado) {
+        await marcarActividadFinalizadaSiCorresponde();
+      }
       Alert.alert('Instalacion', 'Vinculacion guardada.');
     } catch (error: any) {
       const backendMsg =
@@ -1266,19 +1648,38 @@ export default function InformesScreen() {
   const guardarFirma = (signature: string) => {
     if (firmaTarget === 'tecnico1') setFirmaTecnico1(signature);
     if (firmaTarget === 'tecnico2') setFirmaTecnico2(signature);
+    if (firmaTarget === 'tecnico_extra' && firmaExtraIndex !== null) {
+      setFirmasTecnicosExtra((prev) =>
+        prev.map((item, idx) => (idx === firmaExtraIndex ? { ...item, firma: signature } : item))
+      );
+    }
     if (firmaTarget === 'recepciona') setFirmaRecepciona(signature);
     if (firmaTarget === 'perm_recepciona') setPermFirmaRecepciona(signature);
     if (firmaTarget === 'perm_tecnico1') setPermFirmaTecnico1(signature);
     if (firmaTarget === 'perm_tecnico2') setPermFirmaTecnico2(signature);
     setFirmaModalVisible(false);
     setFirmaTarget(null);
+    setFirmaExtraIndex(null);
   };
 
   const limpiarFirma = (
-    target: 'tecnico1' | 'tecnico2' | 'recepciona' | 'perm_recepciona' | 'perm_tecnico1' | 'perm_tecnico2'
+    target:
+      | 'tecnico1'
+      | 'tecnico2'
+      | 'tecnico_extra'
+      | 'recepciona'
+      | 'perm_recepciona'
+      | 'perm_tecnico1'
+      | 'perm_tecnico2',
+    extraIndex?: number
   ) => {
     if (target === 'tecnico1') setFirmaTecnico1('');
     if (target === 'tecnico2') setFirmaTecnico2('');
+    if (target === 'tecnico_extra' && typeof extraIndex === 'number') {
+      setFirmasTecnicosExtra((prev) =>
+        prev.map((item, idx) => (idx === extraIndex ? { ...item, firma: '' } : item))
+      );
+    }
     if (target === 'recepciona') setFirmaRecepciona('');
     if (target === 'perm_recepciona') setPermFirmaRecepciona('');
     if (target === 'perm_tecnico1') setPermFirmaTecnico1('');
@@ -1300,6 +1701,16 @@ export default function InformesScreen() {
     setShowPermFechaSalidaPicker(false);
     if (selectedDate) {
       setPermFechaSalida(
+        `${selectedDate.getFullYear()}-${String(selectedDate.getMonth() + 1).padStart(2, '0')}-${String(
+          selectedDate.getDate()
+        ).padStart(2, '0')}`
+      );
+    }
+  };
+  const handleActaFechaChange = (_event: DateTimePickerEvent, selectedDate?: Date) => {
+    setShowActaFechaPicker(false);
+    if (selectedDate) {
+      setFechaRegistro(
         `${selectedDate.getFullYear()}-${String(selectedDate.getMonth() + 1).padStart(2, '0')}-${String(
           selectedDate.getDate()
         ).padStart(2, '0')}`
@@ -1336,26 +1747,130 @@ export default function InformesScreen() {
           </View>
         </View>
 
-        {moduloInforme === 'instalacion' && (
+        <View style={styles.card}>
+          <View style={styles.assignedHeader}>
+            <Text style={styles.sectionTitle}>Trabajos de terreno</Text>
+            {loadingActividadesAsignadas ? <ActivityIndicator size="small" color="#1d4ed8" /> : null}
+          </View>
+          <Text style={styles.rowMeta}>
+            Programados: {actividadesProgramadas.length} | En proceso: {actividadesEnProceso.length} | Completados: {actividadesCompletadas.length}
+          </Text>
+
+          {!loadingActividadesAsignadas && !actividadesAsignadasFiltradas.length ? (
+            <Text style={styles.rowMeta}>No hay actividades asignadas para este modulo.</Text>
+          ) : null}
+          {!loadingActividadesAsignadas && !actividadesAsignadasFiltradas.length && !!actividadesAsignadas.length ? (
+            <Text style={styles.rowMeta}>
+              Tienes {actividadesAsignadas.length} actividad(es) asignada(s) en otro modulo.
+            </Text>
+          ) : null}
+
+          {!!actividadesProgramadas.length ? (
+            <Text style={styles.assignedSectionTitle}>Programados</Text>
+          ) : null}
+          {actividadesProgramadas.map((actividad, idx) => {
+            const id = Number(actividad.id_actividad || 0);
+            const centroNombre = String(actividad.centro?.nombre || `Centro ${actividad.centro_id || '-'}`);
+            const clienteNombre = String(actividad.centro?.cliente || '-');
+            const esActiva = Number(actividadAsignadaActiva?.id_actividad || 0) === id;
+            return (
+              <Pressable
+                key={`prog-${id || idx}`}
+                style={[styles.assignedItem, esActiva && styles.assignedItemActive]}
+                onPress={() => aplicarActividadAsignada(actividad)}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.assignedItemTitle}>{centroNombre}</Text>
+                  <Text style={styles.assignedItemMeta}>
+                    {String(actividad.area || '-')} | {clienteNombre} | {formatDate(actividad.fecha_inicio)}
+                  </Text>
+                </View>
+                <View style={[styles.assignedActionPill, esActiva && styles.assignedActionPillActive]}>
+                  <Ionicons
+                    name={esActiva ? 'checkmark-circle' : 'play-circle-outline'}
+                    size={14}
+                    color={esActiva ? '#166534' : '#1d4ed8'}
+                  />
+                  <Text style={[styles.assignedActionText, esActiva && styles.assignedActionTextActive]}>
+                    {esActiva ? 'Seleccionado' : 'Usar'}
+                  </Text>
+                </View>
+              </Pressable>
+            );
+          })}
+
+	          {mostrarAsignadasEnProceso && !!actividadesEnProceso.length ? (
+	            <Text style={styles.assignedSectionTitle}>En proceso</Text>
+	          ) : null}
+	          {mostrarAsignadasEnProceso && actividadesEnProceso.map((actividad, idx) => {
+            const id = Number(actividad.id_actividad || 0);
+            const centroNombre = String(actividad.centro?.nombre || `Centro ${actividad.centro_id || '-'}`);
+            const clienteNombre = String(actividad.centro?.cliente || '-');
+            const esActiva = Number(actividadAsignadaActiva?.id_actividad || 0) === id;
+            return (
+              <Pressable
+                key={`proc-${id || idx}`}
+                style={[styles.assignedItem, styles.assignedItemProgress, esActiva && styles.assignedItemActive]}
+                onPress={() => aplicarActividadAsignada(actividad)}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.assignedItemTitle}>{centroNombre}</Text>
+                  <Text style={styles.assignedItemMeta}>
+                    {String(actividad.area || '-')} | {clienteNombre} | {formatDate(actividad.fecha_inicio)}
+                  </Text>
+                </View>
+                <View style={[styles.assignedActionPill, styles.assignedActionPillProgress]}>
+                  <Ionicons name="sync-outline" size={14} color="#92400e" />
+                  <Text style={[styles.assignedActionText, styles.assignedActionTextProgress]}>Continuar</Text>
+                </View>
+              </Pressable>
+            );
+          })}
+
+	          {mostrarAsignadasCompletadas && !!actividadesCompletadas.length ? (
+	            <Text style={styles.assignedSectionTitle}>Completados</Text>
+	          ) : null}
+	          {mostrarAsignadasCompletadas && actividadesCompletadas.slice(0, 4).map((actividad, idx) => {
+            const id = Number(actividad.id_actividad || 0);
+            const centroNombre = String(actividad.centro?.nombre || `Centro ${actividad.centro_id || '-'}`);
+            const clienteNombre = String(actividad.centro?.cliente || '-');
+            return (
+              <View key={`done-${id || idx}`} style={[styles.assignedItem, styles.assignedItemDone]}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.assignedItemTitle}>{centroNombre}</Text>
+                  <Text style={styles.assignedItemMeta}>
+                    {String(actividad.area || '-')} | {clienteNombre} | {formatDate(actividad.fecha_inicio)}
+                  </Text>
+                </View>
+                <View style={[styles.assignedActionPill, styles.assignedActionPillDone]}>
+                  <Ionicons name="checkmark-circle" size={14} color="#166534" />
+                  <Text style={[styles.assignedActionText, styles.assignedActionTextDone]}>Finalizado</Text>
+                </View>
+              </View>
+            );
+          })}
+        </View>
+
+        {moduloInforme === 'instalacion' && canCrearInstalacionManual && (
           <View style={styles.card}>
-            <Text style={styles.label}>Instalacion</Text>
+            <Text style={styles.label}>{nombreRegistroInstalacion}</Text>
             <Pressable
               style={styles.addInstallBtn}
               onPress={() => {
-                // Nuevo ingreso: limpiar cualquier contexto previo antes de mostrar la tarjeta.
+                // Nuevo ingreso manual: limpiar contexto previo y pedir tipo (instalacion/reapuntamiento).
                 resetForm();
                 resetPermisoForm();
                 setEditId(null);
                 setShowEditor(false);
                 setShowPermisoModal(false);
                 setMantencionEditandoId(null);
+                setActividadAsignadaActiva(null);
+                setTecnicosAsignadosExtra([]);
                 setPermClienteId(null);
                 setPermCentroId(null);
                 setPermBuscarCentro('');
                 setClienteIdForm(null);
                 setCentroIdForm(null);
-                setMostrarInstalacionForm(true);
                 setTipoInstalacion('acta_entrega');
+                setShowInstalacionTipoModal(true);
               }}>
               <Ionicons name="add-circle-outline" size={16} color="#1d4ed8" />
               <Text style={styles.addInstallBtnText}>Agregar instalacion</Text>
@@ -1363,16 +1878,40 @@ export default function InformesScreen() {
           </View>
         )}
 
-        {moduloInforme === 'instalacion' && instalacionesCompletadas.length > 0 && (
+        {moduloInforme === 'instalacion' && instalacionesEnProceso.length > 0 && (
           <View style={styles.card}>
-            <Text style={styles.sectionTitle}>Instalaciones completadas</Text>
-            {instalacionesCompletadas.map((item) => (
-              <View key={item.centroId} style={styles.installDoneCard}>
+            <Text style={styles.sectionTitle}>Instalaciones en proceso</Text>
+            {instalacionesEnProceso.map((item) => (
+              <View key={`proc-inst-${item.actaId || item.centroId}`} style={[styles.installDoneCard, styles.installInProgressCard]}>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.rowTitle}>{item.centro}</Text>
                   <Text style={styles.rowSubtitle}>{item.cliente}</Text>
+                  <View style={styles.installTypeBadgeRow}>
+                    <View
+                      style={[
+                        styles.installTypeBadge,
+                        item.tipoInstalacion === 'reapuntamiento'
+                          ? styles.installTypeBadgeReap
+                          : styles.installTypeBadgeInstalacion,
+                      ]}>
+                      <Ionicons
+                        name={item.tipoInstalacion === 'reapuntamiento' ? 'locate-outline' : 'construct-outline'}
+                        size={11}
+                        color={item.tipoInstalacion === 'reapuntamiento' ? '#7c2d12' : '#1e3a8a'}
+                      />
+                      <Text
+                        style={[
+                          styles.installTypeBadgeText,
+                          item.tipoInstalacion === 'reapuntamiento'
+                            ? styles.installTypeBadgeTextReap
+                            : styles.installTypeBadgeTextInstalacion,
+                        ]}>
+                        {item.tipoInstalacion === 'reapuntamiento' ? 'Reapuntamiento' : 'Instalacion'}
+                      </Text>
+                    </View>
+                  </View>
                   <Text style={styles.rowMeta}>
-                    Acta: {formatDate(item.fechaActa)} | Permiso: {formatDate(item.fechaPermiso)}
+                    Acta: {formatDate(item.fechaActa)} | Permiso: Pendiente
                   </Text>
                 </View>
                 <View style={styles.rowActions}>
@@ -1380,6 +1919,117 @@ export default function InformesScreen() {
                     <Pressable
                       style={styles.actionBtn}
                       onPress={() => {
+                        setTipoRegistroInstalacion(item.tipoInstalacion === 'reapuntamiento' ? 'reapuntamiento' : 'instalacion');
+                        setTipoInstalacion('acta_entrega');
+                        const acta = actas.find((a) => Number(a.id_acta_entrega || 0) === Number(item.actaId || 0));
+                        if (acta) abrirActa(acta);
+                      }}>
+                      <Ionicons name="create-outline" size={16} color="#1d4ed8" />
+                    </Pressable>
+                  ) : null}
+                  <Pressable
+                    style={styles.actionBtn}
+                    onPress={() => {
+                      const clientePorNombre = clientes.find(
+                        (c) =>
+                          String(c.nombre || c.razon_social || '').trim().toLowerCase() ===
+                          String(item.cliente || '').trim().toLowerCase()
+                      );
+                      const clienteId = Number(clientePorNombre?.id_cliente ?? clientePorNombre?.id ?? 0) || null;
+                      if (clienteId) setPermClienteId(clienteId);
+                      setPermCentroId(item.centroId);
+                      setTipoInstalacion('informe_intervencion');
+                      setPermisoContexto('instalacion');
+                      setMantencionEditandoId(null);
+                      setShowPermisoModal(true);
+                    }}>
+                    <Ionicons name="clipboard-outline" size={16} color="#1d4ed8" />
+                  </Pressable>
+                  <Pressable
+                    style={[styles.actionBtn, !item.hasArmadoVinculado && styles.actionBtnWarn]}
+                    onPress={async () => {
+                      setTipoRegistroInstalacion(item.tipoInstalacion === 'reapuntamiento' ? 'reapuntamiento' : 'instalacion');
+                      const clientePorNombre = clientes.find(
+                        (c) =>
+                          String(c.nombre || c.razon_social || '').trim().toLowerCase() ===
+                          String(item.cliente || '').trim().toLowerCase()
+                      );
+                      const clienteId = Number(clientePorNombre?.id_cliente ?? clientePorNombre?.id ?? 0) || null;
+                      if (clienteId) setPermClienteId(clienteId);
+                      setPermCentroId(item.centroId);
+                      setMostrarInstalacionForm(true);
+                      setTipoInstalacion('acta_entrega');
+                      setArmadoSeleccionadoId(item.armadoId || null);
+                      setVinculoActaId(item.actaId || null);
+                      try {
+                        const lista = await getArmados({ estado: 'finalizado', centro_id: item.centroId });
+                        const arr = Array.isArray(lista) ? lista : [];
+                        const finalizados = arr.filter(
+                          (a) =>
+                            String(a?.estado || '').toLowerCase() === 'finalizado' &&
+                            Number(a?.centro_id || 0) === Number(item.centroId)
+                        );
+                        setArmadosFinalizadosCentro(finalizados);
+                        if (!finalizados.length) {
+                          Alert.alert('Instalacion', 'Este centro no tiene armados finalizados para vincular.');
+                          return;
+                        }
+                        setShowArmadosModal(true);
+                      } catch {
+                        Alert.alert('Instalacion', 'No se pudieron cargar los armados finalizados.');
+                      }
+                    }}>
+                    <Ionicons name="link-outline" size={16} color={!item.hasArmadoVinculado ? '#ffffff' : '#1d4ed8'} />
+                  </Pressable>
+                  <Ionicons name="time-outline" size={18} color="#d97706" />
+                </View>
+              </View>
+            ))}
+          </View>
+        )}
+
+        {moduloInforme === 'instalacion' && instalacionesCompletadas.length > 0 && (
+          <View style={styles.card}>
+            <Text style={styles.sectionTitle}>Instalaciones completadas</Text>
+            {instalacionesCompletadas.map((item) => (
+                <View key={item.centroId} style={styles.installDoneCard}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.rowTitle}>{item.centro}</Text>
+                    <Text style={styles.rowSubtitle}>{item.cliente}</Text>
+                    <View style={styles.installTypeBadgeRow}>
+                      <View
+                        style={[
+                          styles.installTypeBadge,
+                          item.tipoInstalacion === 'reapuntamiento'
+                            ? styles.installTypeBadgeReap
+                            : styles.installTypeBadgeInstalacion,
+                        ]}>
+                        <Ionicons
+                          name={item.tipoInstalacion === 'reapuntamiento' ? 'locate-outline' : 'construct-outline'}
+                          size={11}
+                          color={item.tipoInstalacion === 'reapuntamiento' ? '#7c2d12' : '#1e3a8a'}
+                        />
+                        <Text
+                          style={[
+                            styles.installTypeBadgeText,
+                            item.tipoInstalacion === 'reapuntamiento'
+                              ? styles.installTypeBadgeTextReap
+                              : styles.installTypeBadgeTextInstalacion,
+                          ]}>
+                          {item.tipoInstalacion === 'reapuntamiento' ? 'Reapuntamiento' : 'Instalacion'}
+                        </Text>
+                      </View>
+                    </View>
+                    <Text style={styles.rowMeta}>
+                      {item.tipoInstalacion === 'reapuntamiento' ? 'Reapuntamiento' : 'Instalacion'} | Acta: {formatDate(item.fechaActa)} | Permiso: {formatDate(item.fechaPermiso)}
+                    </Text>
+                  </View>
+                <View style={styles.rowActions}>
+                  {item.actaId ? (
+                    <Pressable
+                      style={styles.actionBtn}
+                      onPress={() => {
+                        setTipoRegistroInstalacion(item.tipoInstalacion === 'reapuntamiento' ? 'reapuntamiento' : 'instalacion');
                         setTipoInstalacion('acta_entrega');
                         const acta = actas.find((a) => Number(a.id_acta_entrega || 0) === Number(item.actaId || 0));
                         if (acta) abrirActa(acta);
@@ -1410,6 +2060,7 @@ export default function InformesScreen() {
                   <Pressable
                     style={[styles.actionBtn, !item.hasArmadoVinculado && styles.actionBtnWarn]}
                     onPress={async () => {
+                      setTipoRegistroInstalacion(item.tipoInstalacion === 'reapuntamiento' ? 'reapuntamiento' : 'instalacion');
                       const clientePorNombre = clientes.find(
                         (c) =>
                           String(c.nombre || c.razon_social || '').trim().toLowerCase() ===
@@ -1451,7 +2102,16 @@ export default function InformesScreen() {
 
         {moduloInforme === 'instalacion' && mostrarInstalacionForm && (
           <View style={styles.card}>
-            <Text style={styles.label}>Instalacion</Text>
+            <View style={styles.installHeaderRow}>
+              <Text style={styles.label}>{nombreRegistroInstalacion}</Text>
+              <Pressable
+                style={styles.installCloseBtn}
+                onPress={() => setMostrarInstalacionForm(false)}
+              >
+                <Ionicons name="close" size={14} color="#334155" />
+                <Text style={styles.installCloseBtnText}>Cerrar</Text>
+              </Pressable>
+            </View>
             <View style={styles.stepperRow}>
               <View style={styles.stepItem}>
                 <View style={[styles.stepDot, instalacionSeleccionada && styles.stepDotDone]}>
@@ -1464,7 +2124,9 @@ export default function InformesScreen() {
                 <View style={[styles.stepDot, actaCompletada && styles.stepDotDone]}>
                   <Ionicons name={actaCompletada ? 'checkmark' : 'reader-outline'} size={12} color={actaCompletada ? '#166534' : '#64748b'} />
                 </View>
-                <Text style={[styles.stepText, actaCompletada && styles.stepTextDone]}>Acta</Text>
+                <Text style={[styles.stepText, actaCompletada && styles.stepTextDone]}>
+                  {tipoRegistroInstalacion === 'reapuntamiento' ? 'Reap.' : 'Acta'}
+                </Text>
               </View>
               <View style={styles.stepLine} />
               <View style={styles.stepItem}>
@@ -1475,52 +2137,31 @@ export default function InformesScreen() {
               </View>
             </View>
 
-            <View style={styles.inputBlock}>
-              <Text style={styles.selectLabel}>Cliente</Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.pillsRow}>
-                {clientes.map((cl) => {
-                  const id = Number(cl.id_cliente ?? cl.id ?? 0);
-                  const active = id === permClienteId;
-                  return (
-                    <Pressable key={id} style={[styles.pill, active && styles.pillActive]} onPress={() => { setPermClienteId(id); setPermCentroId(null); setPermBuscarCentro(''); }}>
-                      <Text style={[styles.pillText, active && styles.pillTextActive]}>{cl.nombre || cl.razon_social || `Cliente ${id}`}</Text>
-                    </Pressable>
-                  );
-                })}
-              </ScrollView>
-            </View>
-            <View style={styles.inputBlock}>
-              <Text style={styles.selectLabel}>Centro</Text>
-              {permCentroSel ? (
-                <View style={styles.selectedCenterBox}>
-                  <Text style={styles.selectedCenterText}>{permCentroSel.nombre || 'Centro seleccionado'}</Text>
-                  <Pressable style={styles.changeCenterBtn} onPress={() => { setPermCentroId(null); setPermBuscarCentro(''); }}>
-                    <Text style={styles.changeCenterBtnText}>Cambiar</Text>
-                  </Pressable>
-                </View>
-              ) : (
-                <>
-                  <TextInput style={styles.input} value={permBuscarCentro} onChangeText={setPermBuscarCentro} placeholder="Buscar centro..." />
-                  <ScrollView style={styles.centerDropdown} nestedScrollEnabled>
-                    {permCentrosFiltrados.map((ce) => {
-                      const id = Number(ce.id_centro ?? ce.id ?? 0);
-                      return (
-                        <Pressable key={id} style={styles.centerOption} onPress={() => setPermCentroId(id)}>
-                          <Text style={styles.centerOptionText}>{ce.nombre || `Centro ${id}`}</Text>
-                        </Pressable>
-                      );
-                    })}
-                    {!permCentrosFiltrados.length && (
-                      <Text style={styles.dropdownEmptyText}>
-                        {permClienteId ? 'Sin centros para este cliente.' : 'Selecciona un cliente para ver sus centros.'}
-                      </Text>
-                    )}
-                  </ScrollView>
-                </>
-              )}
-            </View>
-
             <View style={styles.installSummaryBox}>
+              <View style={styles.installTypeBadgeRow}>
+                <View
+                  style={[
+                    styles.installTypeBadge,
+                    tipoRegistroInstalacion === 'reapuntamiento'
+                      ? styles.installTypeBadgeReap
+                      : styles.installTypeBadgeInstalacion,
+                  ]}>
+                  <Ionicons
+                    name={tipoRegistroInstalacion === 'reapuntamiento' ? 'locate-outline' : 'construct-outline'}
+                    size={11}
+                    color={tipoRegistroInstalacion === 'reapuntamiento' ? '#7c2d12' : '#1e3a8a'}
+                  />
+                  <Text
+                    style={[
+                      styles.installTypeBadgeText,
+                      tipoRegistroInstalacion === 'reapuntamiento'
+                        ? styles.installTypeBadgeTextReap
+                        : styles.installTypeBadgeTextInstalacion,
+                    ]}>
+                    {tipoRegistroInstalacion === 'reapuntamiento' ? 'Reapuntamiento' : 'Instalacion'}
+                  </Text>
+                </View>
+              </View>
               <Text style={styles.installSummaryTitle}>{permCentroSel?.nombre || 'Instalacion sin centro seleccionado'}</Text>
               <Text style={styles.installSummaryMeta}>
                 {clientes.find((c) => Number(c.id_cliente ?? c.id ?? 0) === Number(permClienteId ?? 0))?.nombre || '-'}
@@ -1587,7 +2228,7 @@ export default function InformesScreen() {
                   if (instalacionSeleccionada) nuevaActaDesdeInstalacion();
                   else nuevaActa();
                 }}>
-                <Text style={styles.saveBtnText}>Crear acta de entrega</Text>
+                <Text style={styles.saveBtnText}>Crear {nombreDocumentoActa.toLowerCase()}</Text>
               </Pressable>
             ) : !permisoCompletado ? (
               <View />
@@ -1628,7 +2269,7 @@ export default function InformesScreen() {
                     styles.tabBtnText,
                     actaCompletada ? styles.tabBtnTextDone : (tipoInstalacion === 'acta_entrega' && styles.tabBtnTextActive),
                   ]}>
-                  Acta entrega
+                  {tipoRegistroInstalacion === 'reapuntamiento' ? 'Acta reap.' : 'Acta entrega'}
                 </Text>
               </Pressable>
               <Pressable
@@ -1675,7 +2316,7 @@ export default function InformesScreen() {
             </View>
             {!actaCompletada ? (
               <Text style={[styles.flowHint, styles.flowHintWarn]}>
-                Paso 1: completa Acta de entrega. Paso 2: se habilita Permiso de trabajo.
+                Paso 1: completa {nombreDocumentoActa}. Paso 2: se habilita Permiso de trabajo.
               </Text>
             ) : null}
             {actaCompletada && !permisoCompletado ? (
@@ -1831,66 +2472,97 @@ export default function InformesScreen() {
               <Pressable onPress={() => { setShowEditor(false); resetForm(); }}><Ionicons name="close" size={20} color="#334155" /></Pressable>
             </View>
             <ScrollView showsVerticalScrollIndicator={false}>
+              {actividadAsignadaActiva ? (
+                <View style={styles.assignedLockedBox}>
+                  <Ionicons name="calendar-outline" size={14} color="#1d4ed8" />
+                  <Text style={styles.assignedLockedText}>
+                    Actividad programada: {actividadAsignadaActiva.nombre_actividad || actividadAsignadaActiva.area || 'Trabajo asignado'}
+                  </Text>
+                </View>
+              ) : null}
               <View style={styles.inputBlock}>
                 <Text style={styles.selectLabel}>Cliente</Text>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.pillsRow}>
-                  {clientes.map((cl) => {
-                    const id = Number(cl.id_cliente ?? cl.id ?? 0);
-                    const active = id === clienteIdForm;
-                    return (
-                      <Pressable
-                        key={id}
-                        style={[styles.pill, active && styles.pillActive]}
-                        onPress={() => {
-                          setClienteIdForm(id);
-                          setCentroIdForm(null);
-                          setBuscarCentroForm('');
-                        }}>
-                        <Text style={[styles.pillText, active && styles.pillTextActive]}>{cl.nombre || cl.razon_social || `Cliente ${id}`}</Text>
-                      </Pressable>
-                    );
-                  })}
-                </ScrollView>
+                {actividadAsignadaActiva ? (
+                  <TextInput
+                    style={[styles.input, styles.inputDisabled]}
+                    editable={false}
+                    value={clienteForm?.nombre || clienteForm?.razon_social || actividadAsignadaActiva.centro?.cliente || ''}
+                  />
+                ) : (
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.pillsRow}>
+                    {clientes.map((cl) => {
+                      const id = Number(cl.id_cliente ?? cl.id ?? 0);
+                      const active = id === clienteIdForm;
+                      return (
+                        <Pressable
+                          key={id}
+                          style={[styles.pill, active && styles.pillActive]}
+                          onPress={() => {
+                            setClienteIdForm(id);
+                            setCentroIdForm(null);
+                            setBuscarCentroForm('');
+                          }}>
+                          <Text style={[styles.pillText, active && styles.pillTextActive]}>{cl.nombre || cl.razon_social || `Cliente ${id}`}</Text>
+                        </Pressable>
+                      );
+                    })}
+                  </ScrollView>
+                )}
               </View>
               <View style={styles.inputBlock}>
                 <Text style={styles.selectLabel}>Centro</Text>
                 {centroSelForm ? (
                   <View style={styles.selectedCenterBox}>
                     <Text style={styles.selectedCenterText}>{centroSelForm.nombre || 'Centro seleccionado'}</Text>
-                    <Pressable
-                      style={styles.changeCenterBtn}
-                      onPress={() => {
-                        setCentroIdForm(null);
-                        setBuscarCentroForm('');
-                      }}>
-                      <Text style={styles.changeCenterBtnText}>Cambiar</Text>
-                    </Pressable>
+                    {!actividadAsignadaActiva ? (
+                      <Pressable
+                        style={styles.changeCenterBtn}
+                        onPress={() => {
+                          setCentroIdForm(null);
+                          setBuscarCentroForm('');
+                        }}>
+                        <Text style={styles.changeCenterBtnText}>Cambiar</Text>
+                      </Pressable>
+                    ) : null}
                   </View>
                 ) : (
                   <>
-                    <TextInput style={styles.input} value={buscarCentroForm} onChangeText={setBuscarCentroForm} placeholder="Buscar centro..." />
-                    <ScrollView style={styles.centerDropdown} nestedScrollEnabled>
-                      {centrosFormFiltrados.map((ce) => {
-                        const id = Number(ce.id_centro ?? ce.id ?? 0);
-                        const active = id === centroIdForm;
-                        return (
-                          <Pressable key={id} style={[styles.centerOption, active && styles.centerOptionActive]} onPress={() => setCentroIdForm(id)}>
-                            <Text style={[styles.centerOptionText, active && styles.centerOptionTextActive]}>{ce.nombre || `Centro ${id}`}</Text>
-                          </Pressable>
-                        );
-                      })}
-                      {!centrosFormFiltrados.length && (
-                        <Text style={styles.dropdownEmptyText}>
-                          {clienteIdForm ? 'Sin centros para este cliente.' : 'Selecciona un cliente para ver sus centros.'}
-                        </Text>
-                      )}
-                    </ScrollView>
+                    {actividadAsignadaActiva ? (
+                      <TextInput
+                        style={[styles.input, styles.inputDisabled]}
+                        editable={false}
+                        value={actividadAsignadaActiva.centro?.nombre || ''}
+                      />
+                    ) : (
+                      <>
+                        <TextInput style={styles.input} value={buscarCentroForm} onChangeText={setBuscarCentroForm} placeholder="Buscar centro..." />
+                        <ScrollView style={styles.centerDropdown} nestedScrollEnabled>
+                          {centrosFormFiltrados.map((ce) => {
+                            const id = Number(ce.id_centro ?? ce.id ?? 0);
+                            const active = id === centroIdForm;
+                            return (
+                              <Pressable key={id} style={[styles.centerOption, active && styles.centerOptionActive]} onPress={() => setCentroIdForm(id)}>
+                                <Text style={[styles.centerOptionText, active && styles.centerOptionTextActive]}>{ce.nombre || `Centro ${id}`}</Text>
+                              </Pressable>
+                            );
+                          })}
+                          {!centrosFormFiltrados.length && (
+                            <Text style={styles.dropdownEmptyText}>
+                              {clienteIdForm ? 'Sin centros para este cliente.' : 'Selecciona un cliente para ver sus centros.'}
+                            </Text>
+                          )}
+                        </ScrollView>
+                      </>
+                    )}
                   </>
                 )}
               </View>
               <View style={styles.row}>
                 <View style={styles.inputCol}><Text style={styles.selectLabel}>Empresa</Text><TextInput style={[styles.input, styles.inputDisabled]} editable={false} value={clienteForm?.nombre || clienteForm?.razon_social || ''} /></View>
-                <View style={styles.inputCol}><Text style={styles.selectLabel}>Codigo ponton</Text><TextInput style={[styles.input, styles.inputDisabled]} editable={false} value={centroSelForm?.nombre_ponton || ''} /></View>
+                <View style={styles.inputCol}>
+                  <Text style={styles.selectLabel}>Codigo ponton</Text>
+                  <TextInput style={styles.input} value={codigoPontonActa} onChangeText={setCodigoPontonActa} placeholder="Codigo ponton" />
+                </View>
               </View>
               <View style={styles.row}>
                 <View style={styles.inputCol}><Text style={styles.selectLabel}>Region (Area)</Text><TextInput style={[styles.input, styles.inputDisabled]} editable={false} value={region} /></View>
@@ -1908,7 +2580,13 @@ export default function InformesScreen() {
 
               <View style={styles.personBlock}>
                 <Text style={styles.personTitle}>Tecnico 1</Text>
-                <TextInput style={styles.input} value={tecnico1} onChangeText={setTecnico1} placeholder="Nombre tecnico 1" />
+                {nombresBloqueadosPorProgramacion ? (
+                  <View style={[styles.input, styles.inputDisabled, styles.nameReadonlyBox]}>
+                    <Text style={styles.nameReadonlyText}>{tecnico1 || 'Sin tecnico asignado'}</Text>
+                  </View>
+                ) : (
+                  <TextInput style={styles.input} value={tecnico1} onChangeText={setTecnico1} placeholder="Nombre tecnico 1" />
+                )}
                 <View style={styles.firmaActions}>
                   <Pressable style={styles.firmaBtn} onPress={() => abrirFirma('tecnico1')}><Text style={styles.firmaBtnText}>{firmaTecnico1 ? 'Editar firma' : 'Firmar'}</Text></Pressable>
                   {!!firmaTecnico1 && <Pressable style={styles.firmaClearBtn} onPress={() => limpiarFirma('tecnico1')}><Ionicons name="trash-outline" size={14} color="#dc2626" /></Pressable>}
@@ -1918,17 +2596,61 @@ export default function InformesScreen() {
 
               <View style={styles.personBlock}>
                 <Text style={styles.personTitle}>Tecnico 2</Text>
-                <TextInput style={styles.input} value={tecnico2} onChangeText={setTecnico2} placeholder="Nombre tecnico 2" />
+                {nombresBloqueadosPorProgramacion ? (
+                  <View style={[styles.input, styles.inputDisabled, styles.nameReadonlyBox]}>
+                    <Text style={styles.nameReadonlyText}>{tecnico2 || 'Sin ayudante asignado'}</Text>
+                  </View>
+                ) : (
+                  <TextInput style={styles.input} value={tecnico2} onChangeText={setTecnico2} placeholder="Nombre tecnico 2" />
+                )}
                 <View style={styles.firmaActions}>
                   <Pressable style={styles.firmaBtn} onPress={() => abrirFirma('tecnico2')}><Text style={styles.firmaBtnText}>{firmaTecnico2 ? 'Editar firma' : 'Firmar'}</Text></Pressable>
                   {!!firmaTecnico2 && <Pressable style={styles.firmaClearBtn} onPress={() => limpiarFirma('tecnico2')}><Ionicons name="trash-outline" size={14} color="#dc2626" /></Pressable>}
                 </View>
                 {!!firmaTecnico2 && <Image source={{ uri: firmaTecnico2 }} style={styles.firmaPreview} resizeMode="contain" />}
               </View>
+              {!!tecnicosAsignadosExtra.length && (
+                <View style={styles.additionalTechWrap}>
+                  <Text style={styles.additionalTechTitle}>Tecnicos adicionales asignados</Text>
+                  {tecnicosAsignadosExtra.map((name, idx) => {
+                    const firma = firmasTecnicosExtra[idx]?.firma || '';
+                    return (
+                      <View key={`${name}-${idx}`} style={styles.personBlock}>
+                        <Text style={styles.personTitle}>{`Tecnico ${idx + 3}`}</Text>
+                        <View style={[styles.input, styles.inputDisabled, styles.nameReadonlyBox]}>
+                          <Text style={styles.nameReadonlyText}>{name}</Text>
+                        </View>
+                        <View style={styles.firmaActions}>
+                          <Pressable
+                            style={styles.firmaBtn}
+                            onPress={() => {
+                              setFirmaExtraIndex(idx);
+                              abrirFirma('tecnico_extra');
+                            }}>
+                            <Text style={styles.firmaBtnText}>{firma ? 'Editar firma' : 'Firmar'}</Text>
+                          </Pressable>
+                          {!!firma && (
+                            <Pressable style={styles.firmaClearBtn} onPress={() => limpiarFirma('tecnico_extra', idx)}>
+                              <Ionicons name="trash-outline" size={14} color="#dc2626" />
+                            </Pressable>
+                          )}
+                        </View>
+                        {!!firma && <Image source={{ uri: firma }} style={styles.firmaPreview} resizeMode="contain" />}
+                      </View>
+                    );
+                  })}
+                </View>
+              )}
 
-              <View style={styles.personBlock}>
+              <View style={[styles.personBlock, styles.recepcionaBlock]}>
                 <Text style={styles.personTitle}>Recepciona</Text>
-                <TextInput style={styles.input} value={recepcionaNombre} onChangeText={setRecepcionaNombre} placeholder="Nombre quien recepciona" />
+                {nombresBloqueadosPorProgramacion && recepcionaNombre ? (
+                  <View style={[styles.input, styles.inputDisabled, styles.nameReadonlyBox]}>
+                    <Text style={styles.nameReadonlyText}>{recepcionaNombre}</Text>
+                  </View>
+                ) : (
+                  <TextInput style={styles.input} value={recepcionaNombre} onChangeText={setRecepcionaNombre} placeholder="Nombre quien recepciona" />
+                )}
                 <View style={styles.firmaActions}>
                   <Pressable style={styles.firmaBtn} onPress={() => abrirFirma('recepciona')}><Text style={styles.firmaBtnText}>{firmaRecepciona ? 'Editar firma' : 'Firmar'}</Text></Pressable>
                   {!!firmaRecepciona && <Pressable style={styles.firmaClearBtn} onPress={() => limpiarFirma('recepciona')}><Ionicons name="trash-outline" size={14} color="#dc2626" /></Pressable>}
@@ -1939,9 +2661,20 @@ export default function InformesScreen() {
               <View style={styles.row}>
                 <View style={styles.inputCol}>
                   <Text style={styles.selectLabel}>Fecha registro</Text>
-                  <TextInput style={styles.input} value={fechaRegistro} onChangeText={setFechaRegistro} placeholder="YYYY-MM-DD" />
+                  <Pressable style={styles.dateInput} onPress={() => setShowActaFechaPicker(true)}>
+                    <Text style={styles.dateInputText}>{fechaRegistro || 'Seleccionar fecha'}</Text>
+                    <Ionicons name="calendar-outline" size={16} color="#1d4ed8" />
+                  </Pressable>
                 </View>
               </View>
+              {showActaFechaPicker && (
+                <DateTimePicker
+                  value={inputDateToDate(fechaRegistro)}
+                  mode="date"
+                  display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                  onChange={handleActaFechaChange}
+                />
+              )}
               <View style={styles.inputBlock}>
                 <Text style={styles.selectLabel}>Los equipos considerados en este sistema, corresponden a</Text>
                 <TextInput style={[styles.input, styles.textArea]} value={equiposConsiderados} onChangeText={setEquiposConsiderados} multiline textAlignVertical="top" />
@@ -2048,6 +2781,47 @@ export default function InformesScreen() {
             <Pressable
               style={styles.tipoMantencionCancel}
               onPress={() => setShowRetiroTipoModal(false)}>
+              <Text style={styles.tipoMantencionCancelText}>Cancelar</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={showInstalacionTipoModal} animationType="fade" transparent>
+        <View style={styles.modalOverlay}>
+          <View style={styles.tipoMantencionCard}>
+            <Text style={styles.tipoMantencionTitle}>Tipo de registro</Text>
+            <Text style={styles.tipoMantencionHint}>Selecciona si registraras una instalacion o un reapuntamiento</Text>
+
+            <View style={styles.tipoMantencionActions}>
+              <Pressable
+                style={[styles.tipoMantencionBtn, styles.tipoMantencionBtnPrimary]}
+                onPress={() => {
+                  setTipoRegistroInstalacion('instalacion');
+                  setMostrarInstalacionForm(true);
+                  setShowInstalacionTipoModal(false);
+                }}>
+                <Ionicons name="construct-outline" size={16} color="#ffffff" />
+                <Text style={[styles.tipoMantencionBtnText, styles.tipoMantencionBtnTextPrimary]}>
+                  Instalacion
+                </Text>
+              </Pressable>
+
+              <Pressable
+                style={styles.tipoMantencionBtn}
+                onPress={() => {
+                  setTipoRegistroInstalacion('reapuntamiento');
+                  setMostrarInstalacionForm(true);
+                  setShowInstalacionTipoModal(false);
+                }}>
+                <Ionicons name="locate-outline" size={16} color="#1d4ed8" />
+                <Text style={styles.tipoMantencionBtnText}>Reapuntamiento</Text>
+              </Pressable>
+            </View>
+
+            <Pressable
+              style={styles.tipoMantencionCancel}
+              onPress={() => setShowInstalacionTipoModal(false)}>
               <Text style={styles.tipoMantencionCancelText}>Cancelar</Text>
             </Pressable>
           </View>
@@ -2254,63 +3028,95 @@ export default function InformesScreen() {
                 </View>
               ) : (
                 <View style={styles.inputBlock}>
+                  {actividadAsignadaActiva ? (
+                    <View style={styles.assignedLockedBox}>
+                      <Ionicons name="calendar-outline" size={14} color="#1d4ed8" />
+                      <Text style={styles.assignedLockedText}>
+                        Centro programado: {actividadAsignadaActiva.centro?.nombre || `Centro ${actividadAsignadaActiva.centro_id || '-'}`}
+                      </Text>
+                    </View>
+                  ) : null}
                   <Text style={styles.selectLabel}>Cliente</Text>
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.pillsRow}>
-                    {clientes.map((cl) => {
-                      const id = Number(cl.id_cliente ?? cl.id ?? 0);
-                      const active = id === permClienteId;
-                      return (
-                        <Pressable
-                          key={`mant-cl-${id}`}
-                          style={[styles.pill, active && styles.pillActive]}
-                          onPress={() => {
-                            setPermClienteId(id);
-                            setPermCentroId(null);
-                            setPermBuscarCentro('');
-                          }}>
-                          <Text style={[styles.pillText, active && styles.pillTextActive]}>
-                            {cl.nombre || cl.razon_social || `Cliente ${id}`}
-                          </Text>
-                        </Pressable>
-                      );
-                    })}
-                  </ScrollView>
+                  {actividadAsignadaActiva ? (
+                    <TextInput
+                      style={[styles.input, styles.inputDisabled]}
+                      editable={false}
+                      value={
+                        clientes.find((c) => Number(c.id_cliente ?? c.id ?? 0) === Number(permClienteId ?? 0))?.nombre ||
+                        actividadAsignadaActiva.centro?.cliente ||
+                        ''
+                      }
+                    />
+                  ) : (
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.pillsRow}>
+                      {clientes.map((cl) => {
+                        const id = Number(cl.id_cliente ?? cl.id ?? 0);
+                        const active = id === permClienteId;
+                        return (
+                          <Pressable
+                            key={`mant-cl-${id}`}
+                            style={[styles.pill, active && styles.pillActive]}
+                            onPress={() => {
+                              setPermClienteId(id);
+                              setPermCentroId(null);
+                              setPermBuscarCentro('');
+                            }}>
+                            <Text style={[styles.pillText, active && styles.pillTextActive]}>
+                              {cl.nombre || cl.razon_social || `Cliente ${id}`}
+                            </Text>
+                          </Pressable>
+                        );
+                      })}
+                    </ScrollView>
+                  )}
                   <Text style={[styles.selectLabel, { marginTop: 8 }]}>Centro</Text>
                   {permCentroSel ? (
                     <View style={styles.selectedCenterBox}>
                       <Text style={styles.selectedCenterText}>{permCentroSel.nombre || 'Centro seleccionado'}</Text>
-                      <Pressable
-                        style={styles.changeCenterBtn}
-                        onPress={() => {
-                          setPermCentroId(null);
-                          setPermBuscarCentro('');
-                        }}>
-                        <Text style={styles.changeCenterBtnText}>Cambiar</Text>
-                      </Pressable>
+                      {!actividadAsignadaActiva ? (
+                        <Pressable
+                          style={styles.changeCenterBtn}
+                          onPress={() => {
+                            setPermCentroId(null);
+                            setPermBuscarCentro('');
+                          }}>
+                          <Text style={styles.changeCenterBtnText}>Cambiar</Text>
+                        </Pressable>
+                      ) : null}
                     </View>
                   ) : (
                     <>
-                      <TextInput
-                        style={styles.input}
-                        value={permBuscarCentro}
-                        onChangeText={setPermBuscarCentro}
-                        placeholder="Buscar centro..."
-                      />
-                      <ScrollView style={styles.centerDropdown} nestedScrollEnabled>
-                        {permCentrosFiltrados.map((ce) => {
-                          const id = Number(ce.id_centro ?? ce.id ?? 0);
-                          return (
-                            <Pressable key={`mant-ce-${id}`} style={styles.centerOption} onPress={() => setPermCentroId(id)}>
-                              <Text style={styles.centerOptionText}>{ce.nombre || `Centro ${id}`}</Text>
-                            </Pressable>
-                          );
-                        })}
-                        {!permCentrosFiltrados.length && (
-                          <Text style={styles.dropdownEmptyText}>
-                            {permClienteId ? 'Sin centros para este cliente.' : 'Selecciona un cliente para ver sus centros.'}
-                          </Text>
-                        )}
-                      </ScrollView>
+                      {actividadAsignadaActiva ? (
+                        <TextInput
+                          style={[styles.input, styles.inputDisabled]}
+                          editable={false}
+                          value={actividadAsignadaActiva.centro?.nombre || ''}
+                        />
+                      ) : (
+                        <>
+                          <TextInput
+                            style={styles.input}
+                            value={permBuscarCentro}
+                            onChangeText={setPermBuscarCentro}
+                            placeholder="Buscar centro..."
+                          />
+                          <ScrollView style={styles.centerDropdown} nestedScrollEnabled>
+                            {permCentrosFiltrados.map((ce) => {
+                              const id = Number(ce.id_centro ?? ce.id ?? 0);
+                              return (
+                                <Pressable key={`mant-ce-${id}`} style={styles.centerOption} onPress={() => setPermCentroId(id)}>
+                                  <Text style={styles.centerOptionText}>{ce.nombre || `Centro ${id}`}</Text>
+                                </Pressable>
+                              );
+                            })}
+                            {!permCentrosFiltrados.length && (
+                              <Text style={styles.dropdownEmptyText}>
+                                {permClienteId ? 'Sin centros para este cliente.' : 'Selecciona un cliente para ver sus centros.'}
+                              </Text>
+                            )}
+                          </ScrollView>
+                        </>
+                      )}
                     </>
                   )}
                 </View>
@@ -2484,6 +3290,16 @@ export default function InformesScreen() {
                 <View style={styles.inputCol}><Text style={styles.miniFieldLabel}>Tecnico 1</Text><TextInput style={styles.input} value={permTecnico1} onChangeText={setPermTecnico1} /></View>
                 <View style={styles.inputCol}><Text style={styles.miniFieldLabel}>Tecnico 2</Text><TextInput style={styles.input} value={permTecnico2} onChangeText={setPermTecnico2} /></View>
               </View>
+              {!!actividadAsignadaActiva && !!tecnicosAsignadosExtra.length && (
+                <View style={[styles.additionalTechWrap, styles.rowTopGap]}>
+                  <Text style={styles.additionalTechTitle}>Tecnicos adicionales asignados</Text>
+                  {tecnicosAsignadosExtra.map((name, idx) => (
+                    <View key={`perm-${name}-${idx}`} style={[styles.input, styles.inputDisabled, styles.nameReadonlyBox, styles.additionalTechInlineItem]}>
+                      <Text style={styles.nameReadonlyText}>{`Tecnico ${idx + 3}: ${name}`}</Text>
+                    </View>
+                  ))}
+                </View>
+              )}
               {showPermFechaPicker && (
                 <DateTimePicker
                   value={inputDateToDate(permFecha)}
@@ -3148,6 +3964,15 @@ export default function InformesScreen() {
                     await cargarPermisos();
                     await cargarMantencionesTerreno();
                     await cargarRetirosTerreno();
+                    await cargarActividadesAsignadas();
+                    if (permisoContexto === 'mantencion' || permisoContexto === 'retiro') {
+                      await marcarActividadFinalizadaSiCorresponde();
+                    } else if (permisoContexto === 'instalacion') {
+                      const armadoVinculado = Number(actaCentroSeleccionado?.armado_id || armadoSeleccionadoId || 0) > 0;
+                      if (armadoVinculado) {
+                        await marcarActividadFinalizadaSiCorresponde();
+                      }
+                    }
                     // Refresca centros para no seguir mostrando telefono/correo antiguos en la misma sesion.
                     if (permClienteId) {
                       try {
@@ -3482,6 +4307,42 @@ const styles = StyleSheet.create({
     paddingVertical: 9,
     marginTop: 6,
   },
+  installInProgressCard: {
+    borderColor: '#fcd34d',
+    backgroundColor: '#fffbeb',
+  },
+  installTypeBadgeRow: {
+    marginTop: 6,
+    marginBottom: 2,
+    alignItems: 'flex-start',
+  },
+  installTypeBadge: {
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  installTypeBadgeInstalacion: {
+    borderColor: '#bfdbfe',
+    backgroundColor: '#eff6ff',
+  },
+  installTypeBadgeReap: {
+    borderColor: '#fed7aa',
+    backgroundColor: '#fff7ed',
+  },
+  installTypeBadgeText: {
+    fontWeight: '800',
+    fontSize: 11.5,
+  },
+  installTypeBadgeTextInstalacion: {
+    color: '#1e3a8a',
+  },
+  installTypeBadgeTextReap: {
+    color: '#7c2d12',
+  },
   flowHint: { marginTop: 8, fontSize: 12.5, fontWeight: '700' },
   flowHintOk: { color: '#166534' },
   flowHintWarn: { color: '#b45309' },
@@ -3550,6 +4411,87 @@ const styles = StyleSheet.create({
   headerCard: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   sectionTitle: { color: '#0f172a', fontWeight: '800', fontSize: 15 },
   sectionSubTitle: { color: '#64748b', fontWeight: '600', marginTop: 2 },
+  installHeaderRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  installCloseBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    backgroundColor: '#f8fafc',
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  installCloseBtnText: { color: '#334155', fontSize: 12, fontWeight: '700' },
+  assignedHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  assignedSectionTitle: { color: '#334155', fontWeight: '800', fontSize: 12.5, marginTop: 4, textTransform: 'uppercase' },
+  assignedItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+    backgroundColor: '#f8fbff',
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    marginTop: 6,
+  },
+  assignedItemActive: {
+    borderColor: '#86efac',
+    backgroundColor: '#f0fdf4',
+  },
+  assignedItemProgress: {
+    borderColor: '#fed7aa',
+    backgroundColor: '#fff7ed',
+  },
+  assignedItemDone: {
+    borderColor: '#bbf7d0',
+    backgroundColor: '#f0fdf4',
+  },
+  assignedItemTitle: { color: '#0f172a', fontWeight: '800', fontSize: 13 },
+  assignedItemMeta: { color: '#64748b', fontWeight: '600', fontSize: 11.5, marginTop: 2 },
+  assignedActionPill: {
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    backgroundColor: '#eff6ff',
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  assignedActionPillActive: {
+    borderColor: '#86efac',
+    backgroundColor: '#dcfce7',
+  },
+  assignedActionPillProgress: {
+    borderColor: '#fcd34d',
+    backgroundColor: '#fef3c7',
+  },
+  assignedActionPillDone: {
+    borderColor: '#86efac',
+    backgroundColor: '#dcfce7',
+  },
+  assignedActionText: { color: '#1d4ed8', fontWeight: '800', fontSize: 11.5 },
+  assignedActionTextActive: { color: '#166534' },
+  assignedActionTextProgress: { color: '#92400e' },
+  assignedActionTextDone: { color: '#166534' },
+  assignedLockedBox: {
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    backgroundColor: '#eff6ff',
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 6,
+  },
+  assignedLockedText: { color: '#1e40af', fontWeight: '700', flex: 1, fontSize: 12 },
   newBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#1d4ed8', borderRadius: 10, paddingHorizontal: 11, paddingVertical: 8 },
   newBtnText: { color: '#fff', fontWeight: '700', fontSize: 12.5 },
   rowItem: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#eef2f7' },
@@ -3835,10 +4777,33 @@ const styles = StyleSheet.create({
     padding: 10,
     gap: 8,
   },
+  recepcionaBlock: {
+    marginTop: 8,
+  },
   personTitle: {
     color: '#0f172a',
     fontWeight: '800',
     fontSize: 13,
+  },
+  nameReadonlyBox: {
+    justifyContent: 'center',
+  },
+  nameReadonlyText: {
+    color: '#0f172a',
+    fontWeight: '700',
+    fontSize: 13,
+  },
+  additionalTechWrap: {
+    marginTop: 6,
+    gap: 10,
+  },
+  additionalTechTitle: {
+    color: '#64748b',
+    fontWeight: '700',
+    fontSize: 12,
+  },
+  additionalTechInlineItem: {
+    width: '100%',
   },
   firmaActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   firmaBtn: { borderWidth: 1, borderColor: '#bfdbfe', backgroundColor: '#eff6ff', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 8 },

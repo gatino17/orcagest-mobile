@@ -1,5 +1,5 @@
 import React, { useContext, useEffect, useState, useMemo, useCallback, useRef } from 'react';
-import { StyleSheet, Pressable, ScrollView, StatusBar as RNStatusBar, ActivityIndicator, View, Alert } from 'react-native';
+import { StyleSheet, Pressable, ScrollView, StatusBar as RNStatusBar, ActivityIndicator, View, Alert, Animated } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { useRouter } from 'expo-router';
@@ -9,7 +9,7 @@ import * as SecureStore from 'expo-secure-store';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { AuthContext } from '../_layout';
-import { getArmados } from '@/lib/api';
+import { fetchActividadesMias, getArmados } from '@/lib/api';
 import { clearOfflineNotice, getOfflineNotice, getPendingCount, syncOfflineQueue } from '@/lib/offline-queue';
 import { subscribeArmadoUpdated } from '@/lib/realtime';
 
@@ -21,10 +21,13 @@ export default function HomeScreen() {
   const [tieneNuevoArmado, setTieneNuevoArmado] = useState(false);
   const [mensajeNotificacion, setMensajeNotificacion] = useState('');
   const [pendientesOffline, setPendientesOffline] = useState(0);
+  const [trabajosProgramados, setTrabajosProgramados] = useState<any[]>([]);
   const knownArmadosRef = useRef<Set<number>>(new Set());
+  const knownTrabajosRef = useRef<Set<number>>(new Set());
   const snapshotArmadosRef = useRef<Map<number, string>>(new Map());
   const detailArmadosRef = useRef<Map<number, { estado: string; centro: string }>>(new Map());
   const cacheKey = useMemo(() => `home_cache_v1_${userId || 'anon'}`, [userId]);
+  const bellPulse = useRef(new Animated.Value(1)).current;
 
   const readHomeCache = useCallback(async () => {
     try {
@@ -131,9 +134,49 @@ export default function HomeScreen() {
       });
   }, [userId, readHomeCache, writeHomeCache]);
 
+  const cargarTrabajosProgramados = useCallback(async (silent = false) => {
+    if (!token) return;
+    try {
+      const data = await fetchActividadesMias();
+      const listaBase = Array.isArray(data) ? data : [];
+      const lista = listaBase.filter((a) => {
+        const estado = String(a?.estado || '').toLowerCase();
+        return estado !== 'finalizado' && estado !== 'cancelado';
+      });
+      setTrabajosProgramados(lista);
+
+      const idsActuales = new Set<number>(
+        lista.map((a) => Number(a?.id_actividad || 0)).filter((id) => Number.isFinite(id) && id > 0)
+      );
+      const conocidos = knownTrabajosRef.current;
+      if (conocidos.size > 0) {
+        const nuevosIds = Array.from(idsActuales).filter((id) => !conocidos.has(id));
+        if (nuevosIds.length > 0) {
+          const nuevo = lista.find((a) => Number(a?.id_actividad || 0) === nuevosIds[0]);
+          const area = String(nuevo?.area || '').toLowerCase();
+          const tipo = area.startsWith('reap') ? 'reapuntamiento' : area.startsWith('instal') ? 'instalacion' : 'trabajo';
+          setTieneNuevoArmado(true);
+          setMensajeNotificacion(
+            `Tienes asignado ${tipo} en ${nuevo?.centro?.nombre || 'centro'}.`
+          );
+        }
+      } else if (!silent && lista.length > 0) {
+        const a = lista[0];
+        const area = String(a?.area || '').toLowerCase();
+        const tipo = area.startsWith('reap') ? 'reapuntamiento' : area.startsWith('instal') ? 'instalacion' : 'trabajo';
+        setTieneNuevoArmado(true);
+        setMensajeNotificacion(`Tienes ${lista.length} trabajo(s) programado(s). Ultimo: ${tipo} en ${a?.centro?.nombre || 'centro'}.`);
+      }
+      knownTrabajosRef.current = idsActuales;
+    } catch {
+      setTrabajosProgramados([]);
+    }
+  }, [token]);
+
   useEffect(() => {
     cargarArmados(false);
-  }, [cargarArmados]);
+    cargarTrabajosProgramados(false);
+  }, [cargarArmados, cargarTrabajosProgramados]);
 
   useEffect(() => {
     if (!token || !userId) return;
@@ -159,9 +202,27 @@ export default function HomeScreen() {
     const timer = setInterval(async () => {
       await syncOfflineQueue().catch(() => {});
       await refrescarEstadoOffline();
+      await cargarTrabajosProgramados(true);
     }, 12000);
     return () => clearInterval(timer);
-  }, [refrescarEstadoOffline]);
+  }, [refrescarEstadoOffline, cargarTrabajosProgramados]);
+
+  useEffect(() => {
+    const shouldPulse = tieneNuevoArmado || pendientesOffline > 0;
+    if (!shouldPulse) {
+      bellPulse.stopAnimation();
+      bellPulse.setValue(1);
+      return;
+    }
+    const anim = Animated.loop(
+      Animated.sequence([
+        Animated.timing(bellPulse, { toValue: 1.08, duration: 420, useNativeDriver: true }),
+        Animated.timing(bellPulse, { toValue: 1, duration: 420, useNativeDriver: true }),
+      ])
+    );
+    anim.start();
+    return () => anim.stop();
+  }, [tieneNuevoArmado, pendientesOffline, bellPulse]);
 
   const resumen = useMemo(() => {
     const base = { pendiente: 0, enProceso: 0, finalizado: 0 };
@@ -269,29 +330,40 @@ export default function HomeScreen() {
                 )}
               </View>
             </View>
-            <Pressable
-              style={[styles.bellBtn, (tieneNuevoArmado || pendientesOffline > 0) && styles.bellBtnAlert]}
-              onPress={() => {
-                Alert.alert(
-                  'Notificaciones',
-                  tieneNuevoArmado || pendientesOffline > 0
-                    ? mensajeNotificacion ||
-                      (pendientesOffline > 0
-                        ? 'Sin red: queda pendiente subir armado...'
-                        : 'Tienes novedades en tus armados.')
-                    : 'Sin notificaciones nuevas.'
-                );
-                setTieneNuevoArmado(false);
-                if (pendientesOffline === 0) {
-                  clearOfflineNotice().catch(() => {});
-                }
-              }}>
-              <Ionicons
-                name="notifications-outline"
-                size={18}
-                color={tieneNuevoArmado || pendientesOffline > 0 ? '#ffffff' : '#0b3b8c'}
-              />
-            </Pressable>
+            <Animated.View style={{ transform: [{ scale: bellPulse }] }}>
+              <Pressable
+                style={[styles.bellBtn, (tieneNuevoArmado || pendientesOffline > 0) && styles.bellBtnAlert]}
+                onPress={() => {
+                  Alert.alert(
+                    'Notificaciones',
+                    tieneNuevoArmado || pendientesOffline > 0
+                      ? mensajeNotificacion ||
+                        (pendientesOffline > 0
+                          ? 'Sin red: queda pendiente subir armado...'
+                          : 'Tienes novedades en tus armados.')
+                      : trabajosProgramados.length > 0
+                      ? `Tienes ${trabajosProgramados.length} trabajo(s) programado(s).`
+                      : 'Sin notificaciones nuevas.'
+                  );
+                  setTieneNuevoArmado(false);
+                  if (pendientesOffline === 0) {
+                    clearOfflineNotice().catch(() => {});
+                  }
+                }}>
+                <Ionicons
+                  name="notifications-outline"
+                  size={18}
+                  color={tieneNuevoArmado || pendientesOffline > 0 ? '#ffffff' : '#0b3b8c'}
+                />
+                {trabajosProgramados.length > 0 ? (
+                  <View style={[styles.bellCountBadge, (tieneNuevoArmado || pendientesOffline > 0) && styles.bellCountBadgeAlert]}>
+                    <ThemedText style={styles.bellCountBadgeText}>
+                      {trabajosProgramados.length > 9 ? '9+' : trabajosProgramados.length}
+                    </ThemedText>
+                  </View>
+                ) : null}
+              </Pressable>
+            </Animated.View>
           </View>
 
           <View style={styles.actionCard}>
@@ -490,10 +562,39 @@ const styles = StyleSheet.create({
     backgroundColor: '#eff6ff',
     alignItems: 'center',
     justifyContent: 'center',
+    position: 'relative',
   },
   bellBtnAlert: {
     backgroundColor: '#dc2626',
     borderColor: '#dc2626',
+    shadowColor: '#dc2626',
+    shadowOpacity: 0.35,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 6,
+  },
+  bellCountBadge: {
+    position: 'absolute',
+    top: -6,
+    right: -6,
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    paddingHorizontal: 4,
+    backgroundColor: '#1d4ed8',
+    borderWidth: 1,
+    borderColor: '#ffffff',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  bellCountBadgeAlert: {
+    backgroundColor: '#b91c1c',
+  },
+  bellCountBadgeText: {
+    color: '#ffffff',
+    fontSize: 10,
+    fontWeight: '800',
+    lineHeight: 12,
   },
   actionCard: {
     flexDirection: 'row',

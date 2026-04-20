@@ -243,3 +243,14 @@ export const deleteRetiroTerreno = async (idRetiro: string | number) => {
   const res = await api.delete(`/retiros_terreno/${idRetiro}`);
   return res.data;
 };
+
+// Programacion operativa (Calendario)
+export const fetchActividadesMias = async (params?: Record<string, any>) => {
+  const res = await api.get('/actividades/mias', { params });
+  return res.data;
+};
+
+export const updateActividadCalendario = async (idActividad: string | number, payload: any) => {
+  const res = await api.put(`/actividades/${idActividad}`, payload);
+  return res.data;
+};
