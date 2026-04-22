@@ -250,6 +250,11 @@ export const fetchActividadesMias = async (params?: Record<string, any>) => {
   return res.data;
 };
 
+export const fetchActividades = async (params?: Record<string, any>) => {
+  const res = await api.get('/actividades/', { params });
+  return res.data;
+};
+
 export const updateActividadCalendario = async (idActividad: string | number, payload: any) => {
   const res = await api.put(`/actividades/${idActividad}`, payload);
   return res.data;

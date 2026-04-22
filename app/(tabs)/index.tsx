@@ -9,7 +9,7 @@ import * as SecureStore from 'expo-secure-store';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { AuthContext } from '../_layout';
-import { fetchActividadesMias, getArmados } from '@/lib/api';
+import { fetchActividades, fetchActividadesMias, getArmados } from '@/lib/api';
 import { clearOfflineNotice, getOfflineNotice, getPendingCount, syncOfflineQueue } from '@/lib/offline-queue';
 import { subscribeArmadoUpdated } from '@/lib/realtime';
 
@@ -55,6 +55,16 @@ export default function HomeScreen() {
     if (e === 'en_proceso') return 'En proceso';
     if (e === 'finalizado') return 'Finalizado';
     return 'Pendiente';
+  };
+
+  const tipoTrabajoTexto = (areaRaw?: string, nombreRaw?: string) => {
+    const area = String(areaRaw || '').trim().toLowerCase();
+    const nombre = String(nombreRaw || '').trim().toLowerCase();
+    if (area.startsWith('reap') || nombre.includes('reap')) return 'reapuntamiento';
+    if (area.startsWith('instal') || nombre.includes('instal')) return 'instalacion';
+    if (area.startsWith('manten') || nombre.includes('manten')) return 'mantencion';
+    if (area.startsWith('retir') || nombre.includes('retir')) return 'retiro';
+    return 'trabajo';
   };
 
   const cargarArmados = useCallback(async (silent = false) => {
@@ -137,12 +147,41 @@ export default function HomeScreen() {
   const cargarTrabajosProgramados = useCallback(async (silent = false) => {
     if (!token) return;
     try {
-      const data = await fetchActividadesMias();
-      const listaBase = Array.isArray(data) ? data : [];
-      const lista = listaBase.filter((a) => {
-        const estado = String(a?.estado || '').toLowerCase();
-        return estado !== 'finalizado' && estado !== 'cancelado';
-      });
+      const filtrarActivas = (arr: any[]) =>
+        (Array.isArray(arr) ? arr : []).filter((a) => {
+          const estado = String(a?.estado || '').toLowerCase();
+          return estado !== 'finalizado' && estado !== 'cancelado';
+        });
+      let listaBase = filtrarActivas(await fetchActividadesMias());
+      if (!listaBase.length) {
+        const byName = String(name || '')
+          .toLowerCase()
+          .trim()
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '');
+        const uid = Number(userId || 0) || 0;
+        const normalize = (v: any) =>
+          String(v || '')
+            .toLowerCase()
+            .trim()
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '');
+        const all = filtrarActivas(await fetchActividades());
+        listaBase = all.filter((item) => {
+          const principalId = Number(item?.encargado_principal?.id_encargado || item?.tecnico_encargado || 0) || 0;
+          const ayudanteId = Number(item?.encargado_ayudante?.id_encargado || item?.tecnico_ayudante || 0) || 0;
+          if (uid > 0 && (principalId === uid || ayudanteId === uid)) return true;
+          const nombres = [
+            item?.encargado_principal?.nombre_encargado,
+            item?.encargado_ayudante?.nombre_encargado,
+            ...(Array.isArray(item?.tecnicos_asignados) ? item.tecnicos_asignados.map((t: any) => t?.nombre_encargado) : []),
+          ]
+            .map((n) => normalize(n))
+            .filter(Boolean);
+          return !!byName && nombres.some((n) => n.includes(byName) || byName.includes(n));
+        });
+      }
+      const lista = listaBase;
       setTrabajosProgramados(lista);
 
       const idsActuales = new Set<number>(
@@ -153,8 +192,7 @@ export default function HomeScreen() {
         const nuevosIds = Array.from(idsActuales).filter((id) => !conocidos.has(id));
         if (nuevosIds.length > 0) {
           const nuevo = lista.find((a) => Number(a?.id_actividad || 0) === nuevosIds[0]);
-          const area = String(nuevo?.area || '').toLowerCase();
-          const tipo = area.startsWith('reap') ? 'reapuntamiento' : area.startsWith('instal') ? 'instalacion' : 'trabajo';
+          const tipo = tipoTrabajoTexto(nuevo?.area, nuevo?.nombre_actividad);
           setTieneNuevoArmado(true);
           setMensajeNotificacion(
             `Tienes asignado ${tipo} en ${nuevo?.centro?.nombre || 'centro'}.`
@@ -162,8 +200,7 @@ export default function HomeScreen() {
         }
       } else if (!silent && lista.length > 0) {
         const a = lista[0];
-        const area = String(a?.area || '').toLowerCase();
-        const tipo = area.startsWith('reap') ? 'reapuntamiento' : area.startsWith('instal') ? 'instalacion' : 'trabajo';
+        const tipo = tipoTrabajoTexto(a?.area, a?.nombre_actividad);
         setTieneNuevoArmado(true);
         setMensajeNotificacion(`Tienes ${lista.length} trabajo(s) programado(s). Ultimo: ${tipo} en ${a?.centro?.nombre || 'centro'}.`);
       }
@@ -171,7 +208,7 @@ export default function HomeScreen() {
     } catch {
       setTrabajosProgramados([]);
     }
-  }, [token]);
+  }, [token, name, userId]);
 
   useEffect(() => {
     cargarArmados(false);
