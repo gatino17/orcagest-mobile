@@ -195,9 +195,10 @@ type ActividadAsignada = {
   }>;
 };
 
-type ModuloInforme = 'instalacion' | 'mantencion' | 'retiro';
+type ModuloInforme = 'instalacion' | 'mantencion' | 'retiro' | 'levantamiento';
 type TipoInstalacion = 'acta_entrega' | 'informe_intervencion';
 type TipoRegistroInstalacion = 'instalacion' | 'reapuntamiento';
+type LevantamientoFoto = { uri: string; descripcion: string };
 type FirmaTarget =
   | 'tecnico1'
   | 'tecnico2'
@@ -476,6 +477,7 @@ export default function InformesScreen() {
   const [permDescripcionTrabajo, setPermDescripcionTrabajo] = useState('');
   const [permEvidenciaFotos, setPermEvidenciaFotos] = useState<string[]>([]);
   const [evidenciaTargetIndex, setEvidenciaTargetIndex] = useState<number | null>(null);
+  const [cameraTarget, setCameraTarget] = useState<'permiso' | 'levantamiento'>('permiso');
   const [showCameraModal, setShowCameraModal] = useState(false);
   const [showSerieScannerModal, setShowSerieScannerModal] = useState(false);
   const [cameraFacing, setCameraFacing] = useState<'front' | 'back'>('back');
@@ -506,6 +508,13 @@ export default function InformesScreen() {
   const [mantencionChecklistEnabled, setMantencionChecklistEnabled] = useState(false);
   const [mantencionEquiposChecklist, setMantencionEquiposChecklist] = useState<MantencionEquipoChecklist[]>([]);
   const [mantencionChecklistQuery, setMantencionChecklistQuery] = useState('');
+  const [levantamientoFecha, setLevantamientoFecha] = useState(todayInputDate());
+  const [levantamientoResumen, setLevantamientoResumen] = useState('');
+  const [levantamientoObservaciones, setLevantamientoObservaciones] = useState('');
+  const [levantamientoVoltaje, setLevantamientoVoltaje] = useState('');
+  const [levantamientoCorriente, setLevantamientoCorriente] = useState('');
+  const [levantamientoPotencia, setLevantamientoPotencia] = useState('');
+  const [levantamientoFotos, setLevantamientoFotos] = useState<LevantamientoFoto[]>([]);
 
   const clienteForm = useMemo(
     () => clientes.find((c) => Number(c.id_cliente ?? c.id ?? 0) === Number(clienteIdForm ?? 0)) || null,
@@ -756,6 +765,7 @@ export default function InformesScreen() {
       }
       if (targetModulo === 'mantencion') return area.startsWith('manten') || nombre.includes('manten');
       if (targetModulo === 'retiro') return area.startsWith('retir') || nombre.includes('retir');
+      if (targetModulo === 'levantamiento') return area.startsWith('levant') || nombre.includes('levant');
       return false;
     });
   }, [actividadesAsignadas, moduloInforme]);
@@ -1014,6 +1024,22 @@ export default function InformesScreen() {
         .then(() => cargarActividadesAsignadas())
         .catch(() => {});
     }
+    if (area.startsWith('levant')) {
+      setModuloInforme('levantamiento');
+      setLevantamientoFecha(fechaActividad);
+      setLevantamientoResumen('');
+      setLevantamientoObservaciones('');
+      setLevantamientoVoltaje('');
+      setLevantamientoCorriente('');
+      setLevantamientoPotencia('');
+      setLevantamientoFotos([]);
+      setMostrarInstalacionForm(false);
+      setShowEditor(false);
+      setShowPermisoModal(false);
+      setShowRetiroTipoModal(false);
+      setShowRetiroChecklistModal(false);
+      return;
+    }
     if (area.startsWith('instal') || area.startsWith('reap')) {
       // Flujo solicitado: al seleccionar trabajo programado abrir directamente modal,
       // no la tarjeta inline bajo "Instalaciones completadas".
@@ -1108,7 +1134,8 @@ export default function InformesScreen() {
     const compatible =
       (moduloInforme === 'instalacion' && (area.startsWith('instal') || area.startsWith('reap'))) ||
       (moduloInforme === 'mantencion' && area.startsWith('manten')) ||
-      (moduloInforme === 'retiro' && area.startsWith('retir'));
+      (moduloInforme === 'retiro' && area.startsWith('retir')) ||
+      (moduloInforme === 'levantamiento' && area.startsWith('levant'));
     if (!compatible) {
       setActividadAsignadaActiva(null);
       setTecnicosAsignadosExtra([]);
@@ -1560,6 +1587,13 @@ export default function InformesScreen() {
     setMantencionChecklistEnabled(false);
     setMantencionEquiposChecklist([]);
     setMantencionChecklistQuery('');
+    setLevantamientoFecha(todayInputDate());
+    setLevantamientoResumen('');
+    setLevantamientoObservaciones('');
+    setLevantamientoVoltaje('');
+    setLevantamientoCorriente('');
+    setLevantamientoPotencia('');
+    setLevantamientoFotos([]);
     setShowMantencionChecklistModal(false);
     setShowCambioEquipoModal(false);
   };
@@ -1866,18 +1900,22 @@ export default function InformesScreen() {
 
         <View style={styles.card}>
           <Text style={styles.label}>Categorias</Text>
-          <View style={styles.row}>
-            <Pressable style={[styles.tabBtn, moduloInforme === 'instalacion' && styles.tabBtnActive]} onPress={() => setModuloInforme('instalacion')}>
+          <View style={styles.categoryRow}>
+            <Pressable style={[styles.tabBtn, styles.categoryTabBtn, moduloInforme === 'instalacion' && styles.tabBtnActive]} onPress={() => setModuloInforme('instalacion')}>
               <Ionicons name="construct-outline" size={14} color={moduloInforme === 'instalacion' ? '#fff' : '#1d4ed8'} />
               <Text style={[styles.tabBtnText, moduloInforme === 'instalacion' && styles.tabBtnTextActive]}>Instalacion</Text>
             </Pressable>
-            <Pressable style={[styles.tabBtn, moduloInforme === 'mantencion' && styles.tabBtnActive]} onPress={() => setModuloInforme('mantencion')}>
+            <Pressable style={[styles.tabBtn, styles.categoryTabBtn, moduloInforme === 'mantencion' && styles.tabBtnActive]} onPress={() => setModuloInforme('mantencion')}>
               <Ionicons name="build-outline" size={14} color={moduloInforme === 'mantencion' ? '#fff' : '#1d4ed8'} />
               <Text style={[styles.tabBtnText, moduloInforme === 'mantencion' && styles.tabBtnTextActive]}>Mantenciones</Text>
             </Pressable>
-            <Pressable style={[styles.tabBtn, moduloInforme === 'retiro' && styles.tabBtnActive]} onPress={() => setModuloInforme('retiro')}>
+            <Pressable style={[styles.tabBtn, styles.categoryTabBtn, moduloInforme === 'retiro' && styles.tabBtnActive]} onPress={() => setModuloInforme('retiro')}>
               <Ionicons name="exit-outline" size={14} color={moduloInforme === 'retiro' ? '#fff' : '#1d4ed8'} />
               <Text style={[styles.tabBtnText, moduloInforme === 'retiro' && styles.tabBtnTextActive]}>Retiro</Text>
+            </Pressable>
+            <Pressable style={[styles.tabBtn, styles.categoryTabBtn, moduloInforme === 'levantamiento' && styles.tabBtnActive]} onPress={() => setModuloInforme('levantamiento')}>
+              <Ionicons name="map-outline" size={14} color={moduloInforme === 'levantamiento' ? '#fff' : '#1d4ed8'} />
+              <Text style={[styles.tabBtnText, moduloInforme === 'levantamiento' && styles.tabBtnTextActive]}>Levantamiento</Text>
             </Pressable>
           </View>
         </View>
@@ -1965,7 +2003,7 @@ export default function InformesScreen() {
 	          {mostrarAsignadasCompletadas && !!actividadesCompletadas.length ? (
 	            <Text style={styles.assignedSectionTitle}>Completados</Text>
 	          ) : null}
-	          {mostrarAsignadasCompletadas && actividadesCompletadas.slice(0, 4).map((actividad, idx) => {
+          {mostrarAsignadasCompletadas && actividadesCompletadas.slice(0, 4).map((actividad, idx) => {
             const id = Number(actividad.id_actividad || 0);
             const centroNombre = String(actividad.centro?.nombre || `Centro ${actividad.centro_id || '-'}`);
             const clienteNombre = String(actividad.centro?.cliente || '-');
@@ -1985,6 +2023,159 @@ export default function InformesScreen() {
             );
           })}
         </View>
+
+        {moduloInforme === 'levantamiento' ? (
+          <View style={styles.card}>
+            <View style={styles.assignedHeader}>
+              <Text style={styles.sectionTitle}>Formulario de levantamiento</Text>
+              <Ionicons name="map-outline" size={18} color="#1d4ed8" />
+            </View>
+            {actividadAsignadaActiva ? (
+              <>
+                <View style={styles.levantamientoInfoCard}>
+                  <Text style={styles.levantamientoInfoTitle}>
+                    {centroSelForm?.nombre || actividadAsignadaActiva.centro?.nombre || 'Centro asignado'}
+                  </Text>
+                  <Text style={styles.rowMeta}>
+                    Cliente: {clienteForm?.nombre || clienteForm?.razon_social || actividadAsignadaActiva.centro?.cliente || '-'}
+                  </Text>
+                  <View style={styles.levantamientoTwoCols}>
+                    <View style={styles.inputCol}>
+                      <Text style={styles.selectLabel}>Fecha</Text>
+                      <TextInput style={[styles.input, styles.inputDisabled]} editable={false} value={formatDate(levantamientoFecha)} />
+                    </View>
+                    <View style={styles.inputCol}>
+                      <Text style={styles.selectLabel}>Region / Area</Text>
+                      <TextInput style={[styles.input, styles.inputDisabled]} editable={false} value={region || String(centroSelForm?.area || centroSelForm?.region || '')} />
+                    </View>
+                  </View>
+                  <View style={styles.levantamientoTwoCols}>
+                    <View style={styles.inputCol}>
+                      <Text style={styles.selectLabel}>Localidad</Text>
+                      <TextInput style={[styles.input, styles.inputDisabled]} editable={false} value={localidad || String(centroSelForm?.ubicacion || centroSelForm?.localidad || '')} />
+                    </View>
+                    <View style={styles.inputCol}>
+                      <Text style={styles.selectLabel}>Codigo ponton</Text>
+                      <TextInput style={[styles.input, styles.inputDisabled]} editable={false} value={codigoPontonActa || String(centroSelForm?.nombre_ponton || '')} />
+                    </View>
+                  </View>
+                </View>
+
+                <View style={styles.levantamientoBlock}>
+                  <Text style={styles.levantamientoBlockTitle}>Registro general</Text>
+                  <TextInput
+                    style={[styles.input, styles.textArea]}
+                    value={levantamientoResumen}
+                    onChangeText={setLevantamientoResumen}
+                    placeholder="Describe el levantamiento realizado..."
+                    multiline
+                    textAlignVertical="top"
+                  />
+                  <TextInput
+                    style={[styles.input, styles.levantamientoTextAreaSmall]}
+                    value={levantamientoObservaciones}
+                    onChangeText={setLevantamientoObservaciones}
+                    placeholder="Observaciones adicionales..."
+                    multiline
+                    textAlignVertical="top"
+                  />
+                </View>
+
+                <View style={styles.levantamientoBlock}>
+                  <Text style={styles.levantamientoBlockTitle}>Mediciones de energia opcionales</Text>
+                  <View style={styles.levantamientoThreeCols}>
+                    <View style={styles.inputCol}>
+                      <Text style={styles.selectLabel}>Voltaje</Text>
+                      <TextInput style={styles.input} value={levantamientoVoltaje} onChangeText={setLevantamientoVoltaje} placeholder="Ej: 220V" />
+                    </View>
+                    <View style={styles.inputCol}>
+                      <Text style={styles.selectLabel}>Corriente</Text>
+                      <TextInput style={styles.input} value={levantamientoCorriente} onChangeText={setLevantamientoCorriente} placeholder="Ej: 10A" />
+                    </View>
+                    <View style={styles.inputCol}>
+                      <Text style={styles.selectLabel}>Potencia</Text>
+                      <TextInput style={styles.input} value={levantamientoPotencia} onChangeText={setLevantamientoPotencia} placeholder="Ej: 2.2kW" />
+                    </View>
+                  </View>
+                </View>
+
+                <View style={styles.levantamientoBlock}>
+                  <View style={styles.assignedHeader}>
+                    <Text style={styles.levantamientoBlockTitle}>Fotos del levantamiento</Text>
+                    <Pressable
+                      style={styles.levantamientoPhotoAddBtn}
+                      onPress={async () => {
+                        if (!cameraPermission?.granted) {
+                          const req = await requestCameraPermission();
+                          if (!req.granted) {
+                            Alert.alert('Levantamiento', 'Debes autorizar la camara para capturar fotos.');
+                            return;
+                          }
+                        }
+                        setCameraTarget('levantamiento');
+                        setEvidenciaTargetIndex(null);
+                        setShowCameraModal(true);
+                      }}>
+                      <Ionicons name="camera-outline" size={16} color="#1d4ed8" />
+                    </Pressable>
+                  </View>
+                  {levantamientoFotos.length ? (
+                    <View style={styles.evidenciaGrid}>
+                      {levantamientoFotos.map((foto, idx) => (
+                        <View key={`lev-foto-${idx}`} style={styles.evidenciaItem}>
+                          <Image source={{ uri: foto.uri }} style={styles.evidenciaPreview} resizeMode="cover" />
+                          <TextInput
+                            style={[styles.input, styles.levantamientoTextAreaSmall, { marginTop: 8 }]}
+                            value={foto.descripcion}
+                            onChangeText={(text) =>
+                              setLevantamientoFotos((prev) => prev.map((item, i) => (i === idx ? { ...item, descripcion: text } : item)))
+                            }
+                            placeholder="Descripcion de la foto..."
+                            multiline
+                            textAlignVertical="top"
+                          />
+                          <View style={styles.evidenciaActions}>
+                            <Pressable
+                              style={styles.firmaBtn}
+                              onPress={async () => {
+                                if (!cameraPermission?.granted) {
+                                  const req = await requestCameraPermission();
+                                  if (!req.granted) {
+                                    Alert.alert('Levantamiento', 'Debes autorizar la camara para capturar fotos.');
+                                    return;
+                                  }
+                                }
+                                setCameraTarget('levantamiento');
+                                setEvidenciaTargetIndex(idx);
+                                setShowCameraModal(true);
+                              }}>
+                              <Text style={styles.firmaBtnText}>Reemplazar</Text>
+                            </Pressable>
+                            <Pressable
+                              style={styles.firmaClearBtn}
+                              onPress={() => setLevantamientoFotos((prev) => prev.filter((_, i) => i !== idx))}>
+                              <Ionicons name="trash-outline" size={14} color="#dc2626" />
+                            </Pressable>
+                          </View>
+                        </View>
+                      ))}
+                    </View>
+                  ) : (
+                    <Text style={styles.signatureEmptyText}>Sin fotos registradas</Text>
+                  )}
+                </View>
+
+                <Pressable
+                  style={styles.saveBtn}
+                  onPress={() => Alert.alert('Levantamiento', 'Formulario preparado. En el siguiente paso lo conectamos para guardar y generar la presentacion.')}>
+                  <Text style={styles.saveBtnText}>Finalizar levantamiento</Text>
+                </Pressable>
+              </>
+            ) : (
+              <Text style={styles.rowMeta}>Selecciona un trabajo programado de levantamiento para completar el formulario.</Text>
+            )}
+          </View>
+        ) : null}
 
         {moduloInforme === 'instalacion' && canCrearInstalacionManual && (
           <View style={styles.card}>
@@ -2631,7 +2822,7 @@ export default function InformesScreen() {
                   <TextInput
                     style={[styles.input, styles.inputDisabled]}
                     editable={false}
-                    value={clienteForm?.nombre || clienteForm?.razon_social || actividadAsignadaActiva.centro?.cliente || ''}
+                    value={clienteForm?.nombre || clienteForm?.razon_social || actividadAsignadaActiva?.centro?.cliente || ''}
                   />
                 ) : (
                   <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.pillsRow}>
@@ -2676,7 +2867,7 @@ export default function InformesScreen() {
                       <TextInput
                         style={[styles.input, styles.inputDisabled]}
                         editable={false}
-                        value={centroSelForm?.nombre || actividadAsignadaActiva?.centro?.nombre || ''}
+                        value={actividadAsignadaActiva?.centro?.nombre || ''}
                       />
                     ) : (
                       <>
@@ -3631,6 +3822,7 @@ export default function InformesScreen() {
                             return;
                           }
                         }
+                        setCameraTarget('permiso');
                         setEvidenciaTargetIndex(null);
                         setShowCameraModal(true);
                       }}>
@@ -3653,6 +3845,7 @@ export default function InformesScreen() {
                                     return;
                                   }
                                 }
+                                setCameraTarget('permiso');
                                 setEvidenciaTargetIndex(idx);
                                 setShowCameraModal(true);
                               }}>
@@ -4338,15 +4531,26 @@ export default function InformesScreen() {
                       Alert.alert('Evidencia', 'No se pudo capturar la foto.');
                       return;
                     }
-                    setPermEvidenciaFotos((prev) => {
-                      if (evidenciaTargetIndex !== null && evidenciaTargetIndex >= 0 && evidenciaTargetIndex < prev.length) {
-                        const next = [...prev];
-                        next[evidenciaTargetIndex] = newPhoto;
-                        return next;
-                      }
-                      if (prev.length >= 3) return prev;
-                      return [...prev, newPhoto];
-                    });
+                    if (cameraTarget === 'levantamiento') {
+                      setLevantamientoFotos((prev) => {
+                        if (evidenciaTargetIndex !== null && evidenciaTargetIndex >= 0 && evidenciaTargetIndex < prev.length) {
+                          const next = [...prev];
+                          next[evidenciaTargetIndex] = { ...next[evidenciaTargetIndex], uri: newPhoto };
+                          return next;
+                        }
+                        return [...prev, { uri: newPhoto, descripcion: '' }];
+                      });
+                    } else {
+                      setPermEvidenciaFotos((prev) => {
+                        if (evidenciaTargetIndex !== null && evidenciaTargetIndex >= 0 && evidenciaTargetIndex < prev.length) {
+                          const next = [...prev];
+                          next[evidenciaTargetIndex] = newPhoto;
+                          return next;
+                        }
+                        if (prev.length >= 3) return prev;
+                        return [...prev, newPhoto];
+                      });
+                    }
                     setEvidenciaTargetIndex(null);
                     setShowCameraModal(false);
                   } catch {
@@ -4395,10 +4599,20 @@ const styles = StyleSheet.create({
   heroTitle: { color: '#fff', fontWeight: '800', fontSize: 19 },
   heroSubtitle: { color: '#dbeafe', fontWeight: '600', fontSize: 12.5 },
   card: { backgroundColor: '#fff', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 14, padding: 12, gap: 10 },
+  levantamientoInfoCard: { borderWidth: 1, borderColor: '#bfdbfe', backgroundColor: '#eff6ff', borderRadius: 12, padding: 10, gap: 8 },
+  levantamientoInfoTitle: { color: '#0f172a', fontWeight: '900', fontSize: 15 },
+  levantamientoBlock: { borderWidth: 1, borderColor: '#e2e8f0', backgroundColor: '#f8fafc', borderRadius: 12, padding: 10, gap: 8 },
+  levantamientoBlockTitle: { color: '#0f172a', fontWeight: '900', fontSize: 13.5 },
+  levantamientoTwoCols: { flexDirection: 'row', gap: 8 },
+  levantamientoThreeCols: { flexDirection: 'row', gap: 8 },
+  levantamientoTextAreaSmall: { minHeight: 78, paddingTop: 10 },
+  levantamientoPhotoAddBtn: { width: 38, height: 34, borderRadius: 10, borderWidth: 1, borderColor: '#bfdbfe', backgroundColor: '#eff6ff', alignItems: 'center', justifyContent: 'center' },
   label: { color: '#0f172a', fontWeight: '800', fontSize: 14 },
   row: { flexDirection: 'row', gap: 8 },
   rowBetween: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
   rowTopGap: { marginTop: 8 },
+  categoryRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  categoryTabBtn: { flexBasis: '48%' },
   tabBtn: { flex: 1, minHeight: 40, borderRadius: 10, borderWidth: 1, borderColor: '#bfdbfe', backgroundColor: '#eff6ff', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
   tabBtnActive: { backgroundColor: '#1d4ed8', borderColor: '#1d4ed8' },
   tabBtnDone: { borderColor: '#86efac', backgroundColor: '#f0fdf4' },

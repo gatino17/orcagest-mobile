@@ -259,3 +259,34 @@ export const updateActividadCalendario = async (idActividad: string | number, pa
   const res = await api.put(`/actividades/${idActividad}`, payload);
   return res.data;
 };
+
+// Rendiciones
+export const fetchRendiciones = async (params?: Record<string, any>) => {
+  const res = await api.get('/rendiciones/', { params });
+  return res.data;
+};
+
+export const createRendicion = async (payload: any) => {
+  const res = await api.post('/rendiciones/', payload);
+  return res.data;
+};
+
+export const updateRendicion = async (idRendicion: string | number, payload: any) => {
+  const res = await api.put(`/rendiciones/${idRendicion}`, payload);
+  return res.data;
+};
+
+export const enviarRendicion = async (idRendicion: string | number) => {
+  const res = await api.post(`/rendiciones/${idRendicion}/enviar`);
+  return res.data;
+};
+
+export const fetchSaldosRendicion = async (params?: Record<string, any>) => {
+  const res = await api.get('/rendiciones/saldos', { params });
+  return res.data;
+};
+
+export const fetchAbonosRendicion = async (params?: Record<string, any>) => {
+  const res = await api.get('/rendiciones/abonos', { params });
+  return res.data;
+};

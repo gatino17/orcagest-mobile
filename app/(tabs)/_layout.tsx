@@ -46,6 +46,13 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
+        name="rendiciones"
+        options={{
+          title: 'Rendiciones',
+          tabBarIcon: ({ color }) => <Ionicons name="receipt-outline" size={24} color={color} />,
+        }}
+      />
+      <Tabs.Screen
         name="armado"
         options={{
           href: null,
