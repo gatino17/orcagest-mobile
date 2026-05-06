@@ -22,12 +22,14 @@ import { AuthContext } from '../_layout';
 import {
   createActaEntrega,
   createCambioEquipoMantencion,
+  createLevantamientoTerreno,
   createMantencionTerreno,
   createPermisoTrabajo,
   createRetiroTerreno,
   deleteActaEntrega,
   deleteRetiroTerreno,
   fetchMantencionesTerreno,
+  fetchLevantamientosTerreno,
   fetchActividadesMias,
   fetchActividades,
   fetchActasEntrega,
@@ -137,6 +139,24 @@ type Permiso = {
   cliente?: string;
   centro?: string;
   equipos?: RetiroEquipoChecklist[];
+};
+type LevantamientoTerreno = {
+  id_levantamiento_terreno?: number;
+  centro_id?: number;
+  actividad_id?: number;
+  fecha_levantamiento?: string;
+  region?: string;
+  localidad?: string;
+  codigo_ponton?: string;
+  resumen?: string;
+  observaciones?: string;
+  medicion_voltaje?: string;
+  medicion_corriente?: string;
+  medicion_potencia?: string;
+  fotos?: LevantamientoFoto[];
+  empresa?: string;
+  cliente?: string;
+  centro?: string;
 };
 type GpsPoint = { lat: string; lng: string };
 type SelloItem = { ubicacion: string; numeroAnterior: string; numeroNuevo: string };
@@ -413,6 +433,7 @@ export default function InformesScreen() {
   const [permisos, setPermisos] = useState<Permiso[]>([]);
   const [mantencionesTerreno, setMantencionesTerreno] = useState<Permiso[]>([]);
   const [retirosTerreno, setRetirosTerreno] = useState<Permiso[]>([]);
+  const [levantamientosTerreno, setLevantamientosTerreno] = useState<LevantamientoTerreno[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [showEditor, setShowEditor] = useState(false);
@@ -493,6 +514,7 @@ export default function InformesScreen() {
   const [showAllMantencionesRecientes, setShowAllMantencionesRecientes] = useState(false);
   const [showAllRetirosRecientes, setShowAllRetirosRecientes] = useState(false);
   const [showRetiroTipoModal, setShowRetiroTipoModal] = useState(false);
+  const [showLevantamientoModal, setShowLevantamientoModal] = useState(false);
   const [showMantencionChecklistModal, setShowMantencionChecklistModal] = useState(false);
   const [showRetiroChecklistModal, setShowRetiroChecklistModal] = useState(false);
   const [showRetiroChecklistReadModal, setShowRetiroChecklistReadModal] = useState(false);
@@ -719,6 +741,10 @@ export default function InformesScreen() {
     () => (showAllRetirosRecientes ? permisosRetiro : permisosRetiro.slice(0, 3)),
     [showAllRetirosRecientes, permisosRetiro]
   );
+  const levantamientosRecientesVisibles = useMemo(
+    () => levantamientosTerreno.slice(0, 4),
+    [levantamientosTerreno]
+  );
   const checklistRevisadosCount = useMemo(
     () => mantencionEquiposChecklist.filter((item) => !!item.revisado).length,
     [mantencionEquiposChecklist]
@@ -784,11 +810,11 @@ export default function InformesScreen() {
         if (estado === 'pendiente') return true;
         // Compatibilidad operativa: si en web dejaron "En progreso" pero aun no existe acta,
         // en mobile se sigue mostrando como pendiente de iniciar.
-        if (estado === 'en_progreso' && !actividadesConActa.has(idActividad)) return true;
+        if (moduloInforme !== 'levantamiento' && estado === 'en_progreso' && !actividadesConActa.has(idActividad)) return true;
         return false;
       });
     },
-    [actividadesAsignadasFiltradas, actividadAsignadaActiva, actas]
+    [actividadesAsignadasFiltradas, actividadAsignadaActiva, actas, moduloInforme]
   );
   const actividadesEnProceso = useMemo(
     () => {
@@ -802,10 +828,11 @@ export default function InformesScreen() {
         const esActiva = Number(actividadAsignadaActiva?.id_actividad || 0) === idActividad;
         const estado = estadoActividad(a.estado);
         if (esActiva) return estado !== 'finalizado';
+        if (moduloInforme === 'levantamiento') return estado === 'en_progreso';
         return estado === 'en_progreso' && actividadesConActa.has(idActividad);
       });
     },
-    [actividadesAsignadasFiltradas, actividadAsignadaActiva, actas]
+    [actividadesAsignadasFiltradas, actividadAsignadaActiva, actas, moduloInforme]
   );
   const actividadesCompletadas = useMemo(
     () => actividadesAsignadasFiltradas.filter((a) => estadoActividad(a.estado) === 'finalizado'),
@@ -933,6 +960,25 @@ export default function InformesScreen() {
       Alert.alert('Informes', backendMsg);
     }
   };
+  const cargarLevantamientosTerreno = async () => {
+    if (!token || moduloInforme !== 'levantamiento') return;
+    try {
+      const data = await fetchLevantamientosTerreno({
+        centro_id: filtroCentroId || undefined,
+        fecha_desde: filtroFechaDesde || undefined,
+        fecha_hasta: filtroFechaHasta || undefined,
+      });
+      setLevantamientosTerreno(Array.isArray(data) ? data : []);
+    } catch (error: any) {
+      setLevantamientosTerreno([]);
+      const backendMsg =
+        error?.response?.data?.error ||
+        error?.response?.data?.message ||
+        error?.message ||
+        'No se pudieron cargar los levantamientos en terreno.';
+      Alert.alert('Informes', backendMsg);
+    }
+  };
   const cargarActividadesAsignadas = async () => {
     if (!token) return;
     setLoadingActividadesAsignadas(true);
@@ -1038,6 +1084,7 @@ export default function InformesScreen() {
       setShowPermisoModal(false);
       setShowRetiroTipoModal(false);
       setShowRetiroChecklistModal(false);
+      setShowLevantamientoModal(true);
       return;
     }
     if (area.startsWith('instal') || area.startsWith('reap')) {
@@ -1090,6 +1137,58 @@ export default function InformesScreen() {
       await cargarActividadesAsignadas();
     } catch {
       // silencioso para no bloquear guardado de informe
+    }
+  };
+
+  const handleGuardarLevantamiento = async () => {
+    const centroId = Number(centroIdForm || actividadAsignadaActiva?.centro_id || actividadAsignadaActiva?.centro?.id_centro || 0) || null;
+    if (!centroId) {
+      Alert.alert('Levantamiento', 'No se encontro el centro asociado.');
+      return;
+    }
+    if (!String(levantamientoResumen || '').trim() && !levantamientoFotos.length) {
+      Alert.alert('Levantamiento', 'Agrega una descripcion o al menos una foto antes de finalizar.');
+      return;
+    }
+    try {
+      setSaving(true);
+      await createLevantamientoTerreno({
+        centro_id: centroId,
+        actividad_id: Number(actividadAsignadaActiva?.id_actividad || 0) || null,
+        fecha_levantamiento: levantamientoFecha || todayInputDate(),
+        region: region || centroSelForm?.area || centroSelForm?.region || null,
+        localidad: localidad || centroSelForm?.ubicacion || centroSelForm?.localidad || null,
+        codigo_ponton: codigoPontonActa || centroSelForm?.nombre_ponton || null,
+        resumen: levantamientoResumen || null,
+        observaciones: levantamientoObservaciones || null,
+        medicion_voltaje: levantamientoVoltaje || null,
+        medicion_corriente: levantamientoCorriente || null,
+        medicion_potencia: levantamientoPotencia || null,
+        fotos: levantamientoFotos,
+        estado: 'finalizado',
+      });
+      await cargarLevantamientosTerreno();
+      await marcarActividadFinalizadaSiCorresponde();
+      await cargarActividadesAsignadas();
+      setActividadAsignadaActiva(null);
+      setTecnicosAsignadosExtra([]);
+      setShowLevantamientoModal(false);
+      setLevantamientoResumen('');
+      setLevantamientoObservaciones('');
+      setLevantamientoVoltaje('');
+      setLevantamientoCorriente('');
+      setLevantamientoPotencia('');
+      setLevantamientoFotos([]);
+      Alert.alert('Levantamiento', 'Levantamiento guardado y finalizado.');
+    } catch (error: any) {
+      const backendMsg =
+        error?.response?.data?.error ||
+        error?.response?.data?.message ||
+        error?.message ||
+        'No se pudo guardar el levantamiento.';
+      Alert.alert('Levantamiento', backendMsg);
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -1155,6 +1254,7 @@ export default function InformesScreen() {
     setShowPermisoModal(false);
     setShowRetiroChecklistModal(false);
     setShowRetiroTipoModal(false);
+    setShowLevantamientoModal(false);
   }, [actividadesAsignadas, actividadAsignadaActiva]);
 
   useEffect(() => {
@@ -1162,6 +1262,7 @@ export default function InformesScreen() {
     cargarPermisos();
     cargarMantencionesTerreno();
     cargarRetirosTerreno();
+    cargarLevantamientosTerreno();
   }, [moduloInforme, tipoInstalacion, filtroCentroId, filtroFechaDesde, filtroFechaHasta]);
 
   useEffect(() => {
@@ -2028,9 +2129,11 @@ export default function InformesScreen() {
           <View style={styles.card}>
             <View style={styles.assignedHeader}>
               <Text style={styles.sectionTitle}>Formulario de levantamiento</Text>
-              <Ionicons name="map-outline" size={18} color="#1d4ed8" />
+              <Pressable onPress={() => setShowLevantamientoModal(false)}>
+                <Ionicons name="close" size={20} color="#334155" />
+              </Pressable>
             </View>
-            {actividadAsignadaActiva ? (
+            {actividadAsignadaActiva && showLevantamientoModal ? (
               <>
                 <View style={styles.levantamientoInfoCard}>
                   <Text style={styles.levantamientoInfoTitle}>
@@ -2166,14 +2269,49 @@ export default function InformesScreen() {
                 </View>
 
                 <Pressable
-                  style={styles.saveBtn}
-                  onPress={() => Alert.alert('Levantamiento', 'Formulario preparado. En el siguiente paso lo conectamos para guardar y generar la presentacion.')}>
-                  <Text style={styles.saveBtnText}>Finalizar levantamiento</Text>
+                  style={[styles.saveBtn, saving && styles.saveBtnDisabled]}
+                  disabled={saving}
+                  onPress={handleGuardarLevantamiento}>
+                  <Text style={styles.saveBtnText}>{saving ? 'Guardando...' : 'Finalizar levantamiento'}</Text>
                 </Pressable>
               </>
+            ) : actividadAsignadaActiva ? (
+              <Pressable style={styles.assignedItem} onPress={() => setShowLevantamientoModal(true)}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.assignedItemTitle}>
+                    {centroSelForm?.nombre || actividadAsignadaActiva.centro?.nombre || 'Levantamiento seleccionado'}
+                  </Text>
+                  <Text style={styles.assignedItemMeta}>Formulario cerrado temporalmente</Text>
+                </View>
+                <View style={[styles.assignedActionPill, styles.assignedActionPillProgress]}>
+                  <Ionicons name="sync-outline" size={14} color="#92400e" />
+                  <Text style={[styles.assignedActionText, styles.assignedActionTextProgress]}>Continuar</Text>
+                </View>
+              </Pressable>
             ) : (
               <Text style={styles.rowMeta}>Selecciona un trabajo programado de levantamiento para completar el formulario.</Text>
             )}
+          </View>
+        ) : null}
+
+        {moduloInforme === 'levantamiento' && !!levantamientosRecientesVisibles.length ? (
+          <View style={styles.card}>
+            <Text style={styles.sectionTitle}>Levantamientos realizados</Text>
+            {levantamientosRecientesVisibles.map((item, idx) => (
+              <View key={`lev-realizado-${item.id_levantamiento_terreno || idx}`} style={[styles.assignedItem, styles.assignedItemDone]}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.assignedItemTitle}>{item.centro || `Centro ${item.centro_id || '-'}`}</Text>
+                  <Text style={styles.assignedItemMeta}>
+                    {item.cliente || '-'} | {formatDate(item.fecha_levantamiento)}
+                  </Text>
+                  {!!item.resumen ? <Text style={styles.rowMeta} numberOfLines={2}>{item.resumen}</Text> : null}
+                </View>
+                <View style={[styles.assignedActionPill, styles.assignedActionPillDone]}>
+                  <Ionicons name="checkmark-circle" size={14} color="#166534" />
+                  <Text style={[styles.assignedActionText, styles.assignedActionTextDone]}>Realizado</Text>
+                </View>
+              </View>
+            ))}
           </View>
         ) : null}
 
@@ -5290,6 +5428,7 @@ const styles = StyleSheet.create({
   cancelBtn: { borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 9, backgroundColor: '#f8fafc' },
   cancelBtnText: { color: '#334155', fontWeight: '700' },
   saveBtn: { borderRadius: 10, paddingHorizontal: 12, paddingVertical: 9, backgroundColor: '#1d4ed8' },
+  saveBtnDisabled: { opacity: 0.65 },
   ctaDisabled: { backgroundColor: '#94a3b8' },
   ctaDone: { backgroundColor: '#16a34a' },
   saveBtnText: { color: '#fff', fontWeight: '700' },

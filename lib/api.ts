@@ -244,6 +244,17 @@ export const deleteRetiroTerreno = async (idRetiro: string | number) => {
   return res.data;
 };
 
+// Informes centros - Levantamientos en terreno
+export const fetchLevantamientosTerreno = async (params?: Record<string, any>) => {
+  const res = await api.get('/levantamientos_terreno/', { params });
+  return res.data;
+};
+
+export const createLevantamientoTerreno = async (payload: any) => {
+  const res = await api.post('/levantamientos_terreno/', payload);
+  return res.data;
+};
+
 // Programacion operativa (Calendario)
 export const fetchActividadesMias = async (params?: Record<string, any>) => {
   const res = await api.get('/actividades/mias', { params });
