@@ -30,6 +30,8 @@ import {
   fetchRetirosTerreno,
   fetchRendiciones,
   fetchSaldosRendicion,
+  solicitarEdicionRendicion,
+  updateRendicion,
 } from '@/lib/api';
 
 type RendicionLinea = {
@@ -97,6 +99,32 @@ const extraerTecnicos = (item: any) => {
   return Array.from(new Set([...base, ...asignadosActividad, ...firmasAdicionales]));
 };
 
+const parseLineasDesdeDescripcion = (desc: string, adjuntos: any[] = []): RendicionLinea[] => {
+  const texto = String(desc || '');
+  const idx = texto.indexOf('Detalle:');
+  if (idx < 0) return [{ fecha: hoyStr(), documento: '', descripcion: '', valor: '', foto: '' }];
+  const lines = texto
+    .slice(idx + 'Detalle:'.length)
+    .split('\n')
+    .map((x) => x.trim())
+    .filter(Boolean);
+  const parsed = lines.map((l, i) => {
+    const parts = l.split('|').map((x) => x.trim());
+    const fecha = parts[0] || hoyStr();
+    const doc = (parts[1] || '').replace(/^Doc:/i, '').trim();
+    const descripcion = parts[2] || '';
+    const valor = String(parts[3] || '0').replace(/[^\d.,-]/g, '').trim();
+    return {
+      fecha,
+      documento: doc,
+      descripcion,
+      valor,
+      foto: String(Array.isArray(adjuntos) ? (adjuntos[i] || '') : ''),
+    } as RendicionLinea;
+  });
+  return parsed.length ? parsed : [{ fecha: hoyStr(), documento: '', descripcion: '', valor: '', foto: '' }];
+};
+
 export default function RendicionesScreen() {
   const { userId, name } = useContext(AuthContext);
 
@@ -131,6 +159,10 @@ export default function RendicionesScreen() {
   const [lineaFotoActivaIdx, setLineaFotoActivaIdx] = useState<number | null>(null);
   const [showTrabajosExtraModal, setShowTrabajosExtraModal] = useState(false);
   const [selectedTrabajoId, setSelectedTrabajoId] = useState<string>('');
+  const [editingRendicionId, setEditingRendicionId] = useState<number | null>(null);
+  const [editingActividadId, setEditingActividadId] = useState<number | null>(null);
+  const [editingClienteNombre, setEditingClienteNombre] = useState('');
+  const [editingCentroNombre, setEditingCentroNombre] = useState('');
   const [trabajoBloqueado, setTrabajoBloqueado] = useState(false);
   const [trabajosExtraIds, setTrabajosExtraIds] = useState<string[]>([]);
   const [cameraFacing, setCameraFacing] = useState<'front' | 'back'>('back');
@@ -399,8 +431,8 @@ export default function RendicionesScreen() {
 
   useEffect(() => {
     cargarCentros(formClienteId, 'form');
-    setFormCentroId('');
-  }, [formClienteId, cargarCentros]);
+    if (!editingRendicionId) setFormCentroId('');
+  }, [formClienteId, cargarCentros, editingRendicionId]);
 
   const trabajoSeleccionado = useMemo(
     () => actividadesAsociadas.find((a: any) => String(a?.id_actividad || '') === String(selectedTrabajoId || '')) || null,
@@ -449,16 +481,42 @@ export default function RendicionesScreen() {
       .reduce((acc: number, a: any) => acc + Number(a?.monto || 0), 0);
   }, [abonosTecnico]);
 
+  const saldoGlobalTecnico = useMemo(() => {
+    return (Array.isArray(saldosTecnicos) ? saldosTecnicos : []).reduce((acc: number, s: any) => {
+      const v = Number(s?.saldo ?? 0);
+      return acc + (Number.isFinite(v) ? v : 0);
+    }, 0);
+  }, [saldosTecnicos]);
+
+  const saldoMes = useMemo(() => Number(totalAbonosMes || 0) - Number(totalMes || 0), [totalAbonosMes, totalMes]);
+
+  const arrastreAFavor = useMemo(() => {
+    // Saldo histórico a favor (periodos anteriores) = saldo global - saldo del mes.
+    const v = Number(saldoGlobalTecnico || 0) - Number(saldoMes || 0);
+    return v > 0 ? v : 0;
+  }, [saldoGlobalTecnico, saldoMes]);
+
+  const totalAbonosMesConArrastre = useMemo(
+    () => Number(totalAbonosMes || 0) + Number(arrastreAFavor || 0),
+    [totalAbonosMes, arrastreAFavor]
+  );
+
   const saldoTecnicoActual = useMemo(() => {
     // Saldo operativo del mes = abono del mes - gasto del mes.
-    return Number(totalAbonosMes || 0) - Number(totalMes || 0);
-  }, [totalAbonosMes, totalMes]);
+    return Number(totalAbonosMesConArrastre || 0) - Number(totalMes || 0);
+  }, [totalAbonosMesConArrastre, totalMes]);
 
   const trabajosPendientesRendicion = useMemo(() => {
-    const rendidos = new Set(
-      (Array.isArray(rendiciones) ? rendiciones : [])
-        .map((r: any) => `${normalizarTipoActividad(r?.actividad_tipo)}-${Number(r?.actividad_id || 0) || 0}`)
-    );
+    const rendidosActividad = new Set<string>();
+    const rendidosCentro = new Set<string>();
+    (Array.isArray(rendiciones) ? rendiciones : []).forEach((r: any) => {
+      const tipo = normalizarTipoActividad(r?.actividad_tipo);
+      if (!tipo) return;
+      const actividadId = Number(r?.actividad_id || 0) || 0;
+      const centroId = Number(r?.centro_id || 0) || 0;
+      if (actividadId > 0) rendidosActividad.add(`${tipo}-${actividadId}`);
+      if (centroId > 0) rendidosCentro.add(`${tipo}-centro-${centroId}`);
+    });
 
     const dedup = new Map<string, any>();
     (Array.isArray(actividadesAsociadas) ? actividadesAsociadas : []).forEach((t: any) => {
@@ -470,7 +528,13 @@ export default function RendicionesScreen() {
     });
 
     const pendientes = Array.from(dedup.entries())
-      .filter(([key]) => !rendidos.has(key))
+      .filter(([key, value]) => {
+        if (rendidosActividad.has(key)) return false;
+        const tipo = normalizarTipoActividad(tipoTrabajoTexto(value?.area, value?.nombre_actividad) || value?.area);
+        const centroId = Number(value?.centro?.id_centro || value?.centro_id || 0) || 0;
+        if (tipo && centroId && rendidosCentro.has(`${tipo}-centro-${centroId}`)) return false;
+        return true;
+      })
       .map(([, value]) => value);
 
     return {
@@ -483,12 +547,15 @@ export default function RendicionesScreen() {
 
   const rendicionesPorTrabajo = useMemo(() => {
     const s = new Set<string>();
+    const sCentro = new Set<string>();
     (Array.isArray(rendiciones) ? rendiciones : []).forEach((r: any) => {
       const tipo = normalizarTipoActividad(r?.actividad_tipo);
       const id = Number(r?.actividad_id || 0) || 0;
       if (tipo && id) s.add(`${tipo}-${id}`);
+      const centroId = Number(r?.centro_id || 0) || 0;
+      if (tipo && centroId) sCentro.add(`${tipo}-centro-${centroId}`);
     });
-    return s;
+    return { byActividad: s, byCentro: sCentro };
   }, [rendiciones]);
 
   const rendicionesCompletadasRecientes = useMemo(() => {
@@ -502,12 +569,37 @@ export default function RendicionesScreen() {
       .slice(0, 10);
   }, [rendiciones]);
 
+  const rendicionesPendientesEdicion = useMemo(() => {
+    return (Array.isArray(rendiciones) ? rendiciones : [])
+      .filter((r: any) => String(r?.estado || '').toLowerCase() === 'edicion_solicitada')
+      .sort((a: any, b: any) => {
+        const da = new Date(a?.edicion_solicitada_at || a?.updated_at || a?.created_at || 0).getTime();
+        const dbv = new Date(b?.edicion_solicitada_at || b?.updated_at || b?.created_at || 0).getTime();
+        return dbv - da;
+      })
+      .slice(0, 10);
+  }, [rendiciones]);
+
+  const rendicionesAutorizadasEdicion = useMemo(() => {
+    return (Array.isArray(rendiciones) ? rendiciones : [])
+      .filter((r: any) => String(r?.estado || '').toLowerCase() === 'edicion_autorizada')
+      .sort((a: any, b: any) => {
+        const da = new Date(a?.updated_at || a?.created_at || 0).getTime();
+        const dbv = new Date(b?.updated_at || b?.created_at || 0).getTime();
+        return dbv - da;
+      })
+      .slice(0, 10);
+  }, [rendiciones]);
+
   const estaRendidoTrabajo = useCallback(
     (t: any) => {
       const tipo = normalizarTipoActividad(tipoTrabajoTexto(t?.area, t?.nombre_actividad) || t?.area);
       const id = Number(t?.record_id || t?.id_actividad || 0) || 0;
-      if (!tipo || !id) return false;
-      return rendicionesPorTrabajo.has(`${tipo}-${id}`);
+      const centroId = Number(t?.centro?.id_centro || t?.centro_id || 0) || 0;
+      if (!tipo) return false;
+      if (id && rendicionesPorTrabajo.byActividad.has(`${tipo}-${id}`)) return true;
+      if (centroId && rendicionesPorTrabajo.byCentro.has(`${tipo}-centro-${centroId}`)) return true;
+      return false;
     },
     [rendicionesPorTrabajo]
   );
@@ -535,6 +627,10 @@ export default function RendicionesScreen() {
   }, [rendiciones, filtroClienteId, filtroCentroId]);
 
   const limpiarFormulario = () => {
+    setEditingRendicionId(null);
+    setEditingActividadId(null);
+    setEditingClienteNombre('');
+    setEditingCentroNombre('');
     setSelectedTrabajoId('');
     setTrabajoBloqueado(false);
     setTrabajosExtraIds([]);
@@ -588,8 +684,12 @@ export default function RendicionesScreen() {
   };
 
   const validar = () => {
-    if (!selectedTrabajoId) return 'Selecciona un trabajo asociado.';
-    if (!formCentroId) return 'Selecciona centro.';
+    const centroIdActual =
+      Number(formCentroId || 0) ||
+      Number(trabajoSeleccionado?.centro?.id_centro || trabajoSeleccionado?.centro_id || 0) ||
+      0;
+    if (!editingRendicionId && !selectedTrabajoId) return 'Selecciona un trabajo asociado.';
+    if (!editingRendicionId && !centroIdActual) return 'Selecciona centro.';
     const lineasValidas = lineasRendicion.filter((l) => l.descripcion.trim() && (Number(l.valor || 0) > 0));
     if (!lineasValidas.length) return 'Agrega al menos una linea de gasto valida.';
     return '';
@@ -601,19 +701,24 @@ export default function RendicionesScreen() {
       Alert.alert('Rendiciones', error);
       return;
     }
-    if (estado === 'enviado' && saldoRendicion < 0) {
-      Alert.alert('Rendiciones', 'El gasto supera el saldo abonado del tecnico. Revisa antes de enviar.');
-      return;
-    }
-    setGuardando(true);
-    try {
+    const ejecutarGuardado = async () => {
+      setGuardando(true);
+      try {
       const payload = {
         tecnico_user_id: userId,
         tecnico_nombre: tec1Nombre || name || '',
-        cliente_id: formClienteId ? Number(formClienteId) : null,
-        centro_id: Number(formCentroId),
+        cliente_id:
+          (formClienteId ? Number(formClienteId) : 0) ||
+          Number(trabajoSeleccionado?.centro?.cliente_id || trabajoSeleccionado?.cliente_id || 0) ||
+          null,
+        centro_id:
+          Number(formCentroId || 0) ||
+          Number(trabajoSeleccionado?.centro?.id_centro || trabajoSeleccionado?.centro_id || 0) ||
+          null,
         actividad_tipo: actividadTipo,
-        actividad_id: Number(trabajoSeleccionado?.record_id || 0) || null,
+        actividad_id: editingRendicionId
+          ? (Number(editingActividadId || 0) || Number(trabajoSeleccionado?.record_id || 0) || null)
+          : (Number(trabajoSeleccionado?.record_id || 0) || null),
         categoria: 'rendicion_gastos',
         medio_pago: null,
         fecha_gasto: fechaGasto,
@@ -637,8 +742,13 @@ export default function RendicionesScreen() {
           .filter(Boolean),
         estado,
       };
-      const resp = await createRendicion(payload);
-      const id = resp?.rendicion?.id_rendicion;
+      let id = Number(editingRendicionId || 0) || 0;
+      if (id > 0) {
+        await updateRendicion(id, payload);
+      } else {
+        const resp = await createRendicion(payload);
+        id = Number(resp?.rendicion?.id_rendicion || 0) || 0;
+      }
       if (estado === 'enviado' && id) await enviarRendicion(id);
       Alert.alert('Rendiciones', estado === 'enviado' ? 'Rendicion enviada.' : 'Rendicion guardada.');
       limpiarFormulario();
@@ -646,11 +756,78 @@ export default function RendicionesScreen() {
       await cargarRendiciones();
       await cargarSaldos();
       await cargarAbonos();
-    } catch {
-      Alert.alert('Rendiciones', 'No se pudo guardar.');
-    } finally {
-      setGuardando(false);
+      } catch {
+        Alert.alert('Rendiciones', 'No se pudo guardar.');
+      } finally {
+        setGuardando(false);
+      }
+    };
+    if (estado === 'enviado' && saldoRendicion < 0) {
+      Alert.alert(
+        'Rendiciones',
+        'El gasto supera el saldo abonado del tecnico. ¿Quieres continuar de todas maneras?',
+        [
+          { text: 'No', style: 'cancel' },
+          { text: 'Si', onPress: () => { void ejecutarGuardado(); } },
+        ]
+      );
+      return;
     }
+    await ejecutarGuardado();
+  };
+
+  const solicitarEdicion = async (rendicion: any) => {
+    const id = Number(rendicion?.id_rendicion || 0);
+    if (!(id > 0)) return;
+    if (String(rendicion?.estado || '').toLowerCase() === 'edicion_solicitada') {
+      Alert.alert('Rendiciones', 'Esta rendicion ya tiene una solicitud de edicion pendiente.');
+      return;
+    }
+    Alert.alert(
+      'Solicitar edicion',
+      'Se enviara una solicitud para habilitar edicion de esta rendicion.',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Enviar',
+          onPress: async () => {
+            try {
+              await solicitarEdicionRendicion(id, {});
+              Alert.alert('Rendiciones', 'Solicitud de edicion enviada.');
+              await cargarRendiciones();
+            } catch {
+              Alert.alert('Rendiciones', 'No se pudo enviar la solicitud de edicion.');
+            }
+          },
+        },
+      ],
+    );
+  };
+
+  const abrirEdicionAutorizada = (rendicion: any) => {
+    const idR = Number(rendicion?.id_rendicion || 0);
+    if (!(idR > 0)) return;
+    const actividadId = String(Number(rendicion?.actividad_id || 0) || '');
+    setEditingRendicionId(idR);
+    setEditingActividadId(Number(rendicion?.actividad_id || 0) || null);
+    setEditingClienteNombre(String(rendicion?.cliente_nombre || ''));
+    setEditingCentroNombre(String(rendicion?.centro_nombre || ''));
+    setSelectedTrabajoId(actividadId);
+    setTrabajoBloqueado(Boolean(actividadId));
+    setFormClienteId(String(Number(rendicion?.cliente_id || 0) || ''));
+    setFormCentroId(String(Number(rendicion?.centro_id || 0) || ''));
+    setTrabajosExtraIds([]);
+    setShowTrabajosExtraModal(false);
+    setFechaGasto(String(rendicion?.fecha_gasto || hoyStr()).slice(0, 10));
+    setActividadTipo(String(rendicion?.actividad_tipo || 'mantencion'));
+    setTec1Nombre(String(rendicion?.tecnico_nombre || name || ''));
+    const desc = String(rendicion?.descripcion || '');
+    const totalTxt = (desc.match(/Total a rendir:\s*([0-9.,-]+)/i) || [])[1];
+    setTotalRendir(totalTxt ? String(totalTxt).replace(',', '.') : String(saldoTecnicoActual || 0));
+    const actTxt = (desc.match(/Actividades:\s*(.+)/i) || [])[1];
+    setActividadesTexto(actTxt ? String(actTxt).trim() : '');
+    setLineasRendicion(parseLineasDesdeDescripcion(desc, Array.isArray(rendicion?.adjuntos) ? rendicion.adjuntos : []));
+    setShowForm(true);
   };
 
   const abrirCamaraLinea = async (idx: number) => {
@@ -695,7 +872,7 @@ export default function RendicionesScreen() {
             </View>
             <View style={styles.kpiChipAbono}>
               <ThemedText style={styles.kpiLabelAbono}>Abono del mes</ThemedText>
-              <ThemedText style={styles.kpiValueAbono}>{money(totalAbonosMes)}</ThemedText>
+              <ThemedText style={styles.kpiValueAbono}>{money(totalAbonosMesConArrastre)}</ThemedText>
             </View>
             <View style={styles.kpiChipSaldo}>
               <ThemedText style={styles.kpiLabelSaldo}>Saldo tecnico</ThemedText>
@@ -880,6 +1057,68 @@ export default function RendicionesScreen() {
 
         <View style={styles.card}>
           <View style={styles.sectionTitleRow}>
+            <ThemedText style={styles.sectionTitle}>Pendiente de editar</ThemedText>
+            <View style={[styles.badge, styles.badgeWarn]}>
+              <ThemedText style={styles.badgeText}>{rendicionesPendientesEdicion.length}</ThemedText>
+            </View>
+          </View>
+          {!!rendicionesPendientesEdicion.length &&
+            rendicionesPendientesEdicion.map((r: any) => (
+              <View key={`rend-edit-${r.id_rendicion}`} style={styles.itemRow}>
+                <View style={{ flex: 1 }}>
+                  <ThemedText style={styles.itemTitle}>
+                    {r.centro_nombre || 'Sin centro'} - {money(r.monto)}
+                  </ThemedText>
+                  <ThemedText style={styles.itemSub}>
+                    Solicitud: {r.edicion_solicitada_at ? String(r.edicion_solicitada_at).slice(0, 10) : (r.updated_at ? String(r.updated_at).slice(0, 10) : '-')}
+                  </ThemedText>
+                </View>
+                <View style={[styles.badge, styles.badgeWarn]}>
+                  <ThemedText style={styles.badgeText}>Pendiente</ThemedText>
+                </View>
+              </View>
+            ))}
+          {!rendicionesPendientesEdicion.length && (
+            <ThemedText style={styles.empty}>No hay solicitudes pendientes.</ThemedText>
+          )}
+        </View>
+
+        <View style={styles.card}>
+          <View style={styles.sectionTitleRow}>
+            <ThemedText style={styles.sectionTitle}>Autorizadas para editar</ThemedText>
+            <View style={[styles.badge, styles.badgeInfo]}>
+              <ThemedText style={styles.badgeText}>{rendicionesAutorizadasEdicion.length}</ThemedText>
+            </View>
+          </View>
+          {!!rendicionesAutorizadasEdicion.length &&
+            rendicionesAutorizadasEdicion.map((r: any) => (
+              <View key={`rend-auth-${r.id_rendicion}`} style={styles.itemRow}>
+                <View style={{ flex: 1 }}>
+                  <ThemedText style={styles.itemTitle}>
+                    {r.centro_nombre || 'Sin centro'} - {money(r.monto)}
+                  </ThemedText>
+                  <ThemedText style={styles.itemSub}>
+                    Estado: edicion autorizada
+                  </ThemedText>
+                </View>
+                <View style={{ alignItems: 'flex-end', gap: 6 }}>
+                  <View style={[styles.badge, styles.badgeInfo]}>
+                    <ThemedText style={styles.badgeText}>Autorizada</ThemedText>
+                  </View>
+                  <Pressable style={styles.editNowBtn} onPress={() => abrirEdicionAutorizada(r)}>
+                    <Ionicons name="create" size={13} color="#1d4ed8" />
+                    <ThemedText style={styles.editNowBtnText}>Editar</ThemedText>
+                  </Pressable>
+                </View>
+              </View>
+            ))}
+          {!rendicionesAutorizadasEdicion.length && (
+            <ThemedText style={styles.empty}>No hay rendiciones autorizadas para editar.</ThemedText>
+          )}
+        </View>
+
+        <View style={styles.card}>
+          <View style={styles.sectionTitleRow}>
             <ThemedText style={styles.sectionTitle}>Rendiciones completadas recientes</ThemedText>
             <View style={[styles.badge, styles.badgeOk]}>
               <ThemedText style={styles.badgeText}>{rendicionesCompletadasRecientes.length}</ThemedText>
@@ -896,8 +1135,24 @@ export default function RendicionesScreen() {
                     {r.fecha_gasto || '-'} - {(r.actividad_tipo || '-').toString()}
                   </ThemedText>
                 </View>
-                <View style={[styles.badge, styles.badgeOk]}>
-                  <ThemedText style={styles.badgeText}>Completada</ThemedText>
+                <View style={{ alignItems: 'flex-end', gap: 6 }}>
+                  <View style={[styles.badge, String(r?.estado || '').toLowerCase() === 'edicion_solicitada' ? styles.badgeWarn : styles.badgeOk]}>
+                    <ThemedText style={styles.badgeText}>
+                      {String(r?.estado || '').toLowerCase() === 'edicion_solicitada' ? 'Edicion solicitada' : 'Completada'}
+                    </ThemedText>
+                  </View>
+                  <Pressable
+                    style={styles.requestEditBtn}
+                    onPress={() => solicitarEdicion(r)}
+                    disabled={String(r?.estado || '').toLowerCase() !== 'enviado'}
+                  >
+                    <Ionicons
+                      name="create-outline"
+                      size={13}
+                      color={String(r?.estado || '').toLowerCase() !== 'enviado' ? '#64748b' : '#b45309'}
+                    />
+                    <ThemedText style={styles.requestEditBtnText}>Solicitar edicion</ThemedText>
+                  </Pressable>
                 </View>
               </View>
             ))}
@@ -910,7 +1165,7 @@ export default function RendicionesScreen() {
         <View style={styles.modalBackdrop}>
           <View style={styles.rendicionModalCard}>
             <View style={styles.modalHeaderRow}>
-              <ThemedText style={styles.sectionTitle}>Nueva rendicion</ThemedText>
+              <ThemedText style={styles.sectionTitle}>{editingRendicionId ? 'Editar rendicion autorizada' : 'Nueva rendicion'}</ThemedText>
               <Pressable onPress={() => setShowForm(false)}>
                 <Ionicons name="close" size={24} color="#0f172a" />
               </Pressable>
@@ -927,7 +1182,8 @@ export default function RendicionesScreen() {
                       ? `${trabajoSeleccionado.id_actividad} ${tipoTrabajoTexto(
                           trabajoSeleccionado.area,
                           trabajoSeleccionado.nombre_actividad
-                        )} - ${trabajoSeleccionado?.centro?.nombre || trabajoSeleccionado?.centro_nombre || '-'}`
+                        )} - ${(trabajoSeleccionado?.centro?.cliente || trabajoSeleccionado?.cliente || '-')}` +
+                        ` / ${trabajoSeleccionado?.centro?.nombre || trabajoSeleccionado?.centro_nombre || '-'}`
                       : 'Trabajo asociado bloqueado'}
                   </ThemedText>
                   <ThemedText style={styles.workLockedSub}>Trabajo principal bloqueado para mantener trazabilidad.</ThemedText>
@@ -952,7 +1208,7 @@ export default function RendicionesScreen() {
                 </ScrollView>
               )
             )}
-            {!!trabajoSeleccionado && (
+            {!!trabajoSeleccionado && !trabajoBloqueado && (
               <View style={styles.workInfoCard}>
                 <ThemedText style={styles.workInfoTitle}>
                   Vinculada: {trabajoSeleccionado.id_actividad} - {tipoTrabajoTexto(trabajoSeleccionado.area, trabajoSeleccionado.nombre_actividad)}
@@ -963,22 +1219,6 @@ export default function RendicionesScreen() {
                 </ThemedText>
               </View>
             )}
-            <View style={styles.saldoResumenCard}>
-              <View style={styles.saldoResumenRow}>
-                <ThemedText style={styles.saldoResumenLabel}>Saldo disponible</ThemedText>
-                <ThemedText style={styles.saldoResumenValue}>{money(totalRendir)}</ThemedText>
-              </View>
-              <View style={styles.saldoResumenRow}>
-                <ThemedText style={styles.saldoResumenLabel}>Total gastos</ThemedText>
-                <ThemedText style={styles.saldoResumenValue}>{money(totalGastos)}</ThemedText>
-              </View>
-              <View style={styles.saldoResumenRow}>
-                <ThemedText style={styles.saldoResumenLabel}>Saldo proyectado</ThemedText>
-                <ThemedText style={[styles.saldoResumenValue, saldoRendicion < 0 ? styles.saldoNegativo : styles.saldoPositivo]}>
-                  {money(saldoRendicion)}
-                </ThemedText>
-              </View>
-            </View>
             {!!selectedTrabajoId && (
               <>
                 <ThemedText style={styles.label}>Trabajo asociado extra (gasto compartido)</ThemedText>
@@ -1003,24 +1243,36 @@ export default function RendicionesScreen() {
               </View>
             </View>
 
-            <View style={styles.row}>
-              <View style={[styles.col, { flex: 1 }]}>
-                <ThemedText style={styles.label}>Cliente</ThemedText>
-                <TextInput
-                  value={String(trabajoSeleccionado?.centro?.cliente || trabajoSeleccionado?.cliente || '')}
-                  editable={false}
-                  style={[styles.input, styles.inputReadOnly]}
-                />
+            {!trabajoBloqueado && (
+              <View style={styles.row}>
+                <View style={[styles.col, { flex: 1 }]}>
+                  <ThemedText style={styles.label}>Cliente</ThemedText>
+                  <TextInput
+                    value={String(
+                      trabajoSeleccionado?.centro?.cliente ||
+                      trabajoSeleccionado?.cliente ||
+                      editingClienteNombre ||
+                      ''
+                    )}
+                    editable={false}
+                    style={[styles.input, styles.inputReadOnly]}
+                  />
+                </View>
+                <View style={[styles.col, { flex: 1 }]}>
+                  <ThemedText style={styles.label}>Centro</ThemedText>
+                  <TextInput
+                    value={String(
+                      trabajoSeleccionado?.centro?.nombre ||
+                      trabajoSeleccionado?.centro_nombre ||
+                      editingCentroNombre ||
+                      ''
+                    )}
+                    editable={false}
+                    style={[styles.input, styles.inputReadOnly]}
+                  />
+                </View>
               </View>
-              <View style={[styles.col, { flex: 1 }]}>
-                <ThemedText style={styles.label}>Centro</ThemedText>
-                <TextInput
-                  value={String(trabajoSeleccionado?.centro?.nombre || trabajoSeleccionado?.centro_nombre || '')}
-                  editable={false}
-                  style={[styles.input, styles.inputReadOnly]}
-                />
-              </View>
-            </View>
+            )}
 
             {!!tecnicosAsociados.length && (
               <View style={styles.techListCard}>
@@ -1036,7 +1288,11 @@ export default function RendicionesScreen() {
               </View>
             )}
 
-            <ThemedText style={styles.label}>Detalle de gastos</ThemedText>
+            <View style={styles.gastosSectionCard}>
+              <View style={styles.gastosSectionHeader}>
+                <ThemedText style={styles.gastosSectionTitle}>Detalle de gastos</ThemedText>
+                <ThemedText style={styles.gastosSectionSub}>Completa boletas/facturas y evidencia por cada linea</ThemedText>
+              </View>
             {lineasRendicion.map((linea, idx) => (
               <View key={`lin-${idx}`} style={styles.lineaCard}>
                 <View style={styles.row}>
@@ -1093,13 +1349,14 @@ export default function RendicionesScreen() {
             ))}
             <Pressable style={styles.addLineaBtn} onPress={agregarLinea}>
               <Ionicons name="add-circle-outline" size={16} color="#1d4ed8" />
-              <ThemedText style={styles.addLineaText}>Agregar linea</ThemedText>
+              <ThemedText style={styles.addLineaText}>Agregar boleta</ThemedText>
             </Pressable>
+            </View>
 
             <View style={styles.row}>
               <View style={[styles.col, { flex: 1 }]}>
-                <ThemedText style={styles.label}>Saldo disponible $</ThemedText>
-                <TextInput value={String(totalRendir)} editable={false} style={[styles.input, styles.inputReadOnly]} />
+                <ThemedText style={styles.labelSaldoDisponible}>Saldo disponible $</ThemedText>
+                <TextInput value={String(totalRendir)} editable={false} style={[styles.input, styles.inputReadOnly, styles.inputReadOnlySaldo]} />
               </View>
               <View style={[styles.col, { flex: 1 }]}>
                 <ThemedText style={styles.label}>Total gastos $</ThemedText>
@@ -1245,25 +1502,32 @@ export default function RendicionesScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f8fafc', paddingTop: (RNStatusBar.currentHeight || 24) + 6 },
-  scrollContent: { padding: 12, gap: 12, paddingBottom: 28 },
+  container: { flex: 1, backgroundColor: '#f1f5f9', paddingTop: (RNStatusBar.currentHeight || 24) + 6 },
+  scrollContent: { padding: 12, gap: 12, paddingBottom: 32 },
   headerCard: {
-    backgroundColor: '#0f3a8c',
-    borderRadius: 14,
-    padding: 12,
+    backgroundColor: '#0b3b8f',
+    borderRadius: 16,
+    padding: 14,
     gap: 10,
+    borderWidth: 1,
+    borderColor: '#1d4ed8',
+    shadowColor: '#0f172a',
+    shadowOpacity: 0.18,
+    shadowOffset: { width: 0, height: 7 },
+    shadowRadius: 12,
+    elevation: 5,
   },
   headerTop: { gap: 2 },
   title: { color: '#fff', fontSize: 20, fontWeight: '800' },
   subtitle: { color: '#dbeafe', fontSize: 12, fontWeight: '600' },
   kpiGroup: { flexDirection: 'row', gap: 6, flexWrap: 'wrap' },
-  kpiChip: { backgroundColor: '#fef2f2', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 6 },
+  kpiChip: { backgroundColor: '#fef2f2', borderRadius: 12, paddingHorizontal: 11, paddingVertical: 7, borderWidth: 1, borderColor: '#fecaca' },
   kpiLabel: { color: '#991b1b', fontSize: 11, fontWeight: '700' },
   kpiValue: { color: '#b91c1c', fontSize: 12, fontWeight: '900' },
-  kpiChipAbono: { backgroundColor: '#ecfdf5', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 6 },
+  kpiChipAbono: { backgroundColor: '#ecfdf5', borderRadius: 12, paddingHorizontal: 11, paddingVertical: 7, borderWidth: 1, borderColor: '#a7f3d0' },
   kpiLabelAbono: { color: '#166534', fontSize: 11, fontWeight: '700' },
   kpiValueAbono: { color: '#15803d', fontSize: 12, fontWeight: '900' },
-  kpiChipSaldo: { backgroundColor: '#eff6ff', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 6 },
+  kpiChipSaldo: { backgroundColor: '#eff6ff', borderRadius: 12, paddingHorizontal: 11, paddingVertical: 7, borderWidth: 1, borderColor: '#bfdbfe' },
   kpiLabelSaldo: { color: '#1e3a8a', fontSize: 11, fontWeight: '700' },
   kpiValueSaldo: { color: '#1d4ed8', fontSize: 12, fontWeight: '900' },
   pendingCard: {
@@ -1404,31 +1668,49 @@ const styles = StyleSheet.create({
   },
   pendingRetType: { color: '#c2410c', fontWeight: '900', fontSize: 11 },
   pendingRetText: { color: '#334155', fontWeight: '700', fontSize: 12 },
-  card: { backgroundColor: '#fff', borderRadius: 14, borderWidth: 1, borderColor: '#e2e8f0', padding: 12, gap: 8 },
+  card: {
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#dbe5f1',
+    padding: 12,
+    gap: 9,
+    shadowColor: '#0f172a',
+    shadowOpacity: 0.07,
+    shadowOffset: { width: 0, height: 4 },
+    shadowRadius: 10,
+    elevation: 2,
+  },
   rendicionModalCard: {
     width: '100%',
     maxWidth: 460,
-    maxHeight: '86%',
-    backgroundColor: '#fff',
-    borderRadius: 14,
+    maxHeight: '90%',
+    backgroundColor: '#f8fbff',
+    borderRadius: 18,
     borderWidth: 1,
-    borderColor: '#e2e8f0',
+    borderColor: '#cbd5e1',
     padding: 12,
     gap: 8,
+    shadowColor: '#0f172a',
+    shadowOpacity: 0.2,
+    shadowOffset: { width: 0, height: 10 },
+    shadowRadius: 18,
+    elevation: 8,
   },
   modalHeaderRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   filterHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  sectionTitle: { color: '#0f172a', fontSize: 16, fontWeight: '800', marginBottom: 2 },
+  sectionTitle: { color: '#0f172a', fontSize: 15, fontWeight: '900', marginBottom: 1 },
   sectionTitleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   newBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#1d4ed8', borderRadius: 9, paddingHorizontal: 10, paddingVertical: 8 },
   newBtnText: { color: '#fff', fontWeight: '800', fontSize: 12 },
-  label: { color: '#475569', fontWeight: '700', fontSize: 12 },
+  label: { color: '#475569', fontWeight: '700', fontSize: 11 },
+  labelSaldoDisponible: { color: '#166534', fontWeight: '800', fontSize: 11 },
   chipRow: { flexDirection: 'row', gap: 8, paddingVertical: 2 },
-  chip: { borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 999, paddingHorizontal: 10, paddingVertical: 5, backgroundColor: '#fff' },
+  chip: { borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 999, paddingHorizontal: 9, paddingVertical: 5, backgroundColor: '#fff' },
   chipActive: { backgroundColor: '#dbeafe', borderColor: '#3b82f6' },
   chipText: { color: '#334155', fontSize: 12, fontWeight: '700', textTransform: 'capitalize' },
   chipTextActive: { color: '#1d4ed8' },
-  workInfoCard: { borderWidth: 1, borderColor: '#bfdbfe', backgroundColor: '#eff6ff', borderRadius: 10, padding: 8, marginTop: 2 },
+  workInfoCard: { borderWidth: 1, borderColor: '#bfdbfe', backgroundColor: '#eff6ff', borderRadius: 12, padding: 8, marginTop: 1 },
   workInfoTitle: { color: '#1d4ed8', fontWeight: '800', fontSize: 12, textTransform: 'capitalize' },
   workInfoText: { color: '#0f172a', fontSize: 12, marginTop: 2 },
   workLockedCard: {
@@ -1445,15 +1727,21 @@ const styles = StyleSheet.create({
   saldoResumenCard: {
     borderWidth: 1,
     borderColor: '#86efac',
-    backgroundColor: '#f0fdf4',
-    borderRadius: 10,
-    paddingHorizontal: 9,
-    paddingVertical: 7,
-    gap: 5,
+    backgroundColor: '#ecfdf5',
+    borderRadius: 12,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    gap: 4,
   },
   saldoResumenRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  saldoResumenLabel: { color: '#166534', fontSize: 11, fontWeight: '700' },
-  saldoResumenValue: { color: '#14532d', fontSize: 12, fontWeight: '900' },
+  saldoLabelWrap: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  saldoResumenLabel: { color: '#166534', fontSize: 10.5, fontWeight: '700' },
+  saldoResumenValue: { color: '#14532d', fontSize: 11.5, fontWeight: '900' },
+  saldoDisponibleValue: { color: '#166534' },
+  totalGastosValue: { color: '#b91c1c' },
+  saldoDivider: { height: 1, backgroundColor: '#bbf7d0', marginVertical: 2 },
+  saldoResumenTotalLabel: { color: '#0f172a', fontSize: 11, fontWeight: '800' },
+  saldoResumenTotalValue: { color: '#0f172a', fontSize: 12, fontWeight: '900' },
   saldoPositivo: { color: '#15803d' },
   saldoNegativo: { color: '#b91c1c' },
   row: { flexDirection: 'row', gap: 8 },
@@ -1470,6 +1758,12 @@ const styles = StyleSheet.create({
   inputReadOnly: {
     backgroundColor: '#f8fafc',
     color: '#475569',
+  },
+  inputReadOnlySaldo: {
+    backgroundColor: '#ecfdf5',
+    borderColor: '#86efac',
+    color: '#166534',
+    fontWeight: '800',
   },
   techListCard: {
     borderWidth: 1,
@@ -1493,6 +1787,23 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
   },
   techChipText: { color: '#1e3a8a', fontWeight: '700', fontSize: 11 },
+  gastosSectionCard: {
+    marginTop: 4,
+    borderWidth: 1,
+    borderColor: '#fdba74',
+    backgroundColor: '#fff7ed',
+    borderRadius: 12,
+    padding: 9,
+    gap: 7,
+  },
+  gastosSectionHeader: {
+    borderBottomWidth: 1,
+    borderBottomColor: '#fed7aa',
+    paddingBottom: 6,
+    marginBottom: 2,
+  },
+  gastosSectionTitle: { color: '#9a3412', fontWeight: '900', fontSize: 12.5 },
+  gastosSectionSub: { color: '#b45309', fontWeight: '600', fontSize: 10.5, marginTop: 1 },
   lineaCard: {
     borderWidth: 1,
     borderColor: '#dbeafe',
@@ -1598,8 +1909,34 @@ const styles = StyleSheet.create({
   itemSub: { color: '#64748b', fontSize: 11 },
   badge: { borderRadius: 999, paddingHorizontal: 8, paddingVertical: 4 },
   badgeOk: { backgroundColor: '#dcfce7' },
+  badgeWarn: { backgroundColor: '#fef3c7' },
+  badgeInfo: { backgroundColor: '#dbeafe' },
   badgeGray: { backgroundColor: '#e2e8f0' },
   badgeText: { color: '#0f172a', fontWeight: '800', fontSize: 11, textTransform: 'capitalize' },
+  requestEditBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    borderWidth: 1,
+    borderColor: '#f59e0b',
+    borderRadius: 999,
+    backgroundColor: '#fffbeb',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  requestEditBtnText: { color: '#92400e', fontSize: 11, fontWeight: '800' },
+  editNowBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    borderWidth: 1,
+    borderColor: '#93c5fd',
+    borderRadius: 999,
+    backgroundColor: '#eff6ff',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  editNowBtnText: { color: '#1e40af', fontSize: 11, fontWeight: '800' },
   empty: { color: '#64748b' },
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(15,23,42,0.4)', alignItems: 'center', justifyContent: 'center', padding: 16 },
   cameraCard: { width: '100%', maxWidth: 420, height: '74%', backgroundColor: '#fff', borderRadius: 14, padding: 10, gap: 8 },

@@ -292,6 +292,11 @@ export const enviarRendicion = async (idRendicion: string | number) => {
   return res.data;
 };
 
+export const solicitarEdicionRendicion = async (idRendicion: string | number, payload?: Record<string, any>) => {
+  const res = await api.post(`/rendiciones/${idRendicion}/solicitar_edicion`, payload || {});
+  return res.data;
+};
+
 export const fetchSaldosRendicion = async (params?: Record<string, any>) => {
   const res = await api.get('/rendiciones/saldos', { params });
   return res.data;
