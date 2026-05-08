@@ -27,6 +27,7 @@ import {
   fetchCentrosPorCliente,
   fetchMantencionesTerreno,
   fetchPermisosTrabajo,
+  fetchLevantamientosTerreno,
   fetchRetirosTerreno,
   fetchRendiciones,
   fetchSaldosRendicion,
@@ -37,10 +38,14 @@ import {
 type RendicionLinea = {
   fecha: string;
   documento: string;
+  categoria: string;
+  otroNombre?: string;
   descripcion: string;
   valor: string;
   foto?: string;
 };
+
+const CATEGORIAS_GASTO = ['colacion', 'transporte', 'traslados', 'fletes', 'estadia', 'combustible', 'materiales', 'otros'];
 
 const hoyStr = () => {
   const d = new Date();
@@ -49,6 +54,17 @@ const hoyStr = () => {
 
 const money = (v: any) =>
   new Intl.NumberFormat('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 }).format(Number(v || 0));
+
+const parseMontoCL = (value: any) => {
+  const digits = String(value || '').replace(/[^\d]/g, '');
+  return Number(digits || 0);
+};
+
+const formatMontoCL = (value: any) => {
+  const n = parseMontoCL(value);
+  if (!n) return '';
+  return new Intl.NumberFormat('es-CL', { maximumFractionDigits: 0 }).format(n);
+};
 
 const normalizeText = (value: any) =>
   String(value || '')
@@ -102,7 +118,7 @@ const extraerTecnicos = (item: any) => {
 const parseLineasDesdeDescripcion = (desc: string, adjuntos: any[] = []): RendicionLinea[] => {
   const texto = String(desc || '');
   const idx = texto.indexOf('Detalle:');
-  if (idx < 0) return [{ fecha: hoyStr(), documento: '', descripcion: '', valor: '', foto: '' }];
+  if (idx < 0) return [{ fecha: hoyStr(), documento: '', categoria: '', otroNombre: '', descripcion: '', valor: '', foto: '' }];
   const lines = texto
     .slice(idx + 'Detalle:'.length)
     .split('\n')
@@ -112,17 +128,36 @@ const parseLineasDesdeDescripcion = (desc: string, adjuntos: any[] = []): Rendic
     const parts = l.split('|').map((x) => x.trim());
     const fecha = parts[0] || hoyStr();
     const doc = (parts[1] || '').replace(/^Doc:/i, '').trim();
-    const descripcion = parts[2] || '';
-    const valor = String(parts[3] || '0').replace(/[^\d.,-]/g, '').trim();
+    const descripcionRaw = parts[2] || '';
+    let categoria = '';
+    let otroNombre = '';
+    let descripcion = descripcionRaw;
+    const catMatch = descripcionRaw.match(/^([^:]+):\s*(.*)$/);
+    if (catMatch) {
+      const posibleCat = normalizeText(catMatch[1]);
+      if (CATEGORIAS_GASTO.includes(posibleCat)) {
+        categoria = posibleCat;
+        descripcion = catMatch[2] || '';
+      } else {
+        categoria = 'otros';
+        otroNombre = String(catMatch[1] || '').trim();
+        descripcion = catMatch[2] || '';
+      }
+    }
+    const valor = formatMontoCL(String(parts[3] || '0'));
     return {
       fecha,
       documento: doc,
+      categoria,
+      otroNombre,
       descripcion,
       valor,
       foto: String(Array.isArray(adjuntos) ? (adjuntos[i] || '') : ''),
     } as RendicionLinea;
   });
-  return parsed.length ? parsed : [{ fecha: hoyStr(), documento: '', descripcion: '', valor: '', foto: '' }];
+  return parsed.length
+    ? parsed
+    : [{ fecha: hoyStr(), documento: '', categoria: '', otroNombre: '', descripcion: '', valor: '', foto: '' }];
 };
 
 export default function RendicionesScreen() {
@@ -152,12 +187,13 @@ export default function RendicionesScreen() {
   const [totalRendir, setTotalRendir] = useState('');
   const [actividadesTexto, setActividadesTexto] = useState('');
   const [lineasRendicion, setLineasRendicion] = useState<RendicionLinea[]>([
-    { fecha: hoyStr(), documento: '', descripcion: '', valor: '', foto: '' },
+    { fecha: hoyStr(), documento: '', categoria: '', otroNombre: '', descripcion: '', valor: '', foto: '' },
   ]);
 
   const [showCamera, setShowCamera] = useState(false);
   const [lineaFotoActivaIdx, setLineaFotoActivaIdx] = useState<number | null>(null);
   const [showTrabajosExtraModal, setShowTrabajosExtraModal] = useState(false);
+  const [categoriaModalIdx, setCategoriaModalIdx] = useState<number | null>(null);
   const [selectedTrabajoId, setSelectedTrabajoId] = useState<string>('');
   const [editingRendicionId, setEditingRendicionId] = useState<number | null>(null);
   const [editingActividadId, setEditingActividadId] = useState<number | null>(null);
@@ -185,6 +221,7 @@ export default function RendicionesScreen() {
     if (area.startsWith('instal') || nombre.includes('instal')) return 'instalacion';
     if (area.startsWith('manten') || nombre.includes('manten')) return 'mantencion';
     if (area.startsWith('retir') || nombre.includes('retir')) return 'retiro';
+    if (area.startsWith('levant') || nombre.includes('levant')) return 'levantamiento';
     return '';
   };
   const normalizarTipoActividad = (raw?: string) => {
@@ -194,6 +231,7 @@ export default function RendicionesScreen() {
     if (v.startsWith('instal')) return 'instalacion';
     if (v.startsWith('manten')) return 'mantencion';
     if (v.startsWith('retir')) return 'retiro';
+    if (v.startsWith('levant')) return 'levantamiento';
     return v;
   };
   const tipoInstalacionLabel = (item: any) => {
@@ -225,7 +263,7 @@ export default function RendicionesScreen() {
         (Array.isArray(items) ? items : [])
           .filter((item) => {
             const tipo = tipoTrabajoTexto(item?.area, item?.nombre_actividad);
-            return tipo === 'instalacion' || tipo === 'mantencion' || tipo === 'retiro';
+            return tipo === 'instalacion' || tipo === 'mantencion' || tipo === 'retiro' || tipo === 'levantamiento';
           })
           .sort((a, b) => {
             const da = new Date(a?.fecha_inicio || a?.created_at || 0).getTime();
@@ -253,16 +291,18 @@ export default function RendicionesScreen() {
         });
       }
 
-      const [actas, mantenciones, retiros, permisos] = await Promise.all([
+      const [actas, mantenciones, retiros, levantamientos, permisos] = await Promise.all([
         fetchActasEntrega().catch(() => []),
         fetchMantencionesTerreno().catch(() => []),
         fetchRetirosTerreno().catch(() => []),
+        fetchLevantamientosTerreno().catch(() => []),
         fetchPermisosTrabajo().catch(() => []),
       ]);
 
       const actasRaw = Array.isArray(actas) ? actas : [];
       const mantRaw = Array.isArray(mantenciones) ? mantenciones : [];
       const retRaw = Array.isArray(retiros) ? retiros : [];
+      const levRaw = Array.isArray(levantamientos) ? levantamientos : [];
       const permisosRaw = Array.isArray(permisos) ? permisos : [];
       const permisoPorActa = new Map<number, boolean>();
       const permisoPorMantencion = new Map<number, boolean>();
@@ -279,6 +319,7 @@ export default function RendicionesScreen() {
       const actasFiltradas = actasRaw.filter((x: any) => incluyeTecnico(x));
       const mantFiltradas = mantRaw.filter((x: any) => incluyeTecnico(x));
       const retFiltradas = retRaw.filter((x: any) => incluyeTecnico(x));
+      const levFiltradas = levRaw.filter((x: any) => incluyeTecnico(x));
 
       const trabajosActa = (actasFiltradas.length ? actasFiltradas : actasRaw)
         .slice(0, 80)
@@ -340,9 +381,27 @@ export default function RendicionesScreen() {
           tecnicos_asociados: extraerTecnicos(x),
         }));
 
+      const trabajosLev = (levFiltradas.length ? levFiltradas : levRaw)
+        .slice(0, 80)
+        .map((x: any) => ({
+          id_actividad: `lev-${x.id_levantamiento_terreno}`,
+          record_id: Number(x.id_levantamiento_terreno || 0) || null,
+          area: 'levantamiento',
+          nombre_actividad: 'Levantamiento',
+          centro: {
+            id_centro: Number(x.centro_id || 0) || null,
+            nombre: x.centro || '',
+            cliente: x.cliente || x.empresa || '',
+          },
+          fecha_inicio: x.fecha_levantamiento || x.created_at,
+          fuente: 'levantamiento',
+          paso_informe: true,
+          tecnicos_asociados: extraerTecnicos(x),
+        }));
+
       // Para rendiciones contamos trabajos "ejecutados" (informes), no actividades de calendario,
       // para evitar duplicados de la misma gestion.
-      const allTrabajos = [...trabajosActa, ...trabajosMant, ...trabajosRet].sort((a: any, b: any) => {
+      const allTrabajos = [...trabajosActa, ...trabajosMant, ...trabajosRet, ...trabajosLev].sort((a: any, b: any) => {
         const da = new Date(a?.fecha_inicio || a?.created_at || 0).getTime();
         const dbv = new Date(b?.fecha_inicio || b?.created_at || 0).getTime();
         return dbv - da;
@@ -542,6 +601,9 @@ export default function RendicionesScreen() {
       instalacion: pendientes.filter((t: any) => normalizarTipoActividad(tipoTrabajoTexto(t?.area, t?.nombre_actividad) || t?.area) === 'instalacion'),
       mantencion: pendientes.filter((t: any) => normalizarTipoActividad(tipoTrabajoTexto(t?.area, t?.nombre_actividad) || t?.area) === 'mantencion'),
       retiro: pendientes.filter((t: any) => normalizarTipoActividad(tipoTrabajoTexto(t?.area, t?.nombre_actividad) || t?.area) === 'retiro'),
+      levantamiento: pendientes.filter(
+        (t: any) => normalizarTipoActividad(tipoTrabajoTexto(t?.area, t?.nombre_actividad) || t?.area) === 'levantamiento'
+      ),
     };
   }, [rendiciones, actividadesAsociadas]);
 
@@ -641,7 +703,7 @@ export default function RendicionesScreen() {
     setTec1Nombre(String(name || ''));
     setTotalRendir(String(saldoTecnicoActual || 0));
     setActividadesTexto('');
-    setLineasRendicion([{ fecha: hoyStr(), documento: '', descripcion: '', valor: '', foto: '' }]);
+    setLineasRendicion([{ fecha: hoyStr(), documento: '', categoria: '', otroNombre: '', descripcion: '', valor: '', foto: '' }]);
     setShowTrabajosExtraModal(false);
     setLineaFotoActivaIdx(null);
   };
@@ -660,8 +722,7 @@ export default function RendicionesScreen() {
   const totalGastos = useMemo(
     () =>
       lineasRendicion.reduce((acc, l) => {
-        const v = Number(String(l?.valor || '').replace(',', '.'));
-        return acc + (Number.isFinite(v) ? v : 0);
+        return acc + parseMontoCL(l?.valor);
       }, 0),
     [lineasRendicion]
   );
@@ -672,15 +733,34 @@ export default function RendicionesScreen() {
   }, [totalRendir, totalGastos]);
 
   const actualizarLinea = (idx: number, key: keyof RendicionLinea, value: string) => {
-    setLineasRendicion((prev) => prev.map((l, i) => (i === idx ? { ...l, [key]: value } : l)));
+    setLineasRendicion((prev) =>
+      prev.map((l, i) =>
+        i === idx
+          ? {
+              ...l,
+              [key]: key === 'valor' ? formatMontoCL(value) : value,
+            }
+          : l
+      )
+    );
   };
 
   const agregarLinea = () => {
-    setLineasRendicion((prev) => [...prev, { fecha: fechaGasto || hoyStr(), documento: '', descripcion: '', valor: '', foto: '' }]);
+    setLineasRendicion((prev) => [
+      ...prev,
+      { fecha: fechaGasto || hoyStr(), documento: '', categoria: '', otroNombre: '', descripcion: '', valor: '', foto: '' },
+    ]);
   };
 
   const quitarLinea = (idx: number) => {
     setLineasRendicion((prev) => (prev.length <= 1 ? prev : prev.filter((_, i) => i !== idx)));
+  };
+
+  const seleccionarCategoriaLinea = (categoria: string) => {
+    if (categoriaModalIdx === null) return;
+    actualizarLinea(categoriaModalIdx, 'categoria', categoria);
+    if (categoria !== 'otros') actualizarLinea(categoriaModalIdx, 'otroNombre', '');
+    setCategoriaModalIdx(null);
   };
 
   const validar = () => {
@@ -690,7 +770,11 @@ export default function RendicionesScreen() {
       0;
     if (!editingRendicionId && !selectedTrabajoId) return 'Selecciona un trabajo asociado.';
     if (!editingRendicionId && !centroIdActual) return 'Selecciona centro.';
-    const lineasValidas = lineasRendicion.filter((l) => l.descripcion.trim() && (Number(l.valor || 0) > 0));
+    const lineasValidas = lineasRendicion.filter((l) => {
+      const categoriaOk = !!String(l.categoria || '').trim();
+      const otrosOk = l.categoria !== 'otros' || !!String(l.otroNombre || '').trim();
+      return categoriaOk && otrosOk && parseMontoCL(l.valor) > 0;
+    });
     if (!lineasValidas.length) return 'Agrega al menos una linea de gasto valida.';
     return '';
   };
@@ -733,9 +817,12 @@ export default function RendicionesScreen() {
           `Actividades: ${actividadesTexto || '-'}`,
           `Trabajos compartidos: ${trabajosExtraIds.length ? trabajosExtraIds.join(', ') : 'ninguno'}`,
           'Detalle:',
-          ...lineasRendicion.map(
-            (l) => `${l.fecha || '-'} | Doc:${l.documento || '-'} | ${l.descripcion || '-'} | ${l.valor || 0}`
-          ),
+          ...lineasRendicion.map((l) => {
+            const cat = l.categoria === 'otros' ? String(l.otroNombre || 'otros').trim() : String(l.categoria || 'otros').trim();
+            const detalle = String(l.descripcion || '').trim();
+            const etiqueta = detalle ? `${cat}: ${detalle}` : cat;
+            return `${l.fecha || '-'} | Doc:${l.documento || '-'} | ${etiqueta} | ${parseMontoCL(l.valor) || 0}`;
+          }),
         ].join('\n'),
         adjuntos: lineasRendicion
           .map((l) => l.foto || '')
@@ -901,6 +988,10 @@ export default function RendicionesScreen() {
               <ThemedText style={styles.pendingTypeLabel}>Retiro</ThemedText>
               <ThemedText style={styles.pendingTypeValue}>{trabajosPendientesRendicion.retiro.length}</ThemedText>
             </View>
+            <View style={[styles.pendingTypeCard, styles.pendingTypeCardLev]}>
+              <ThemedText style={styles.pendingTypeLabel}>Levantamiento</ThemedText>
+              <ThemedText style={styles.pendingTypeValue}>{trabajosPendientesRendicion.levantamiento.length}</ThemedText>
+            </View>
           </View>
           {!!trabajosPendientesRendicion.instalacion.length && (
             <View style={styles.pendingInstCard}>
@@ -1045,6 +1136,50 @@ export default function RendicionesScreen() {
                       </View>
                     </View>
                     <ThemedText style={styles.pendingRetText}>{cliente} / {centro}</ThemedText>
+                  </View>
+                );
+              })}
+            </View>
+          )}
+          {!!trabajosPendientesRendicion.levantamiento.length && (
+            <View style={styles.pendingLevCard}>
+              <ThemedText style={styles.pendingLevTitle}>Levantamientos pendientes</ThemedText>
+              {trabajosPendientesRendicion.levantamiento.slice(0, 6).map((t: any) => {
+                const centro = t?.centro?.nombre || t?.centro_nombre || '-';
+                const cliente = t?.centro?.cliente || t?.cliente || '-';
+                const okInforme = !!t?.paso_informe;
+                return (
+                  <View key={`lev-pend-${t?.id_actividad}`} style={styles.pendingLevRow}>
+                    <View style={styles.pendingInstTopRow}>
+                      <ThemedText style={styles.pendingLevType}>Levantamiento</ThemedText>
+                      <View style={styles.stepIconsWrap}>
+                        {(() => {
+                          const rendido = estaRendidoTrabajo(t);
+                          return (
+                            <Pressable
+                              style={[
+                                styles.stepActionBtn,
+                                rendido ? styles.stepActionBtnDone : styles.stepActionBtnPending,
+                                !rendido && styles.stepActionBtnUrgent,
+                              ]}
+                              onPress={() => abrirRendicionTrabajo(t)}
+                            >
+                              <Ionicons
+                                name={rendido ? 'wallet' : 'wallet-outline'}
+                                size={14}
+                                color={rendido ? '#16a34a' : '#dc2626'}
+                              />
+                            </Pressable>
+                          );
+                        })()}
+                        <Ionicons
+                          name={okInforme ? 'reader' : 'reader-outline'}
+                          size={14}
+                          color={okInforme ? '#16a34a' : '#dc2626'}
+                        />
+                      </View>
+                    </View>
+                    <ThemedText style={styles.pendingLevText}>{cliente} / {centro}</ThemedText>
                   </View>
                 );
               })}
@@ -1315,27 +1450,42 @@ export default function RendicionesScreen() {
                     />
                   </View>
                 </View>
-                <ThemedText style={styles.label}>Descripcion</ThemedText>
-                <TextInput
-                  value={linea.descripcion}
-                  onChangeText={(v) => actualizarLinea(idx, 'descripcion', v)}
-                  placeholder="Detalle del gasto"
-                  style={styles.input}
-                />
+                <ThemedText style={styles.label}>Descripcion (tipo de gasto)</ThemedText>
+                <Pressable style={styles.selectLike} onPress={() => setCategoriaModalIdx(idx)}>
+                  <ThemedText style={linea.categoria ? styles.selectLikeValue : styles.selectLikePlaceholder}>
+                    {linea.categoria ? `Categoria: ${linea.categoria}` : 'Seleccionar categoria'}
+                  </ThemedText>
+                  <Ionicons name="chevron-down" size={14} color="#64748b" />
+                </Pressable>
+                {linea.categoria === 'otros' && (
+                  <TextInput
+                    value={linea.otroNombre || ''}
+                    onChangeText={(v) => actualizarLinea(idx, 'otroNombre', v)}
+                    placeholder="Nombre del gasto (obligatorio)"
+                    style={styles.input}
+                  />
+                )}
                 <View style={styles.row}>
                   <View style={[styles.col, { flex: 1 }]}>
-                    <ThemedText style={styles.label}>Valor $</ThemedText>
+                    <ThemedText style={styles.labelValor}>Valor $</ThemedText>
                     <TextInput
                       value={linea.valor}
                       onChangeText={(v) => actualizarLinea(idx, 'valor', v)}
                       keyboardType="numeric"
                       placeholder="0"
-                      style={styles.input}
+                      style={[styles.input, styles.inputValor]}
                     />
                   </View>
                   <View style={[styles.col, { justifyContent: 'flex-end' }]}>
                     <Pressable style={styles.lineaImgBtn} onPress={() => abrirCamaraLinea(idx)}>
-                      <Ionicons name={linea.foto ? 'camera' : 'camera-outline'} size={14} color={linea.foto ? '#166534' : '#1d4ed8'} />
+                      <Ionicons
+                        name={linea.foto ? 'checkmark-circle' : 'camera-outline'}
+                        size={15}
+                        color={linea.foto ? '#15803d' : '#1d4ed8'}
+                      />
+                      <ThemedText style={linea.foto ? styles.lineaImgBtnTextOk : styles.lineaImgBtnText}>
+                        {linea.foto ? 'Boleta lista' : 'Boleta'}
+                      </ThemedText>
                     </Pressable>
                   </View>
                   <View style={[styles.col, { justifyContent: 'flex-end' }]}>
@@ -1389,6 +1539,22 @@ export default function RendicionesScreen() {
               </Pressable>
             </View>
             </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={categoriaModalIdx !== null} transparent animationType="fade" onRequestClose={() => setCategoriaModalIdx(null)}>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.selectModalCard}>
+            <ThemedText style={styles.selectModalTitle}>Seleccionar categoria</ThemedText>
+            {CATEGORIAS_GASTO.map((cat) => (
+              <Pressable key={`cat-opt-${cat}`} style={styles.selectModalOption} onPress={() => seleccionarCategoriaLinea(cat)}>
+                <ThemedText style={styles.selectModalOptionText}>{cat}</ThemedText>
+              </Pressable>
+            ))}
+            <Pressable style={styles.selectModalCancel} onPress={() => setCategoriaModalIdx(null)}>
+              <ThemedText style={styles.selectModalCancelText}>Cancelar</ThemedText>
+            </Pressable>
           </View>
         </View>
       </Modal>
@@ -1565,7 +1731,7 @@ const styles = StyleSheet.create({
     borderRadius: 999,
   },
   pendingJobsEmpty: { color: '#64748b', fontSize: 12, fontWeight: '700' },
-  pendingByTypeCards: { flexDirection: 'row', gap: 8 },
+  pendingByTypeCards: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
   pendingTypeCard: {
     flex: 1,
     borderRadius: 10,
@@ -1578,6 +1744,7 @@ const styles = StyleSheet.create({
   pendingTypeCardInst: { backgroundColor: '#dbeafe', borderColor: '#93c5fd' },
   pendingTypeCardMant: { backgroundColor: '#dcfce7', borderColor: '#86efac' },
   pendingTypeCardRet: { backgroundColor: '#ffedd5', borderColor: '#fdba74' },
+  pendingTypeCardLev: { backgroundColor: '#ede9fe', borderColor: '#c4b5fd' },
   pendingTypeLabel: { color: '#334155', fontSize: 11, fontWeight: '700' },
   pendingTypeValue: { color: '#0f172a', fontSize: 18, fontWeight: '900' },
   pendingInstCard: {
@@ -1668,6 +1835,26 @@ const styles = StyleSheet.create({
   },
   pendingRetType: { color: '#c2410c', fontWeight: '900', fontSize: 11 },
   pendingRetText: { color: '#334155', fontWeight: '700', fontSize: 12 },
+  pendingLevCard: {
+    borderWidth: 1,
+    borderColor: '#c4b5fd',
+    backgroundColor: '#f5f3ff',
+    borderRadius: 10,
+    padding: 8,
+    gap: 6,
+  },
+  pendingLevTitle: { color: '#5b21b6', fontWeight: '800', fontSize: 12 },
+  pendingLevRow: {
+    borderWidth: 1,
+    borderColor: '#ddd6fe',
+    backgroundColor: '#fff',
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    gap: 2,
+  },
+  pendingLevType: { color: '#6d28d9', fontWeight: '900', fontSize: 11 },
+  pendingLevText: { color: '#334155', fontWeight: '700', fontSize: 12 },
   card: {
     backgroundColor: '#ffffff',
     borderRadius: 16,
@@ -1812,6 +1999,74 @@ const styles = StyleSheet.create({
     padding: 8,
     gap: 6,
   },
+  selectLike: {
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    backgroundColor: '#ffffff',
+    borderRadius: 10,
+    minHeight: 40,
+    paddingHorizontal: 11,
+    paddingVertical: 9,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  selectLikePlaceholder: {
+    color: '#94a3b8',
+    fontWeight: '600',
+    fontSize: 12.5,
+  },
+  selectLikeValue: {
+    color: '#334155',
+    fontWeight: '700',
+    fontSize: 12.5,
+    textTransform: 'capitalize',
+  },
+  selectModalCard: {
+    width: '100%',
+    maxWidth: 360,
+    borderRadius: 14,
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    padding: 12,
+    gap: 8,
+  },
+  selectModalTitle: {
+    color: '#0f172a',
+    fontWeight: '900',
+    fontSize: 14,
+    marginBottom: 2,
+  },
+  selectModalOption: {
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 10,
+    backgroundColor: '#f8fafc',
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+  },
+  selectModalOptionText: {
+    color: '#334155',
+    fontWeight: '700',
+    fontSize: 12.5,
+    textTransform: 'capitalize',
+  },
+  selectModalCancel: {
+    marginTop: 4,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    alignItems: 'center',
+    backgroundColor: '#fff',
+  },
+  selectModalCancelText: {
+    color: '#64748b',
+    fontWeight: '700',
+    fontSize: 12.5,
+  },
   lineaDelBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1825,6 +2080,13 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-end',
   },
   lineaDelText: { color: '#b91c1c', fontWeight: '800', fontSize: 12 },
+  labelValor: { color: '#7c2d12', fontWeight: '900', fontSize: 12.5 },
+  inputValor: {
+    borderColor: '#fb923c',
+    backgroundColor: '#fff7ed',
+    fontWeight: '800',
+    color: '#7c2d12',
+  },
   lineaImgBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1837,6 +2099,8 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     alignSelf: 'flex-end',
   },
+  lineaImgBtnText: { color: '#1d4ed8', fontWeight: '800', fontSize: 11.5 },
+  lineaImgBtnTextOk: { color: '#15803d', fontWeight: '900', fontSize: 11.5 },
   addLineaBtn: {
     flexDirection: 'row',
     alignItems: 'center',
