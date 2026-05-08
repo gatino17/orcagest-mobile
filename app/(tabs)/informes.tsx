@@ -23,6 +23,7 @@ import {
   createActaEntrega,
   createCambioEquipoMantencion,
   createLevantamientoTerreno,
+  updateLevantamientoTerreno,
   createMantencionTerreno,
   createPermisoTrabajo,
   createRetiroTerreno,
@@ -30,6 +31,7 @@ import {
   deleteRetiroTerreno,
   fetchMantencionesTerreno,
   fetchLevantamientosTerreno,
+  solicitarEdicionLevantamientoTerreno,
   fetchActividadesMias,
   fetchActividades,
   fetchActasEntrega,
@@ -37,6 +39,7 @@ import {
   fetchClientes,
   fetchPermisosTrabajo,
   fetchRetirosTerreno,
+  solicitarEdicionRetiroTerreno,
   getArmados,
   getEquipos,
   updateActaEntrega,
@@ -135,6 +138,7 @@ type Permiso = {
   tipo_retiro?: string;
   estado_logistico?: string;
   observacion?: string;
+  estado_edicion?: string;
   empresa?: string;
   cliente?: string;
   centro?: string;
@@ -157,6 +161,15 @@ type LevantamientoTerreno = {
   empresa?: string;
   cliente?: string;
   centro?: string;
+  estado?: string;
+};
+type LevantamientoEditMeta = {
+  centro_id?: number;
+  centro?: string;
+  cliente?: string;
+  region?: string;
+  localidad?: string;
+  codigo_ponton?: string;
 };
 type GpsPoint = { lat: string; lng: string };
 type SelloItem = { ubicacion: string; numeroAnterior: string; numeroNuevo: string };
@@ -513,6 +526,7 @@ export default function InformesScreen() {
   const [retiroEditandoId, setRetiroEditandoId] = useState<number | null>(null);
   const [showAllMantencionesRecientes, setShowAllMantencionesRecientes] = useState(false);
   const [showAllRetirosRecientes, setShowAllRetirosRecientes] = useState(false);
+  const [solicitandoEdicionRetiroId, setSolicitandoEdicionRetiroId] = useState<number | null>(null);
   const [showRetiroTipoModal, setShowRetiroTipoModal] = useState(false);
   const [showLevantamientoModal, setShowLevantamientoModal] = useState(false);
   const [showMantencionChecklistModal, setShowMantencionChecklistModal] = useState(false);
@@ -537,6 +551,9 @@ export default function InformesScreen() {
   const [levantamientoCorriente, setLevantamientoCorriente] = useState('');
   const [levantamientoPotencia, setLevantamientoPotencia] = useState('');
   const [levantamientoFotos, setLevantamientoFotos] = useState<LevantamientoFoto[]>([]);
+  const [solicitandoEdicionLevantamientoId, setSolicitandoEdicionLevantamientoId] = useState<number | null>(null);
+  const [levantamientoEditandoId, setLevantamientoEditandoId] = useState<number | null>(null);
+  const [levantamientoEditMeta, setLevantamientoEditMeta] = useState<LevantamientoEditMeta | null>(null);
 
   const clienteForm = useMemo(
     () => clientes.find((c) => Number(c.id_cliente ?? c.id ?? 0) === Number(clienteIdForm ?? 0)) || null,
@@ -776,6 +793,8 @@ export default function InformesScreen() {
     if (est === 'en progreso' || est === 'en_progreso') return 'en_progreso';
     return 'pendiente';
   };
+  const estadoLevantamiento = (value?: string) => String(value || '').trim().toLowerCase();
+  const estadoEdicionRetiro = (value?: string) => String(value || 'finalizado').trim().toLowerCase();
   const actividadesAsignadasFiltradas = useMemo(() => {
     const targetModulo = moduloInforme;
     return actividadesAsignadas.filter((item) => {
@@ -1141,7 +1160,13 @@ export default function InformesScreen() {
   };
 
   const handleGuardarLevantamiento = async () => {
-    const centroId = Number(centroIdForm || actividadAsignadaActiva?.centro_id || actividadAsignadaActiva?.centro?.id_centro || 0) || null;
+    const centroId = Number(
+      levantamientoEditMeta?.centro_id ||
+      centroIdForm ||
+      actividadAsignadaActiva?.centro_id ||
+      actividadAsignadaActiva?.centro?.id_centro ||
+      0
+    ) || null;
     if (!centroId) {
       Alert.alert('Levantamiento', 'No se encontro el centro asociado.');
       return;
@@ -1152,7 +1177,7 @@ export default function InformesScreen() {
     }
     try {
       setSaving(true);
-      await createLevantamientoTerreno({
+      const payload = {
         centro_id: centroId,
         actividad_id: Number(actividadAsignadaActiva?.id_actividad || 0) || null,
         fecha_levantamiento: levantamientoFecha || todayInputDate(),
@@ -1166,20 +1191,29 @@ export default function InformesScreen() {
         medicion_potencia: levantamientoPotencia || null,
         fotos: levantamientoFotos,
         estado: 'finalizado',
-      });
+      };
+      if (levantamientoEditandoId) {
+        await updateLevantamientoTerreno(levantamientoEditandoId, payload);
+      } else {
+        await createLevantamientoTerreno(payload);
+      }
       await cargarLevantamientosTerreno();
-      await marcarActividadFinalizadaSiCorresponde();
-      await cargarActividadesAsignadas();
-      setActividadAsignadaActiva(null);
-      setTecnicosAsignadosExtra([]);
+      if (!levantamientoEditandoId) {
+        await marcarActividadFinalizadaSiCorresponde();
+        await cargarActividadesAsignadas();
+        setActividadAsignadaActiva(null);
+        setTecnicosAsignadosExtra([]);
+      }
       setShowLevantamientoModal(false);
+      setLevantamientoEditandoId(null);
+      setLevantamientoEditMeta(null);
       setLevantamientoResumen('');
       setLevantamientoObservaciones('');
       setLevantamientoVoltaje('');
       setLevantamientoCorriente('');
       setLevantamientoPotencia('');
       setLevantamientoFotos([]);
-      Alert.alert('Levantamiento', 'Levantamiento guardado y finalizado.');
+      Alert.alert('Levantamiento', levantamientoEditandoId ? 'Levantamiento editado y finalizado.' : 'Levantamiento guardado y finalizado.');
     } catch (error: any) {
       const backendMsg =
         error?.response?.data?.error ||
@@ -1190,6 +1224,92 @@ export default function InformesScreen() {
     } finally {
       setSaving(false);
     }
+  };
+
+  const handleSolicitarEdicionLevantamiento = async (item: LevantamientoTerreno) => {
+    const id = Number(item?.id_levantamiento_terreno || 0);
+    if (!id) return;
+    const estado = estadoLevantamiento(item?.estado);
+    if (!(estado === 'finalizado' || estado === 'edicion_rechazada')) return;
+    Alert.alert(
+      'Solicitar edicion',
+      'Se enviara la solicitud para habilitar edicion de este levantamiento.',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Solicitar',
+          onPress: async () => {
+            try {
+              setSolicitandoEdicionLevantamientoId(id);
+              await solicitarEdicionLevantamientoTerreno(id);
+              await cargarLevantamientosTerreno();
+              Alert.alert('Levantamiento', 'Solicitud de edicion enviada.');
+            } catch (error: any) {
+              const backendMsg =
+                error?.response?.data?.error ||
+                error?.response?.data?.message ||
+                error?.message ||
+                'No se pudo solicitar la edicion.';
+              Alert.alert('Levantamiento', backendMsg);
+            } finally {
+              setSolicitandoEdicionLevantamientoId(null);
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const handleEditarLevantamientoAutorizado = (item: LevantamientoTerreno) => {
+    const id = Number(item?.id_levantamiento_terreno || 0);
+    if (!id) return;
+    setLevantamientoEditandoId(id);
+    setLevantamientoEditMeta({
+      centro_id: Number(item.centro_id || 0) || undefined,
+      centro: item.centro,
+      cliente: item.cliente || item.empresa,
+      region: item.region,
+      localidad: item.localidad,
+      codigo_ponton: item.codigo_ponton,
+    });
+    setLevantamientoFecha(item.fecha_levantamiento || todayInputDate());
+    setLevantamientoResumen(String(item.resumen || ''));
+    setLevantamientoObservaciones(String(item.observaciones || ''));
+    setLevantamientoVoltaje(String(item.medicion_voltaje || ''));
+    setLevantamientoCorriente(String(item.medicion_corriente || ''));
+    setLevantamientoPotencia(String(item.medicion_potencia || ''));
+    setLevantamientoFotos(Array.isArray(item.fotos) ? item.fotos : []);
+    setShowLevantamientoModal(true);
+  };
+
+  const handleSolicitarEdicionRetiro = (item: Permiso) => {
+    const retiroId = Number(item?.id_retiro_terreno || 0) || null;
+    if (!retiroId) return;
+    const estado = estadoEdicionRetiro(item?.estado_edicion);
+    if (!(estado === 'finalizado' || estado === 'edicion_rechazada')) return;
+    Alert.alert('Solicitar edicion', 'Se enviara la solicitud de edicion para este retiro.', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Solicitar',
+        onPress: async () => {
+          try {
+            setSolicitandoEdicionRetiroId(retiroId);
+            await solicitarEdicionRetiroTerreno(retiroId);
+            await cargarRetirosTerreno();
+            Alert.alert('Retiro', 'Solicitud de edicion enviada.');
+          } catch (error: any) {
+            const backendMsg =
+              error?.response?.data?.error ||
+              error?.response?.data?.message ||
+              error?.message ||
+              'No se pudo solicitar la edicion.';
+            Alert.alert('Retiro', backendMsg);
+          } finally {
+            setSolicitandoEdicionRetiroId(null);
+          }
+        },
+      },
+    ]);
   };
 
   useEffect(() => {
@@ -1255,6 +1375,7 @@ export default function InformesScreen() {
     setShowRetiroChecklistModal(false);
     setShowRetiroTipoModal(false);
     setShowLevantamientoModal(false);
+    setLevantamientoEditandoId(null);
   }, [actividadesAsignadas, actividadAsignadaActiva]);
 
   useEffect(() => {
@@ -2125,22 +2246,27 @@ export default function InformesScreen() {
           })}
         </View>
 
-        {moduloInforme === 'levantamiento' ? (
+        {moduloInforme === 'levantamiento' && (actividadAsignadaActiva || levantamientoEditandoId) ? (
           <View style={styles.card}>
             <View style={styles.assignedHeader}>
               <Text style={styles.sectionTitle}>Formulario de levantamiento</Text>
-              <Pressable onPress={() => setShowLevantamientoModal(false)}>
+              <Pressable
+                onPress={() => {
+                  setShowLevantamientoModal(false);
+                  setLevantamientoEditandoId(null);
+                  setLevantamientoEditMeta(null);
+                }}>
                 <Ionicons name="close" size={20} color="#334155" />
               </Pressable>
             </View>
-            {actividadAsignadaActiva && showLevantamientoModal ? (
+            {showLevantamientoModal && !levantamientoEditandoId ? (
               <>
                 <View style={styles.levantamientoInfoCard}>
                   <Text style={styles.levantamientoInfoTitle}>
-                    {centroSelForm?.nombre || actividadAsignadaActiva.centro?.nombre || 'Centro asignado'}
+                    {levantamientoEditMeta?.centro || centroSelForm?.nombre || actividadAsignadaActiva?.centro?.nombre || 'Centro asignado'}
                   </Text>
                   <Text style={styles.rowMeta}>
-                    Cliente: {clienteForm?.nombre || clienteForm?.razon_social || actividadAsignadaActiva.centro?.cliente || '-'}
+                    Cliente: {levantamientoEditMeta?.cliente || clienteForm?.nombre || clienteForm?.razon_social || actividadAsignadaActiva?.centro?.cliente || '-'}
                   </Text>
                   <View style={styles.levantamientoTwoCols}>
                     <View style={styles.inputCol}>
@@ -2149,17 +2275,17 @@ export default function InformesScreen() {
                     </View>
                     <View style={styles.inputCol}>
                       <Text style={styles.selectLabel}>Region / Area</Text>
-                      <TextInput style={[styles.input, styles.inputDisabled]} editable={false} value={region || String(centroSelForm?.area || centroSelForm?.region || '')} />
+                      <TextInput style={[styles.input, styles.inputDisabled]} editable={false} value={region || levantamientoEditMeta?.region || String(centroSelForm?.area || centroSelForm?.region || '')} />
                     </View>
                   </View>
                   <View style={styles.levantamientoTwoCols}>
                     <View style={styles.inputCol}>
                       <Text style={styles.selectLabel}>Localidad</Text>
-                      <TextInput style={[styles.input, styles.inputDisabled]} editable={false} value={localidad || String(centroSelForm?.ubicacion || centroSelForm?.localidad || '')} />
+                      <TextInput style={[styles.input, styles.inputDisabled]} editable={false} value={localidad || levantamientoEditMeta?.localidad || String(centroSelForm?.ubicacion || centroSelForm?.localidad || '')} />
                     </View>
                     <View style={styles.inputCol}>
                       <Text style={styles.selectLabel}>Codigo ponton</Text>
-                      <TextInput style={[styles.input, styles.inputDisabled]} editable={false} value={codigoPontonActa || String(centroSelForm?.nombre_ponton || '')} />
+                      <TextInput style={[styles.input, styles.inputDisabled]} editable={false} value={codigoPontonActa || levantamientoEditMeta?.codigo_ponton || String(centroSelForm?.nombre_ponton || '')} />
                     </View>
                   </View>
                 </View>
@@ -2272,10 +2398,12 @@ export default function InformesScreen() {
                   style={[styles.saveBtn, saving && styles.saveBtnDisabled]}
                   disabled={saving}
                   onPress={handleGuardarLevantamiento}>
-                  <Text style={styles.saveBtnText}>{saving ? 'Guardando...' : 'Finalizar levantamiento'}</Text>
+                  <Text style={styles.saveBtnText}>
+                    {saving ? 'Guardando...' : levantamientoEditandoId ? 'Guardar edicion' : 'Finalizar levantamiento'}
+                  </Text>
                 </Pressable>
               </>
-            ) : actividadAsignadaActiva ? (
+            ) : actividadAsignadaActiva && !levantamientoEditandoId ? (
               <Pressable style={styles.assignedItem} onPress={() => setShowLevantamientoModal(true)}>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.assignedItemTitle}>
@@ -2288,10 +2416,146 @@ export default function InformesScreen() {
                   <Text style={[styles.assignedActionText, styles.assignedActionTextProgress]}>Continuar</Text>
                 </View>
               </Pressable>
-            ) : (
-              <Text style={styles.rowMeta}>Selecciona un trabajo programado de levantamiento para completar el formulario.</Text>
-            )}
+            ) : null}
           </View>
+        ) : null}
+
+        {moduloInforme === 'levantamiento' && !!levantamientoEditandoId && showLevantamientoModal ? (
+          <Modal visible transparent animationType="fade" onRequestClose={() => setShowLevantamientoModal(false)}>
+            <View style={styles.levModalOverlay}>
+              <View style={styles.levModalCard}>
+                <View style={styles.assignedHeader}>
+                  <Text style={styles.sectionTitle}>Editar levantamiento</Text>
+                  <Pressable
+                    onPress={() => {
+                      setShowLevantamientoModal(false);
+                      setLevantamientoEditandoId(null);
+                      setLevantamientoEditMeta(null);
+                    }}>
+                    <Ionicons name="close" size={20} color="#334155" />
+                  </Pressable>
+                </View>
+                <ScrollView showsVerticalScrollIndicator={false}>
+                  <View style={styles.levantamientoInfoCard}>
+                    <Text style={styles.levantamientoInfoTitle}>
+                      {levantamientoEditMeta?.centro || centroSelForm?.nombre || actividadAsignadaActiva?.centro?.nombre || 'Centro asignado'}
+                    </Text>
+                    <Text style={styles.rowMeta}>
+                      Cliente: {levantamientoEditMeta?.cliente || clienteForm?.nombre || clienteForm?.razon_social || actividadAsignadaActiva?.centro?.cliente || '-'}
+                    </Text>
+                    <View style={styles.levantamientoTwoCols}>
+                      <View style={styles.inputCol}>
+                        <Text style={styles.selectLabel}>Fecha</Text>
+                        <TextInput style={[styles.input, styles.inputDisabled]} editable={false} value={formatDate(levantamientoFecha)} />
+                      </View>
+                      <View style={styles.inputCol}>
+                        <Text style={styles.selectLabel}>Region / Area</Text>
+                        <TextInput style={[styles.input, styles.inputDisabled]} editable={false} value={region || levantamientoEditMeta?.region || String(centroSelForm?.area || centroSelForm?.region || '')} />
+                      </View>
+                    </View>
+                    <View style={styles.levantamientoTwoCols}>
+                      <View style={styles.inputCol}>
+                        <Text style={styles.selectLabel}>Localidad</Text>
+                        <TextInput style={[styles.input, styles.inputDisabled]} editable={false} value={localidad || levantamientoEditMeta?.localidad || String(centroSelForm?.ubicacion || centroSelForm?.localidad || '')} />
+                      </View>
+                      <View style={styles.inputCol}>
+                        <Text style={styles.selectLabel}>Codigo ponton</Text>
+                        <TextInput style={[styles.input, styles.inputDisabled]} editable={false} value={codigoPontonActa || levantamientoEditMeta?.codigo_ponton || String(centroSelForm?.nombre_ponton || '')} />
+                      </View>
+                    </View>
+                  </View>
+
+                  <View style={styles.levantamientoBlock}>
+                    <Text style={styles.levantamientoBlockTitle}>Registro general</Text>
+                    <TextInput
+                      style={[styles.input, styles.textArea]}
+                      value={levantamientoResumen}
+                      onChangeText={setLevantamientoResumen}
+                      placeholder="Describe el levantamiento realizado..."
+                      multiline
+                      textAlignVertical="top"
+                    />
+                    <TextInput
+                      style={[styles.input, styles.levantamientoTextAreaSmall]}
+                      value={levantamientoObservaciones}
+                      onChangeText={setLevantamientoObservaciones}
+                      placeholder="Observaciones adicionales..."
+                      multiline
+                      textAlignVertical="top"
+                    />
+                  </View>
+
+                  <View style={styles.levantamientoBlock}>
+                    <Text style={styles.levantamientoBlockTitle}>Mediciones de energia opcionales</Text>
+                    <View style={styles.levantamientoThreeCols}>
+                      <View style={styles.inputCol}>
+                        <Text style={styles.selectLabel}>Voltaje</Text>
+                        <TextInput style={styles.input} value={levantamientoVoltaje} onChangeText={setLevantamientoVoltaje} placeholder="Ej: 220V" />
+                      </View>
+                      <View style={styles.inputCol}>
+                        <Text style={styles.selectLabel}>Corriente</Text>
+                        <TextInput style={styles.input} value={levantamientoCorriente} onChangeText={setLevantamientoCorriente} placeholder="Ej: 10A" />
+                      </View>
+                      <View style={styles.inputCol}>
+                        <Text style={styles.selectLabel}>Potencia</Text>
+                        <TextInput style={styles.input} value={levantamientoPotencia} onChangeText={setLevantamientoPotencia} placeholder="Ej: 2.2kW" />
+                      </View>
+                    </View>
+                  </View>
+
+                  <View style={styles.levantamientoBlock}>
+                    <View style={styles.assignedHeader}>
+                      <Text style={styles.levantamientoBlockTitle}>Fotos del levantamiento</Text>
+                      <Pressable
+                        style={styles.levantamientoPhotoAddBtn}
+                        onPress={async () => {
+                          if (!cameraPermission?.granted) {
+                            const req = await requestCameraPermission();
+                            if (!req.granted) {
+                              Alert.alert('Levantamiento', 'Debes autorizar la camara para capturar fotos.');
+                              return;
+                            }
+                          }
+                          setCameraTarget('levantamiento');
+                          setEvidenciaTargetIndex(null);
+                          setShowCameraModal(true);
+                        }}>
+                        <Ionicons name="camera-outline" size={16} color="#1d4ed8" />
+                      </Pressable>
+                    </View>
+                    {levantamientoFotos.length ? (
+                      <View style={styles.evidenciaGrid}>
+                        {levantamientoFotos.map((foto, idx) => (
+                          <View key={`lev-edit-foto-${idx}`} style={styles.evidenciaItem}>
+                            <Image source={{ uri: foto.uri }} style={styles.evidenciaPreview} resizeMode="cover" />
+                            <TextInput
+                              style={[styles.input, styles.levantamientoTextAreaSmall, { marginTop: 8 }]}
+                              value={foto.descripcion}
+                              onChangeText={(text) =>
+                                setLevantamientoFotos((prev) => prev.map((item, i) => (i === idx ? { ...item, descripcion: text } : item)))
+                              }
+                              placeholder="Descripcion de la foto..."
+                              multiline
+                              textAlignVertical="top"
+                            />
+                          </View>
+                        ))}
+                      </View>
+                    ) : (
+                      <Text style={styles.signatureEmptyText}>Sin fotos registradas</Text>
+                    )}
+                  </View>
+
+                  <Pressable
+                    style={[styles.saveBtn, saving && styles.saveBtnDisabled]}
+                    disabled={saving}
+                    onPress={handleGuardarLevantamiento}>
+                    <Text style={styles.saveBtnText}>{saving ? 'Guardando...' : 'Guardar edicion'}</Text>
+                  </Pressable>
+                </ScrollView>
+              </View>
+            </View>
+          </Modal>
         ) : null}
 
         {moduloInforme === 'levantamiento' && !!levantamientosRecientesVisibles.length ? (
@@ -2306,9 +2570,41 @@ export default function InformesScreen() {
                   </Text>
                   {!!item.resumen ? <Text style={styles.rowMeta} numberOfLines={2}>{item.resumen}</Text> : null}
                 </View>
-                <View style={[styles.assignedActionPill, styles.assignedActionPillDone]}>
-                  <Ionicons name="checkmark-circle" size={14} color="#166534" />
-                  <Text style={[styles.assignedActionText, styles.assignedActionTextDone]}>Realizado</Text>
+                <View style={{ alignItems: 'flex-end', gap: 6 }}>
+                  <View style={[styles.assignedActionPill, styles.assignedActionPillDone]}>
+                    <Ionicons name="checkmark-circle" size={14} color="#166534" />
+                    <Text style={[styles.assignedActionText, styles.assignedActionTextDone]}>
+                      {estadoLevantamiento(item.estado) === 'edicion_solicitada'
+                        ? 'Edicion solicitada'
+                        : estadoLevantamiento(item.estado) === 'edicion_autorizada'
+                          ? 'Edicion autorizada'
+                          : estadoLevantamiento(item.estado) === 'edicion_rechazada'
+                            ? 'Edicion rechazada'
+                            : 'Realizado'}
+                    </Text>
+                  </View>
+                  {(estadoLevantamiento(item.estado) === 'finalizado' ||
+                    estadoLevantamiento(item.estado) === 'edicion_rechazada') && (
+                    <Pressable
+                      style={styles.levEditRequestBtn}
+                      disabled={solicitandoEdicionLevantamientoId === Number(item.id_levantamiento_terreno || 0)}
+                      onPress={() => handleSolicitarEdicionLevantamiento(item)}>
+                      <Ionicons name="create-outline" size={13} color="#92400e" />
+                      <Text style={styles.levEditRequestBtnText}>
+                        {solicitandoEdicionLevantamientoId === Number(item.id_levantamiento_terreno || 0)
+                          ? 'Enviando...'
+                          : 'Solicitar editar'}
+                      </Text>
+                    </Pressable>
+                  )}
+                  {estadoLevantamiento(item.estado) === 'edicion_autorizada' && (
+                    <Pressable
+                      style={styles.levEditRequestBtn}
+                      onPress={() => handleEditarLevantamientoAutorizado(item)}>
+                      <Ionicons name="create-outline" size={13} color="#0c4a6e" />
+                      <Text style={[styles.levEditRequestBtnText, { color: '#0c4a6e' }]}>Editar ahora</Text>
+                    </Pressable>
+                  )}
                 </View>
               </View>
             ))}
@@ -2869,23 +3165,37 @@ export default function InformesScreen() {
                   </Text>
                 </View>
                 <View style={styles.rowActions}>
-                  <Pressable
-                    style={styles.actionBtn}
-                    onPress={() => {
-                      const clientePorNombre = clientes.find(
-                        (c) =>
-                          String(c.nombre || c.razon_social || '').trim().toLowerCase() ===
-                          String(item.empresa || item.cliente || '').trim().toLowerCase()
-                      );
-                      const clienteId = Number(clientePorNombre?.id_cliente ?? clientePorNombre?.id ?? 0) || null;
-                      if (clienteId) setPermClienteId(clienteId);
-                      setPermCentroId(Number(item.centro_id || 0) || null);
-                      setPermisoContexto('retiro');
-                      setRetiroEditandoId(Number(item.id_retiro_terreno || 0) || null);
-                      setShowPermisoModal(true);
-                    }}>
-                    <Ionicons name="create-outline" size={16} color="#1d4ed8" />
-                  </Pressable>
+                  {estadoEdicionRetiro(item.estado_edicion) === 'edicion_autorizada' ? (
+                    <Pressable
+                      style={styles.actionBtn}
+                      onPress={() => {
+                        const clientePorNombre = clientes.find(
+                          (c) =>
+                            String(c.nombre || c.razon_social || '').trim().toLowerCase() ===
+                            String(item.empresa || item.cliente || '').trim().toLowerCase()
+                        );
+                        const clienteId = Number(clientePorNombre?.id_cliente ?? clientePorNombre?.id ?? 0) || null;
+                        if (clienteId) setPermClienteId(clienteId);
+                        setPermCentroId(Number(item.centro_id || 0) || null);
+                        setPermisoContexto('retiro');
+                        setRetiroEditandoId(Number(item.id_retiro_terreno || 0) || null);
+                        setShowPermisoModal(true);
+                      }}>
+                      <Ionicons name="create-outline" size={16} color="#1d4ed8" />
+                    </Pressable>
+                  ) : null}
+                  {(estadoEdicionRetiro(item.estado_edicion) === 'finalizado' ||
+                    estadoEdicionRetiro(item.estado_edicion) === 'edicion_rechazada') ? (
+                    <Pressable
+                      style={styles.levEditRequestBtn}
+                      disabled={solicitandoEdicionRetiroId === Number(item.id_retiro_terreno || 0)}
+                      onPress={() => handleSolicitarEdicionRetiro(item)}>
+                      <Ionicons name="create-outline" size={13} color="#92400e" />
+                      <Text style={styles.levEditRequestBtnText}>
+                        {solicitandoEdicionRetiroId === Number(item.id_retiro_terreno || 0) ? 'Enviando...' : 'Solicitar editar'}
+                      </Text>
+                    </Pressable>
+                  ) : null}
                   <Pressable
                     style={styles.actionBtn}
                     onPress={() => {
@@ -2895,7 +3205,27 @@ export default function InformesScreen() {
                     }}>
                     <Ionicons name="list-outline" size={16} color="#1d4ed8" />
                   </Pressable>
-                  <Ionicons name="checkmark-circle" size={18} color="#16a34a" />
+                  <Ionicons
+                    name={
+                      estadoEdicionRetiro(item.estado_edicion) === 'edicion_solicitada'
+                        ? 'time-outline'
+                        : estadoEdicionRetiro(item.estado_edicion) === 'edicion_autorizada'
+                          ? 'create-outline'
+                          : estadoEdicionRetiro(item.estado_edicion) === 'edicion_rechazada'
+                            ? 'close-circle-outline'
+                            : 'checkmark-circle'
+                    }
+                    size={18}
+                    color={
+                      estadoEdicionRetiro(item.estado_edicion) === 'edicion_solicitada'
+                        ? '#d97706'
+                        : estadoEdicionRetiro(item.estado_edicion) === 'edicion_autorizada'
+                          ? '#2563eb'
+                          : estadoEdicionRetiro(item.estado_edicion) === 'edicion_rechazada'
+                            ? '#dc2626'
+                            : '#16a34a'
+                    }
+                  />
                   {canEliminarRetiroReciente ? (
                     <Pressable
                       style={styles.actionBtn}
@@ -5072,6 +5402,33 @@ const styles = StyleSheet.create({
   assignedActionTextActive: { color: '#166534' },
   assignedActionTextProgress: { color: '#92400e' },
   assignedActionTextDone: { color: '#166534' },
+  levModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(2, 6, 23, 0.45)',
+    paddingHorizontal: 12,
+    paddingVertical: 24,
+    justifyContent: 'center',
+  },
+  levModalCard: {
+    backgroundColor: '#fff',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+    padding: 12,
+    maxHeight: '92%',
+  },
+  levEditRequestBtn: {
+    borderWidth: 1,
+    borderColor: '#fcd34d',
+    backgroundColor: '#fef3c7',
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  levEditRequestBtnText: { color: '#92400e', fontWeight: '800', fontSize: 11.5 },
   assignedLockedBox: {
     borderWidth: 1,
     borderColor: '#bfdbfe',

@@ -46,10 +46,17 @@ type RendicionLinea = {
 };
 
 const CATEGORIAS_GASTO = ['colacion', 'transporte', 'traslados', 'fletes', 'estadia', 'combustible', 'materiales', 'otros'];
+const TIPOS_HISTORIAL = ['', 'instalacion', 'mantencion', 'retiro', 'levantamiento'];
+const ESTADOS_HISTORIAL = ['', 'enviado', 'edicion_solicitada', 'edicion_autorizada', 'edicion_rechazada'];
 
 const hoyStr = () => {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+
+const toIsoDate = (d: Date) => {
+  const dt = new Date(d);
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
 };
 
 const money = (v: any) =>
@@ -194,6 +201,16 @@ export default function RendicionesScreen() {
   const [lineaFotoActivaIdx, setLineaFotoActivaIdx] = useState<number | null>(null);
   const [showTrabajosExtraModal, setShowTrabajosExtraModal] = useState(false);
   const [categoriaModalIdx, setCategoriaModalIdx] = useState<number | null>(null);
+  const [showHistorialModal, setShowHistorialModal] = useState(false);
+  const [historialPage, setHistorialPage] = useState(1);
+  const [historialPeriodo, setHistorialPeriodo] = useState<'mes_actual' | 'mes_anterior' | 'personalizado'>('mes_actual');
+  const [historialTipo, setHistorialTipo] = useState('');
+  const [historialEstado, setHistorialEstado] = useState('');
+  const [historialTipoModal, setHistorialTipoModal] = useState(false);
+  const [historialEstadoModal, setHistorialEstadoModal] = useState(false);
+  const [historialBusqueda, setHistorialBusqueda] = useState('');
+  const [historialDesde, setHistorialDesde] = useState('');
+  const [historialHasta, setHistorialHasta] = useState('');
   const [selectedTrabajoId, setSelectedTrabajoId] = useState<string>('');
   const [editingRendicionId, setEditingRendicionId] = useState<number | null>(null);
   const [editingActividadId, setEditingActividadId] = useState<number | null>(null);
@@ -628,8 +645,62 @@ export default function RendicionesScreen() {
         const dbv = new Date(b?.fecha_gasto || b?.created_at || 0).getTime();
         return dbv - da;
       })
-      .slice(0, 10);
+      .slice(0, 3);
   }, [rendiciones]);
+
+  const rendicionesCompletadasTotal = useMemo(
+    () => (Array.isArray(rendiciones) ? rendiciones : []).filter((r: any) => String(r?.estado || '').toLowerCase() === 'enviado').length,
+    [rendiciones]
+  );
+
+  const historialPeriodoRango = useMemo(() => {
+    const now = new Date();
+    if (historialPeriodo === 'mes_actual') {
+      return { desde: toIsoDate(new Date(now.getFullYear(), now.getMonth(), 1)), hasta: toIsoDate(now) };
+    }
+    if (historialPeriodo === 'mes_anterior') {
+      return {
+        desde: toIsoDate(new Date(now.getFullYear(), now.getMonth() - 1, 1)),
+        hasta: toIsoDate(new Date(now.getFullYear(), now.getMonth(), 0)),
+      };
+    }
+    return { desde: historialDesde || '', hasta: historialHasta || '' };
+  }, [historialPeriodo, historialDesde, historialHasta]);
+
+  const historialRendicionesFiltradas = useMemo(() => {
+    const q = normalizeText(historialBusqueda);
+    const { desde, hasta } = historialPeriodoRango;
+    return (Array.isArray(rendiciones) ? rendiciones : [])
+      .filter((r: any) => String(r?.estado || '').toLowerCase() === 'enviado')
+      .filter((r: any) => {
+        if (historialTipo && normalizeText(r?.actividad_tipo) !== normalizeText(historialTipo)) return false;
+        if (historialEstado && normalizeText(r?.estado) !== normalizeText(historialEstado)) return false;
+        if (q) {
+          const texto = normalizeText(`${r?.centro_nombre || ''} ${r?.cliente_nombre || ''} ${r?.id_rendicion || ''}`);
+          if (!texto.includes(q)) return false;
+        }
+        const fecha = String(r?.fecha_gasto || '').slice(0, 10);
+        if (desde && fecha && fecha < desde) return false;
+        if (hasta && fecha && fecha > hasta) return false;
+        return true;
+      })
+      .sort((a: any, b: any) => {
+        const da = new Date(a?.fecha_gasto || a?.created_at || 0).getTime();
+        const dbv = new Date(b?.fecha_gasto || b?.created_at || 0).getTime();
+        return dbv - da;
+      });
+  }, [rendiciones, historialTipo, historialEstado, historialBusqueda, historialPeriodoRango]);
+
+  const HISTORIAL_PAGE_SIZE = 6;
+  const historialTotalPages = useMemo(
+    () => Math.max(1, Math.ceil((historialRendicionesFiltradas.length || 0) / HISTORIAL_PAGE_SIZE)),
+    [historialRendicionesFiltradas.length]
+  );
+  const historialPaginadas = useMemo(() => {
+    const page = Math.min(Math.max(1, historialPage), historialTotalPages);
+    const start = (page - 1) * HISTORIAL_PAGE_SIZE;
+    return historialRendicionesFiltradas.slice(start, start + HISTORIAL_PAGE_SIZE);
+  }, [historialRendicionesFiltradas, historialPage, historialTotalPages]);
 
   const rendicionesPendientesEdicion = useMemo(() => {
     return (Array.isArray(rendiciones) ? rendiciones : [])
@@ -762,6 +833,14 @@ export default function RendicionesScreen() {
     if (categoria !== 'otros') actualizarLinea(categoriaModalIdx, 'otroNombre', '');
     setCategoriaModalIdx(null);
   };
+
+  useEffect(() => {
+    setHistorialPage(1);
+  }, [historialPeriodo, historialTipo, historialEstado, historialBusqueda, historialDesde, historialHasta]);
+
+  useEffect(() => {
+    if (historialPage > historialTotalPages) setHistorialPage(historialTotalPages);
+  }, [historialPage, historialTotalPages]);
 
   const validar = () => {
     const centroIdActual =
@@ -989,7 +1068,7 @@ export default function RendicionesScreen() {
               <ThemedText style={styles.pendingTypeValue}>{trabajosPendientesRendicion.retiro.length}</ThemedText>
             </View>
             <View style={[styles.pendingTypeCard, styles.pendingTypeCardLev]}>
-              <ThemedText style={styles.pendingTypeLabel}>Levantamiento</ThemedText>
+              <ThemedText style={styles.pendingTypeLabel}>Visitas</ThemedText>
               <ThemedText style={styles.pendingTypeValue}>{trabajosPendientesRendicion.levantamiento.length}</ThemedText>
             </View>
           </View>
@@ -1151,7 +1230,7 @@ export default function RendicionesScreen() {
                 return (
                   <View key={`lev-pend-${t?.id_actividad}`} style={styles.pendingLevRow}>
                     <View style={styles.pendingInstTopRow}>
-                      <ThemedText style={styles.pendingLevType}>Levantamiento</ThemedText>
+                      <ThemedText style={styles.pendingLevType}>Visita</ThemedText>
                       <View style={styles.stepIconsWrap}>
                         {(() => {
                           const rendido = estaRendidoTrabajo(t);
@@ -1190,73 +1269,77 @@ export default function RendicionesScreen() {
           )}
         </View>
 
-        <View style={styles.card}>
-          <View style={styles.sectionTitleRow}>
-            <ThemedText style={styles.sectionTitle}>Pendiente de editar</ThemedText>
-            <View style={[styles.badge, styles.badgeWarn]}>
-              <ThemedText style={styles.badgeText}>{rendicionesPendientesEdicion.length}</ThemedText>
-            </View>
-          </View>
-          {!!rendicionesPendientesEdicion.length &&
-            rendicionesPendientesEdicion.map((r: any) => (
-              <View key={`rend-edit-${r.id_rendicion}`} style={styles.itemRow}>
-                <View style={{ flex: 1 }}>
-                  <ThemedText style={styles.itemTitle}>
-                    {r.centro_nombre || 'Sin centro'} - {money(r.monto)}
-                  </ThemedText>
-                  <ThemedText style={styles.itemSub}>
-                    Solicitud: {r.edicion_solicitada_at ? String(r.edicion_solicitada_at).slice(0, 10) : (r.updated_at ? String(r.updated_at).slice(0, 10) : '-')}
-                  </ThemedText>
-                </View>
+        {(rendicionesPendientesEdicion.length > 0 || rendicionesAutorizadasEdicion.length > 0) && (
+          <>
+            <View style={styles.card}>
+              <View style={styles.sectionTitleRow}>
+                <ThemedText style={styles.sectionTitle}>Pendiente de editar</ThemedText>
                 <View style={[styles.badge, styles.badgeWarn]}>
-                  <ThemedText style={styles.badgeText}>Pendiente</ThemedText>
+                  <ThemedText style={styles.badgeText}>{rendicionesPendientesEdicion.length}</ThemedText>
                 </View>
               </View>
-            ))}
-          {!rendicionesPendientesEdicion.length && (
-            <ThemedText style={styles.empty}>No hay solicitudes pendientes.</ThemedText>
-          )}
-        </View>
-
-        <View style={styles.card}>
-          <View style={styles.sectionTitleRow}>
-            <ThemedText style={styles.sectionTitle}>Autorizadas para editar</ThemedText>
-            <View style={[styles.badge, styles.badgeInfo]}>
-              <ThemedText style={styles.badgeText}>{rendicionesAutorizadasEdicion.length}</ThemedText>
-            </View>
-          </View>
-          {!!rendicionesAutorizadasEdicion.length &&
-            rendicionesAutorizadasEdicion.map((r: any) => (
-              <View key={`rend-auth-${r.id_rendicion}`} style={styles.itemRow}>
-                <View style={{ flex: 1 }}>
-                  <ThemedText style={styles.itemTitle}>
-                    {r.centro_nombre || 'Sin centro'} - {money(r.monto)}
-                  </ThemedText>
-                  <ThemedText style={styles.itemSub}>
-                    Estado: edicion autorizada
-                  </ThemedText>
-                </View>
-                <View style={{ alignItems: 'flex-end', gap: 6 }}>
-                  <View style={[styles.badge, styles.badgeInfo]}>
-                    <ThemedText style={styles.badgeText}>Autorizada</ThemedText>
+              {!!rendicionesPendientesEdicion.length &&
+                rendicionesPendientesEdicion.map((r: any) => (
+                  <View key={`rend-edit-${r.id_rendicion}`} style={styles.itemRow}>
+                    <View style={{ flex: 1 }}>
+                      <ThemedText style={styles.itemTitle}>
+                        {r.centro_nombre || 'Sin centro'} - {money(r.monto)}
+                      </ThemedText>
+                      <ThemedText style={styles.itemSub}>
+                        Solicitud: {r.edicion_solicitada_at ? String(r.edicion_solicitada_at).slice(0, 10) : (r.updated_at ? String(r.updated_at).slice(0, 10) : '-')}
+                      </ThemedText>
+                    </View>
+                    <View style={[styles.badge, styles.badgeWarn]}>
+                      <ThemedText style={styles.badgeText}>Pendiente</ThemedText>
+                    </View>
                   </View>
-                  <Pressable style={styles.editNowBtn} onPress={() => abrirEdicionAutorizada(r)}>
-                    <Ionicons name="create" size={13} color="#1d4ed8" />
-                    <ThemedText style={styles.editNowBtnText}>Editar</ThemedText>
-                  </Pressable>
+                ))}
+            </View>
+
+            <View style={styles.card}>
+              <View style={styles.sectionTitleRow}>
+                <ThemedText style={styles.sectionTitle}>Autorizadas para editar</ThemedText>
+                <View style={[styles.badge, styles.badgeInfo]}>
+                  <ThemedText style={styles.badgeText}>{rendicionesAutorizadasEdicion.length}</ThemedText>
                 </View>
               </View>
-            ))}
-          {!rendicionesAutorizadasEdicion.length && (
-            <ThemedText style={styles.empty}>No hay rendiciones autorizadas para editar.</ThemedText>
-          )}
-        </View>
+              {!!rendicionesAutorizadasEdicion.length &&
+                rendicionesAutorizadasEdicion.map((r: any) => (
+                  <View key={`rend-auth-${r.id_rendicion}`} style={styles.itemRow}>
+                    <View style={{ flex: 1 }}>
+                      <ThemedText style={styles.itemTitle}>
+                        {r.centro_nombre || 'Sin centro'} - {money(r.monto)}
+                      </ThemedText>
+                      <ThemedText style={styles.itemSub}>
+                        Estado: edicion autorizada
+                      </ThemedText>
+                    </View>
+                    <View style={{ alignItems: 'flex-end', gap: 6 }}>
+                      <View style={[styles.badge, styles.badgeInfo]}>
+                        <ThemedText style={styles.badgeText}>Autorizada</ThemedText>
+                      </View>
+                      <Pressable style={styles.editNowBtn} onPress={() => abrirEdicionAutorizada(r)}>
+                        <Ionicons name="create" size={13} color="#1d4ed8" />
+                        <ThemedText style={styles.editNowBtnText}>Editar</ThemedText>
+                      </Pressable>
+                    </View>
+                  </View>
+                ))}
+            </View>
+          </>
+        )}
 
         <View style={styles.card}>
           <View style={styles.sectionTitleRow}>
-            <ThemedText style={styles.sectionTitle}>Rendiciones completadas recientes</ThemedText>
-            <View style={[styles.badge, styles.badgeOk]}>
-              <ThemedText style={styles.badgeText}>{rendicionesCompletadasRecientes.length}</ThemedText>
+            <ThemedText style={styles.sectionTitle}>Rendiciones completadas</ThemedText>
+            <View style={styles.sectionActionsRow}>
+              <Pressable style={styles.historialOpenBtn} onPress={() => setShowHistorialModal(true)}>
+                <Ionicons name="folder-open-outline" size={14} color="#0f766e" />
+                <ThemedText style={styles.historialOpenBtnText}>Abrir historial</ThemedText>
+              </Pressable>
+              <View style={[styles.badge, styles.badgeOk]}>
+                <ThemedText style={styles.badgeText}>{rendicionesCompletadasTotal}</ThemedText>
+              </View>
             </View>
           </View>
           {!!rendicionesCompletadasRecientes.length &&
@@ -1295,6 +1378,180 @@ export default function RendicionesScreen() {
             <ThemedText style={styles.empty}>No hay rendiciones completadas recientes.</ThemedText>
           )}
         </View>
+
+      <Modal visible={showHistorialModal} transparent animationType="fade" onRequestClose={() => setShowHistorialModal(false)}>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.historialModalCard}>
+            <View style={styles.modalHeaderRow}>
+              <ThemedText style={styles.sectionTitle}>Historial de rendiciones</ThemedText>
+              <Pressable onPress={() => setShowHistorialModal(false)}>
+                <Ionicons name="close" size={24} color="#0f172a" />
+              </Pressable>
+            </View>
+            <ScrollView contentContainerStyle={{ gap: 8 }} showsVerticalScrollIndicator={false}>
+              <View style={styles.historialFiltrosCard}>
+                <View style={styles.row}>
+                  <View style={[styles.col, { flex: 1 }]}>
+                    <ThemedText style={styles.label}>Periodo</ThemedText>
+                    <View style={styles.historialSelectRow}>
+                      {[
+                        { id: 'mes_actual', label: 'Mes actual' },
+                        { id: 'mes_anterior', label: 'Mes anterior' },
+                        { id: 'personalizado', label: 'Personalizado' },
+                      ].map((p) => (
+                        <Pressable
+                          key={`p-${p.id}`}
+                          style={[styles.historialChip, historialPeriodo === p.id && styles.historialChipActive]}
+                          onPress={() => setHistorialPeriodo(p.id as any)}
+                        >
+                          <ThemedText style={[styles.historialChipText, historialPeriodo === p.id && styles.historialChipTextActive]}>
+                            {p.label}
+                          </ThemedText>
+                        </Pressable>
+                      ))}
+                    </View>
+                  </View>
+                </View>
+                {historialPeriodo === 'personalizado' && (
+                  <View style={styles.row}>
+                    <View style={[styles.col, { flex: 1 }]}>
+                      <ThemedText style={styles.label}>Desde</ThemedText>
+                      <TextInput value={historialDesde} onChangeText={setHistorialDesde} placeholder="YYYY-MM-DD" style={styles.input} />
+                    </View>
+                    <View style={[styles.col, { flex: 1 }]}>
+                      <ThemedText style={styles.label}>Hasta</ThemedText>
+                      <TextInput value={historialHasta} onChangeText={setHistorialHasta} placeholder="YYYY-MM-DD" style={styles.input} />
+                    </View>
+                  </View>
+                )}
+                <View style={styles.row}>
+                  <View style={[styles.col, { flex: 1 }]}>
+                    <ThemedText style={styles.label}>Tipo</ThemedText>
+                    <Pressable style={[styles.selectLike, styles.historialSelectTipo]} onPress={() => setHistorialTipoModal(true)}>
+                      <ThemedText style={historialTipo ? styles.selectLikeValue : styles.selectLikePlaceholder}>
+                        {historialTipo || 'Todos'}
+                      </ThemedText>
+                      <Ionicons name="chevron-down" size={14} color="#1d4ed8" />
+                    </Pressable>
+                  </View>
+                </View>
+                <View style={styles.row}>
+                  <View style={[styles.col, { flex: 1 }]}>
+                    <ThemedText style={styles.label}>Estado</ThemedText>
+                    <Pressable style={[styles.selectLike, styles.historialSelectEstado]} onPress={() => setHistorialEstadoModal(true)}>
+                      <ThemedText style={historialEstado ? styles.selectLikeValue : styles.selectLikePlaceholder}>
+                        {historialEstado || 'Todos'}
+                      </ThemedText>
+                      <Ionicons name="chevron-down" size={14} color="#b45309" />
+                    </Pressable>
+                  </View>
+                </View>
+                <View style={styles.row}>
+                  <View style={[styles.col, { flex: 1 }]}>
+                    <ThemedText style={styles.label}>Buscar</ThemedText>
+                    <TextInput
+                      value={historialBusqueda}
+                      onChangeText={setHistorialBusqueda}
+                      placeholder="Centro, cliente o N° gasto"
+                      style={styles.input}
+                    />
+                  </View>
+                </View>
+              </View>
+
+              {historialPaginadas.map((r: any) => (
+                <View key={`hist-${r.id_rendicion}`} style={styles.itemRow}>
+                  <View style={{ flex: 1 }}>
+                    <ThemedText style={styles.itemTitle}>
+                      #{r.id_rendicion} - {r.centro_nombre || 'Sin centro'} - {money(r.monto)}
+                    </ThemedText>
+                    <ThemedText style={styles.itemSub}>
+                      {r.fecha_gasto || '-'} - {(r.actividad_tipo || '-').toString()} - {r.cliente_nombre || '-'}
+                    </ThemedText>
+                  </View>
+                  <View style={[styles.badge, styles.badgeOk]}>
+                    <ThemedText style={styles.badgeText}>Completada</ThemedText>
+                  </View>
+                </View>
+              ))}
+              {!historialPaginadas.length && <ThemedText style={styles.empty}>Sin rendiciones para los filtros seleccionados.</ThemedText>}
+            </ScrollView>
+            <View style={styles.historialFooter}>
+              <ThemedText style={styles.historialFooterText}>
+                Página {historialPage} de {historialTotalPages}
+              </ThemedText>
+              <View style={styles.historialPagerBtns}>
+                <Pressable
+                  style={[styles.historialPageBtn, historialPage <= 1 && styles.historialPageBtnDisabled]}
+                  onPress={() => setHistorialPage((p) => Math.max(1, p - 1))}
+                  disabled={historialPage <= 1}
+                >
+                  <ThemedText style={styles.historialPageBtnText}>Anterior</ThemedText>
+                </Pressable>
+                <Pressable
+                  style={[styles.historialPageBtn, historialPage >= historialTotalPages && styles.historialPageBtnDisabled]}
+                  onPress={() => setHistorialPage((p) => Math.min(historialTotalPages, p + 1))}
+                  disabled={historialPage >= historialTotalPages}
+                >
+                  <ThemedText style={styles.historialPageBtnText}>Siguiente</ThemedText>
+                </Pressable>
+              </View>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={historialTipoModal} transparent animationType="fade" onRequestClose={() => setHistorialTipoModal(false)}>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.selectModalCard}>
+            <View style={styles.selectModalHeader}>
+              <Ionicons name="options-outline" size={16} color="#1d4ed8" />
+              <ThemedText style={styles.selectModalTitle}>Seleccionar tipo</ThemedText>
+            </View>
+            {TIPOS_HISTORIAL.map((t) => (
+              <Pressable
+                key={`tipo-opt-${t || 'all'}`}
+                style={[styles.selectModalOption, historialTipo === t && styles.selectModalOptionActive]}
+                onPress={() => {
+                  setHistorialTipo(t);
+                  setHistorialTipoModal(false);
+                }}
+              >
+                <ThemedText style={[styles.selectModalOptionText, historialTipo === t && styles.selectModalOptionTextActive]}>{t || 'Todos'}</ThemedText>
+              </Pressable>
+            ))}
+            <Pressable style={styles.selectModalCancel} onPress={() => setHistorialTipoModal(false)}>
+              <ThemedText style={styles.selectModalCancelText}>Cancelar</ThemedText>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={historialEstadoModal} transparent animationType="fade" onRequestClose={() => setHistorialEstadoModal(false)}>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.selectModalCard}>
+            <View style={styles.selectModalHeader}>
+              <Ionicons name="layers-outline" size={16} color="#b45309" />
+              <ThemedText style={styles.selectModalTitle}>Seleccionar estado</ThemedText>
+            </View>
+            {ESTADOS_HISTORIAL.map((s) => (
+              <Pressable
+                key={`estado-opt-${s || 'all'}`}
+                style={[styles.selectModalOption, historialEstado === s && styles.selectModalOptionActive]}
+                onPress={() => {
+                  setHistorialEstado(s);
+                  setHistorialEstadoModal(false);
+                }}
+              >
+                <ThemedText style={[styles.selectModalOptionText, historialEstado === s && styles.selectModalOptionTextActive]}>{s || 'Todos'}</ThemedText>
+              </Pressable>
+            ))}
+            <Pressable style={styles.selectModalCancel} onPress={() => setHistorialEstadoModal(false)}>
+              <ThemedText style={styles.selectModalCancelText}>Cancelar</ThemedText>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
 
       <Modal visible={showForm} transparent animationType="fade" onRequestClose={() => setShowForm(false)}>
         <View style={styles.modalBackdrop}>
@@ -1888,6 +2145,19 @@ const styles = StyleSheet.create({
   filterHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   sectionTitle: { color: '#0f172a', fontSize: 15, fontWeight: '900', marginBottom: 1 },
   sectionTitleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  sectionActionsRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  historialOpenBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    borderWidth: 1,
+    borderColor: '#99f6e4',
+    backgroundColor: '#f0fdfa',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  historialOpenBtnText: { color: '#0f766e', fontSize: 11.5, fontWeight: '800' },
   newBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#1d4ed8', borderRadius: 9, paddingHorizontal: 10, paddingVertical: 8 },
   newBtnText: { color: '#fff', fontWeight: '800', fontSize: 12 },
   label: { color: '#475569', fontWeight: '700', fontSize: 11 },
@@ -1946,6 +2216,58 @@ const styles = StyleSheet.create({
     backgroundColor: '#f8fafc',
     color: '#475569',
   },
+  historialModalCard: {
+    width: '100%',
+    maxWidth: 620,
+    maxHeight: '90%',
+    backgroundColor: '#f8fbff',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    padding: 12,
+    gap: 8,
+  },
+  historialFiltrosCard: {
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+    backgroundColor: '#eff6ff',
+    borderRadius: 10,
+    padding: 8,
+    gap: 6,
+  },
+  historialSelectRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  historialChip: {
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    backgroundColor: '#fff',
+    borderRadius: 999,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+  },
+  historialChipActive: { backgroundColor: '#dbeafe', borderColor: '#60a5fa' },
+  historialChipText: { color: '#1e3a8a', fontSize: 11, fontWeight: '700' },
+  historialChipTextActive: { color: '#1d4ed8', fontWeight: '900' },
+  historialFooter: {
+    marginTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#e2e8f0',
+    paddingTop: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  historialFooterText: { color: '#475569', fontSize: 12, fontWeight: '700' },
+  historialPagerBtns: { flexDirection: 'row', gap: 8 },
+  historialPageBtn: {
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    backgroundColor: '#eff6ff',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  historialPageBtnDisabled: { opacity: 0.45 },
+  historialPageBtnText: { color: '#1d4ed8', fontSize: 11.5, fontWeight: '800' },
   inputReadOnlySaldo: {
     backgroundColor: '#ecfdf5',
     borderColor: '#86efac',
@@ -2011,6 +2333,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
   },
+  historialSelectTipo: {
+    borderColor: '#bfdbfe',
+    backgroundColor: '#f8fbff',
+  },
+  historialSelectEstado: {
+    borderColor: '#fcd34d',
+    backgroundColor: '#fffaf0',
+  },
   selectLikePlaceholder: {
     color: '#94a3b8',
     fontWeight: '600',
@@ -2031,26 +2361,47 @@ const styles = StyleSheet.create({
     borderColor: '#e2e8f0',
     padding: 12,
     gap: 8,
+    shadowColor: '#0f172a',
+    shadowOpacity: 0.16,
+    shadowOffset: { width: 0, height: 8 },
+    shadowRadius: 16,
+    elevation: 8,
+  },
+  selectModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e2e8f0',
+    paddingBottom: 8,
+    marginBottom: 2,
   },
   selectModalTitle: {
     color: '#0f172a',
     fontWeight: '900',
     fontSize: 14,
-    marginBottom: 2,
   },
   selectModalOption: {
     borderWidth: 1,
     borderColor: '#e2e8f0',
     borderRadius: 10,
-    backgroundColor: '#f8fafc',
+    backgroundColor: '#ffffff',
     paddingHorizontal: 10,
     paddingVertical: 9,
+  },
+  selectModalOptionActive: {
+    borderColor: '#93c5fd',
+    backgroundColor: '#eff6ff',
   },
   selectModalOptionText: {
     color: '#334155',
     fontWeight: '700',
     fontSize: 12.5,
     textTransform: 'capitalize',
+  },
+  selectModalOptionTextActive: {
+    color: '#1d4ed8',
+    fontWeight: '900',
   },
   selectModalCancel: {
     marginTop: 4,

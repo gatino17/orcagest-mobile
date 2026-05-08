@@ -239,6 +239,14 @@ export const updateRetiroTerreno = async (idRetiro: string | number, payload: an
   return res.data;
 };
 
+export const solicitarEdicionRetiroTerreno = async (
+  idRetiro: string | number,
+  payload?: Record<string, any>
+) => {
+  const res = await api.post(`/retiros_terreno/${idRetiro}/solicitar_edicion`, payload || {});
+  return res.data;
+};
+
 export const deleteRetiroTerreno = async (idRetiro: string | number) => {
   const res = await api.delete(`/retiros_terreno/${idRetiro}`);
   return res.data;
@@ -252,6 +260,22 @@ export const fetchLevantamientosTerreno = async (params?: Record<string, any>) =
 
 export const createLevantamientoTerreno = async (payload: any) => {
   const res = await api.post('/levantamientos_terreno/', payload);
+  return res.data;
+};
+
+export const updateLevantamientoTerreno = async (
+  idLevantamientoTerreno: string | number,
+  payload: any
+) => {
+  const res = await api.put(`/levantamientos_terreno/${idLevantamientoTerreno}`, payload);
+  return res.data;
+};
+
+export const solicitarEdicionLevantamientoTerreno = async (
+  idLevantamientoTerreno: string | number,
+  payload?: Record<string, any>
+) => {
+  const res = await api.post(`/levantamientos_terreno/${idLevantamientoTerreno}/solicitar_edicion`, payload || {});
   return res.data;
 };
 
