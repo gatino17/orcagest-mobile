@@ -179,6 +179,8 @@ export default function FinalizadosScreen() {
                       centro: a.centro?.nombre || a.centro_nombre || '-',
                       cliente: a.centro?.cliente || a.cliente || '-',
                       estado: a.estado || 'finalizado',
+                      fecha_inicio: a.fecha_inicio || '',
+                      fecha_cierre: a.fecha_cierre || '',
                       total_cajas: a.total_cajas ?? 0,
                       centro_id: a.centro_id || a.centro?.id || '',
                     },

@@ -6,7 +6,7 @@ import { useColorScheme } from '@/hooks/use-color-scheme';
 import { Colors } from '@/constants/theme';
 import { AuthContext } from '../_layout';
 import { useLocalSearchParams } from 'expo-router';
-import { getEquipos, getMaterialesArmado, saveMaterialesArmado, updateEquipo, createEquipo, updateArmado, validarSerieEquipo } from '@/lib/api';
+import { getEquipos, getMaterialesArmado, saveMaterialesArmado, updateEquipo, createEquipo, updateArmado, validarSerieEquipo, getArmados } from '@/lib/api';
 import { enqueueOfflineOp, syncOfflineQueue } from '@/lib/offline-queue';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as SecureStore from 'expo-secure-store';
@@ -176,6 +176,7 @@ export default function ArmadoScreen() {
   const [modalCajasVisible, setModalCajasVisible] = useState(false);
   const [modalGuardarMatVisible, setModalGuardarMatVisible] = useState(false);
   const [modalQuitarCajaVisible, setModalQuitarCajaVisible] = useState(false);
+  const [modalPrefinalizadoVisible, setModalPrefinalizadoVisible] = useState(false);
   const [gruposColapsados, setGruposColapsados] = useState<Record<string, boolean>>({});
   const [cacheReady, setCacheReady] = useState(false);
   const [resumenQuitarCaja, setResumenQuitarCaja] = useState({
@@ -189,8 +190,15 @@ export default function ArmadoScreen() {
   const cliente = (params.cliente as string) || '-';
   const armadoId = (params.armadoId as string) || '';
   const estado = (params.estado as string) || '';
-  const estadoNormalizado = String(estado || '').toLowerCase();
+  const fechaInicioArmado = (params.fecha_inicio as string) || '';
+  const fechaTerminoArmado = (params.fecha_cierre as string) || '';
+  const [estadoVista, setEstadoVista] = useState<string>(estado || '');
+  const [fechaInicioVista, setFechaInicioVista] = useState<string>(fechaInicioArmado);
+  const [fechaTerminoVista, setFechaTerminoVista] = useState<string>(fechaTerminoArmado);
+  const estadoNormalizado = String(estadoVista || estado || '').toLowerCase();
   const esFinalizado = estadoNormalizado === 'finalizado';
+  const esPrefinalizado = estadoNormalizado === 'prefinalizado';
+  const esSoloLectura = esFinalizado || esPrefinalizado;
   const totalCajasParam = params.total_cajas ? Number(params.total_cajas) : undefined;
   const [totalCajas, setTotalCajas] = useState<number | undefined>(totalCajasParam);
   const centroId = params.centro_id ? Number(params.centro_id) : undefined;
@@ -198,6 +206,20 @@ export default function ArmadoScreen() {
     () => `armado_cache_v1:${armadoId || 'sin-armado'}:${centroId || 'sin-centro'}`,
     [armadoId, centroId]
   );
+
+  const formatFecha = (val?: string) => {
+    if (!val) return '-';
+    const raw = String(val).trim();
+    const isoDate = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (isoDate) return `${isoDate[3]}/${isoDate[2]}/${isoDate[1]}`;
+    const d = new Date(raw);
+    if (Number.isNaN(d.getTime())) return '-';
+    const usarUTC = /(?:gmt|utc|z|[+\-]\d{2}:?\d{2})/i.test(raw);
+    const dd = String(usarUTC ? d.getUTCDate() : d.getDate()).padStart(2, '0');
+    const mm = String((usarUTC ? d.getUTCMonth() : d.getMonth()) + 1).padStart(2, '0');
+    const yyyy = usarUTC ? d.getUTCFullYear() : d.getFullYear();
+    return `${dd}/${mm}/${yyyy}`;
+  };
   const toggleGrupo = (titulo: string) => {
     setGruposColapsados((prev) => ({ ...prev, [titulo]: !prev[titulo] }));
   };
@@ -496,6 +518,47 @@ export default function ArmadoScreen() {
     cargarMat();
   }, [cargarMat]);
 
+  useEffect(() => {
+    setEstadoVista(estado || '');
+    setFechaInicioVista(fechaInicioArmado || '');
+    setFechaTerminoVista(fechaTerminoArmado || '');
+  }, [estado, fechaInicioArmado, fechaTerminoArmado]);
+
+  useEffect(() => {
+    const cargarFechasArmado = async () => {
+      if (!armadoId) return;
+      try {
+        const lista = await getArmados({ per_page: 0 });
+        const row = (Array.isArray(lista) ? lista : []).find(
+          (x: any) => Number(x?.id_armado || x?.id || 0) === Number(armadoId)
+        );
+        if (!row) return;
+        setEstadoVista(String(row?.estado || estado || ''));
+        setFechaInicioVista(String(row?.fecha_inicio || row?.fecha_asignacion || ''));
+        setFechaTerminoVista(String(row?.fecha_cierre || ''));
+      } catch {
+        // fallback a params si falla la consulta
+      }
+    };
+    cargarFechasArmado();
+  }, [armadoId]);
+
+  const pasarAPrefinalizado = useCallback(async () => {
+    if (!armadoId || estadoNormalizado !== 'en_proceso') return;
+    try {
+      await updateArmado(armadoId, { estado: 'prefinalizado' });
+      setEstadoVista('prefinalizado');
+      Alert.alert('Estado actualizado', 'El armado fue enviado a pre-finalizado.');
+    } catch {
+      Alert.alert('Sin conexion', 'No se pudo actualizar el estado a pre-finalizado.');
+    }
+  }, [armadoId, estadoNormalizado]);
+
+  const confirmarPasoPrefinalizado = useCallback(() => {
+    if (estadoNormalizado !== 'en_proceso') return;
+    setModalPrefinalizadoVisible(true);
+  }, [estadoNormalizado]);
+
   // Realtime: refresca armado activo cuando backend emite cambios.
   useEffect(() => {
     if (!token || !armadoId) return;
@@ -512,7 +575,7 @@ export default function ArmadoScreen() {
   }, [token, armadoId, cargarEquipos, cargarMat]);
 
   const actualizarEquipo = (id: string, cambios: Partial<Equipo>) => {
-    if (esFinalizado) return;
+    if (esSoloLectura) return;
     const idStr = String(id);
     setEquipos((prev) => {
       const idx = prev.findIndex((eq) => String(eq.id) === idStr);
@@ -521,7 +584,7 @@ export default function ArmadoScreen() {
         next[idx] = { ...next[idx], ...cambios };
         return next;
       }
-      // Si es un equipo placeholder (aÃºn no viene de backend), lo creamos en estado local
+      // Si es un equipo placeholder (aún no viene de backend), lo creamos en estado local
       // para que no se borre al escribir manualmente o al escanear.
       return [
         ...prev,
@@ -537,12 +600,12 @@ export default function ArmadoScreen() {
   };
 
   const actualizarMaterial = (id: string, cambios: Partial<Material>) => {
-    if (esFinalizado) return;
+    if (esSoloLectura) return;
     setMateriales((prev) => prev.map((m) => (m.id === id ? { ...m, ...cambios } : m)));
   };
 
   const abrirCamaraSerie = (equipoId: string, nombre: string) => {
-    if (esFinalizado) return;
+    if (esSoloLectura) return;
     setCamEquipoId(String(equipoId));
     setCamEquipoNombre(nombre);
     scannedOnce.current = false;
@@ -584,7 +647,7 @@ export default function ArmadoScreen() {
   };
 
   const guardarMaterialesApp = async () => {
-    if (esFinalizado) return;
+    if (esSoloLectura) return;
     if (!armadoId) return;
     let payload: any[] = [];
     try {
@@ -621,7 +684,7 @@ export default function ArmadoScreen() {
   };
 
   const guardarEquiposApp = async () => {
-    if (esFinalizado) return;
+    if (esSoloLectura) return;
     try {
       setGuardandoEq(true);
       const seriesAprobadas = new Set<string>(Array.from(seriesConfirmadasRef.current));
@@ -699,7 +762,7 @@ export default function ArmadoScreen() {
   };
 
   const agregarCaja = () => {
-    if (esFinalizado) return;
+    if (esSoloLectura) return;
     setCantidadCajas('1');
     setModalCajasVisible(true);
   };
@@ -710,7 +773,7 @@ export default function ArmadoScreen() {
   };
 
   const abrirQuitarCaja = () => {
-    if (esFinalizado) return;
+    if (esSoloLectura) return;
     if (cajas.length <= 1) return;
     const ordered = [...cajas].sort((a, b) => numeroCaja(a) - numeroCaja(b));
     const target = ordered[ordered.length - 1];
@@ -727,12 +790,12 @@ export default function ArmadoScreen() {
   };
 
   const confirmarGuardarMateriales = () => {
-    if (esFinalizado) return;
+    if (esSoloLectura) return;
     setModalGuardarMatVisible(true);
   };
 
   const confirmarAgregarCajas = () => {
-    if (esFinalizado) return;
+    if (esSoloLectura) return;
     const qty = Math.max(1, Number.parseInt(cantidadCajas || '1', 10));
     const maxNum = cajas.reduce((max, c) => {
       const n = parseInt(String(c).replace(/[^\d]/g, ''), 10);
@@ -756,7 +819,7 @@ export default function ArmadoScreen() {
   };
 
   const confirmarQuitarCaja = () => {
-    if (esFinalizado) return;
+    if (esSoloLectura) return;
     const { target, destino } = resumenQuitarCaja;
     if (!target || cajas.length <= 1) {
       setModalQuitarCajaVisible(false);
@@ -876,16 +939,36 @@ export default function ArmadoScreen() {
             </View>
           </View>
           <View style={styles.metaGrid}>
-            <View style={styles.metaItem}>
-              <Text style={styles.metaLabel}>Estado</Text>
-              <View
+            <View style={styles.metaStack}>
+              <View style={styles.metaItem}>
+                <Text style={styles.metaLabel}>Inicio armado</Text>
+                <View style={styles.metaChipSimple}>
+                  <Ionicons name="play-outline" size={12} color="#0f172a" />
+                  <Text style={styles.metaSimpleText}>{formatFecha(fechaInicioVista)}</Text>
+                </View>
+              </View>
+              <View style={styles.metaItem}>
+                <Text style={styles.metaLabel}>Termino</Text>
+                <View style={[styles.metaChipSimple, styles.metaChipTermino]}>
+                  <Ionicons name="flag-outline" size={12} color="#b91c1c" />
+                  <Text style={[styles.metaSimpleText, styles.metaTerminoText]}>{formatFecha(fechaTerminoVista)}</Text>
+                </View>
+              </View>
+            </View>
+            <View style={[styles.metaItem, styles.metaItemEstado]}>
+                            <Text style={styles.metaLabel}>Estado</Text>
+              <Pressable
+                onPress={confirmarPasoPrefinalizado}
+                disabled={estadoNormalizado !== 'en_proceso'}
                 style={[
-                  styles.metaChipEstado,
+                  styles.metaChipEstadoPremium,
                   estadoNormalizado === 'finalizado'
-                    ? { backgroundColor: '#dcfce7', borderColor: '#86efac' }
+                    ? { backgroundColor: '#ecfdf5', borderColor: '#34d399' }
                     : estadoNormalizado === 'en_proceso'
-                      ? { backgroundColor: '#e0f2fe', borderColor: '#7dd3fc' }
-                      : { backgroundColor: '#fef9c3', borderColor: '#fde047' },
+                      ? { backgroundColor: '#eff6ff', borderColor: '#60a5fa' }
+                      : estadoNormalizado === 'prefinalizado'
+                        ? { backgroundColor: '#f5f3ff', borderColor: '#c4b5fd' }
+                        : { backgroundColor: '#fff7ed', borderColor: '#fdba74' },
                 ]}>
                 <View
                   style={[
@@ -894,10 +977,12 @@ export default function ArmadoScreen() {
                       ? { backgroundColor: '#16a34a' }
                       : estadoNormalizado === 'en_proceso'
                         ? { backgroundColor: '#0284c7' }
-                        : { backgroundColor: '#f59e0b' },
+                        : estadoNormalizado === 'prefinalizado'
+                          ? { backgroundColor: '#7c3aed' }
+                          : { backgroundColor: '#f59e0b' },
                   ]}>
                   <Ionicons
-                    name={estadoNormalizado === 'finalizado' ? 'checkmark' : estadoNormalizado === 'en_proceso' ? 'time-outline' : 'alert-outline'}
+                    name={estadoNormalizado === 'finalizado' ? 'checkmark' : estadoNormalizado === 'en_proceso' ? 'time-outline' : estadoNormalizado === 'prefinalizado' ? 'shield-checkmark-outline' : 'alert-outline'}
                     size={12}
                     color="#ffffff"
                   />
@@ -909,18 +994,20 @@ export default function ArmadoScreen() {
                       ? { color: '#15803d' }
                       : estadoNormalizado === 'en_proceso'
                         ? { color: '#0369a1' }
-                        : { color: '#a16207' },
+                        : estadoNormalizado === 'prefinalizado'
+                          ? { color: '#6d28d9' }
+                          : { color: '#a16207' },
                   ]}>
-                  {estado || 'Pendiente'}
+                  {estadoVista || estado || 'Pendiente'}
                 </Text>
-              </View>
+              </Pressable>
             </View>
           </View>
         </View>
-        {esFinalizado ? (
+        {esSoloLectura ? (
           <View style={styles.readOnlyBanner}>
             <Ionicons name="lock-closed-outline" size={14} color="#14532d" />
-            <Text style={styles.readOnlyBannerText}>Armado finalizado: vista solo lectura.</Text>
+            <Text style={styles.readOnlyBannerText}>{esPrefinalizado ? 'Armado prefinalizado: en revisión, vista solo lectura.' : 'Armado finalizado: vista solo lectura.'}</Text>
           </View>
         ) : null}
 
@@ -946,16 +1033,16 @@ export default function ArmadoScreen() {
             <Text style={[styles.tabText, tab === 'materiales' && styles.tabTextActive]}>Materiales</Text>
           </Pressable>
           <Pressable
-            style={({ pressed }) => [styles.addBoxBtn, esFinalizado && styles.btnDisabled, pressed && styles.btnPressed]}
+            style={({ pressed }) => [styles.addBoxBtn, esSoloLectura && styles.btnDisabled, pressed && styles.btnPressed]}
             onPress={agregarCaja}
-            disabled={esFinalizado}>
+            disabled={esSoloLectura}>
             <Ionicons name="add-circle-outline" size={16} color="#0b3b8c" />
             <Text style={styles.addBoxText}>Agregar caja</Text>
           </Pressable>
           <Pressable
-            style={({ pressed }) => [styles.removeBoxBtn, esFinalizado && styles.btnDisabled, pressed && styles.btnPressed]}
+            style={({ pressed }) => [styles.removeBoxBtn, esSoloLectura && styles.btnDisabled, pressed && styles.btnPressed]}
             onPress={abrirQuitarCaja}
-            disabled={esFinalizado}>
+            disabled={esSoloLectura}>
             <Ionicons name="remove-circle-outline" size={16} color="#b91c1c" />
             <Text style={styles.removeBoxText}>Quitar caja</Text>
           </Pressable>
@@ -1032,16 +1119,16 @@ export default function ArmadoScreen() {
                         <Pressable
                           style={[styles.cardBadge, { borderColor: '#0b3b8c' }]}
                           onPress={() => actualizarEquipo(eq.id, { caja: siguienteCaja(eq.caja), nombre: eq.nombre })}
-                          disabled={esFinalizado}>
+                          disabled={esSoloLectura}>
                           <Text style={{ color: '#0b3b8c', fontWeight: '700' }}>{eq.caja}</Text>
                         </Pressable>
                         </View>
 
                         <View style={styles.field}>
-                          <Text style={[styles.label, { color: '#475569' }]}>N° Serie</Text>
+                          <Text style={[styles.label, { color: '#475569' }]}>N serie</Text>
                           <View style={styles.inputScanRow}>
                             <TextInput
-                              placeholder="Escribe el N° de serie"
+                              placeholder="escanea o escribe N serie"
                               placeholderTextColor="#94a3b8"
                               style={[
                                 styles.input,
@@ -1050,13 +1137,13 @@ export default function ArmadoScreen() {
                               value={eq.serie ? String(eq.serie) : ''}
                               onChangeText={(t) => actualizarEquipo(eq.id, { serie: t, codigo: t.slice(0, 5), nombre: eq.nombre })}
                               keyboardType="numeric"
-                              editable={!esFinalizado}
+                              editable={!esSoloLectura}
                             />
                             <Pressable
-                              style={[styles.camBtn, esFinalizado && styles.btnDisabled]}
+                              style={[styles.camBtn, esSoloLectura && styles.btnDisabled]}
                               onPress={() => abrirCamaraSerie(eq.id, eq.nombre)}
                               hitSlop={6}
-                              disabled={esFinalizado}>
+                              disabled={esSoloLectura}>
                               <Ionicons name="barcode-outline" size={18} color="#ffffff" />
                             </Pressable>
                           </View>
@@ -1106,7 +1193,7 @@ export default function ArmadoScreen() {
                     <Pressable
                       style={[styles.cardBadge, { borderColor: '#0b3b8c' }]}
                       onPress={() => actualizarMaterial(m.id, { caja: siguienteCaja(m.caja) })}
-                      disabled={esFinalizado}>
+                      disabled={esSoloLectura}>
                       <Text style={{ color: '#0b3b8c', fontWeight: '700' }}>{m.caja || 'Caja 1'}</Text>
                     </Pressable>
                       </View>
@@ -1123,7 +1210,7 @@ export default function ArmadoScreen() {
                         })
                       }
                       style={[styles.input, { color: '#0f172a', borderColor: '#d7e3f4', backgroundColor: '#f8fbff' }]}
-                      editable={!esFinalizado}
+                      editable={!esSoloLectura}
                     />
                     {m.usuario ? <Text style={[styles.metaText, { color: '#475569' }]}>Por: {m.usuario}</Text> : null}
                   </View>
@@ -1138,8 +1225,8 @@ export default function ArmadoScreen() {
 
       {tab === 'equipos' && (
         <Pressable
-          style={[styles.fabSave, esFinalizado && styles.btnDisabled]}
-          disabled={guardandoEq || esFinalizado}
+          style={[styles.fabSave, esSoloLectura && styles.btnDisabled]}
+          disabled={guardandoEq || esSoloLectura}
           onPress={guardarEquiposApp}>
           <Ionicons name="save-outline" size={18} color="#fff" style={{ marginRight: 6 }} />
           <Text style={styles.planillaText}>{guardandoEq ? 'Guardando...' : 'Guardar equipos'}</Text>
@@ -1147,8 +1234,8 @@ export default function ArmadoScreen() {
       )}
       {tab === 'materiales' && (
         <Pressable
-          style={[styles.fabSave, esFinalizado && styles.btnDisabled]}
-          disabled={guardandoMat || esFinalizado}
+          style={[styles.fabSave, esSoloLectura && styles.btnDisabled]}
+          disabled={guardandoMat || esSoloLectura}
           onPress={confirmarGuardarMateriales}>
           <Ionicons name="save-outline" size={18} color="#fff" style={{ marginRight: 6 }} />
           <Text style={styles.planillaText}>{guardandoMat ? 'Guardando...' : 'Guardar materiales'}</Text>
@@ -1171,7 +1258,7 @@ export default function ArmadoScreen() {
             )}
             <View pointerEvents="none" style={styles.scanFrame} />
             <View style={styles.camHeader}>
-              <Text style={{ color: '#fff', fontWeight: '700' }}>Escanea el N° de serie</Text>
+              <Text style={{ color: '#fff', fontWeight: '700' }}>escanea o escribe N serie</Text>
               <Pressable onPress={() => { setCamVisible(false); setCamEquipoId(null); }}>
                 <Ionicons name="close-circle" size={26} color="#fff" />
               </Pressable>
@@ -1236,6 +1323,32 @@ export default function ArmadoScreen() {
         </View>
       </Modal>
 
+      <Modal visible={modalPrefinalizadoVisible} animationType="fade" transparent>
+        <View style={styles.camOverlay}>
+          <View style={styles.confirmBox}>
+            <View style={[styles.confirmIconWrap, { backgroundColor: '#ede9fe' }]}>
+              <Ionicons name="shield-checkmark-outline" size={20} color="#6d28d9" />
+            </View>
+            <Text style={styles.confirmTitle}>Pasar a pre-finalizado</Text>
+            <Text style={styles.confirmText}>
+              Confirmas que deseas enviar este armado a pre-finalizado?
+            </Text>
+            <View style={styles.confirmActions}>
+              <Pressable style={styles.confirmCancelBtn} onPress={() => setModalPrefinalizadoVisible(false)}>
+                <Text style={styles.confirmCancelText}>No</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.confirmSaveBtn, { backgroundColor: '#6d28d9', borderColor: '#6d28d9' }]}
+                onPress={async () => {
+                  setModalPrefinalizadoVisible(false);
+                  await pasarAPrefinalizado();
+                }}>
+                <Text style={styles.confirmSaveText}>Si</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
       <Modal visible={modalQuitarCajaVisible} animationType="fade" transparent>
         <View style={styles.camOverlay}>
           <View style={styles.confirmBox}>
@@ -1560,13 +1673,22 @@ const styles = StyleSheet.create({
   },
   metaGrid: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 12,
+    alignItems: 'flex-end',
+    justifyContent: 'space-between',
+    gap: 10,
     marginTop: 2,
+  },
+  metaStack: {
+    flex: 1,
+    gap: 8,
   },
   metaItem: {
     minWidth: '45%',
     gap: 2,
+  },
+  metaItemEstado: {
+    marginLeft: 8,
+    alignSelf: 'flex-end',
   },
   metaLabel: {
     fontSize: 12,
@@ -1609,6 +1731,61 @@ const styles = StyleSheet.create({
     fontSize: 12.5,
     fontWeight: '900',
     textTransform: 'capitalize',
+  },
+  metaChipEstadoPremium: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+    gap: 7,
+    shadowColor: '#0f172a',
+    shadowOpacity: 0.12,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2,
+  },
+  metaChipSimple: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+    backgroundColor: '#eff6ff',
+    gap: 6,
+  },
+  metaSimpleText: {
+    fontSize: 12.5,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  metaChipTermino: {
+    backgroundColor: '#fef2f2',
+    borderColor: '#fecaca',
+  },
+  metaTerminoText: {
+    color: '#b91c1c',
+  },
+  prefinalizarBtn: {
+    marginTop: 6,
+    alignSelf: 'flex-end',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#6d28d9',
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  prefinalizarBtnText: {
+    color: '#ffffff',
+    fontSize: 11.5,
+    fontWeight: '800',
   },
   readOnlyBanner: {
     marginTop: 8,
@@ -1888,6 +2065,34 @@ const styles = StyleSheet.create({
     elevation: 4,
   },
 });
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

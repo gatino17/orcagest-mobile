@@ -9,7 +9,7 @@ import * as SecureStore from 'expo-secure-store';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { AuthContext } from '../_layout';
-import { fetchActividades, fetchActividadesMias, getArmados } from '@/lib/api';
+import { fetchActividades, fetchActividadesMias, getArmados, updateArmado } from '@/lib/api';
 import { clearOfflineNotice, getOfflineNotice, getPendingCount, syncOfflineQueue } from '@/lib/offline-queue';
 import { subscribeArmadoUpdated } from '@/lib/realtime';
 
@@ -22,11 +22,13 @@ export default function HomeScreen() {
   const [mensajeNotificacion, setMensajeNotificacion] = useState('');
   const [pendientesOffline, setPendientesOffline] = useState(0);
   const [trabajosProgramados, setTrabajosProgramados] = useState<any[]>([]);
+  const [fechasAperturaPlanilla, setFechasAperturaPlanilla] = useState<Record<string, string>>({});
   const knownArmadosRef = useRef<Set<number>>(new Set());
   const knownTrabajosRef = useRef<Set<number>>(new Set());
   const snapshotArmadosRef = useRef<Map<number, string>>(new Map());
   const detailArmadosRef = useRef<Map<number, { estado: string; centro: string }>>(new Map());
   const cacheKey = useMemo(() => `home_cache_v1_${userId || 'anon'}`, [userId]);
+  const aperturasKey = useMemo(() => `home_planilla_open_v1_${userId || 'anon'}`, [userId]);
   const bellPulse = useRef(new Animated.Value(1)).current;
 
   const readHomeCache = useCallback(async () => {
@@ -50,9 +52,31 @@ export default function HomeScreen() {
     [cacheKey]
   );
 
+  const readAperturasCache = useCallback(async () => {
+    try {
+      const raw = await SecureStore.getItemAsync(aperturasKey);
+      const parsed = raw ? JSON.parse(raw) : {};
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch {
+      return {};
+    }
+  }, [aperturasKey]);
+
+  const writeAperturasCache = useCallback(
+    async (data: Record<string, string>) => {
+      try {
+        await SecureStore.setItemAsync(aperturasKey, JSON.stringify(data || {}));
+      } catch {
+        // ignore cache write errors
+      }
+    },
+    [aperturasKey]
+  );
+
   const estadoTexto = (est?: string) => {
     const e = String(est || '').toLowerCase();
     if (e === 'en_proceso') return 'En proceso';
+    if (e === 'prefinalizado') return 'Prefinalizado';
     if (e === 'finalizado') return 'Finalizado';
     return 'Pendiente';
   };
@@ -216,6 +240,12 @@ export default function HomeScreen() {
   }, [cargarArmados, cargarTrabajosProgramados]);
 
   useEffect(() => {
+    readAperturasCache().then((data) => {
+      setFechasAperturaPlanilla(data);
+    });
+  }, [readAperturasCache]);
+
+  useEffect(() => {
     if (!token || !userId) return;
     const onArmadoUpdated = (evt: any) => {
       const tecnicoId = Number(evt?.tecnico_id || evt?.tecnico || 0);
@@ -262,10 +292,11 @@ export default function HomeScreen() {
   }, [tieneNuevoArmado, pendientesOffline, bellPulse]);
 
   const resumen = useMemo(() => {
-    const base = { pendiente: 0, enProceso: 0, finalizado: 0 };
+    const base = { pendiente: 0, enProceso: 0, prefinalizado: 0, finalizado: 0 };
     armados.forEach((a) => {
       const e = (a.estado || '').toLowerCase();
       if (e === 'finalizado') base.finalizado += 1;
+      else if (e === 'prefinalizado') base.prefinalizado += 1;
       else if (e === 'en_proceso') base.enProceso += 1;
       else base.pendiente += 1;
     });
@@ -274,15 +305,26 @@ export default function HomeScreen() {
 
   const formatFecha = (val?: string) => {
     if (!val) return '-';
-    const d = new Date(val);
+    const raw = String(val).trim();
+    const fechaIso = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (fechaIso) {
+      const [, y, m, d] = fechaIso;
+      return `${d}/${m}/${y}`;
+    }
+    const d = new Date(raw);
     if (Number.isNaN(d.getTime())) return '-';
-    return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+    const usarUTC = /(?:gmt|utc|z|[+\-]\d{2}:?\d{2})/i.test(raw);
+    const dia = String(usarUTC ? d.getUTCDate() : d.getDate()).padStart(2, '0');
+    const mes = String((usarUTC ? d.getUTCMonth() : d.getMonth()) + 1).padStart(2, '0');
+    const anio = usarUTC ? d.getUTCFullYear() : d.getFullYear();
+    return `${dia}/${mes}/${anio}`;
   };
 
   const estadoLabel = (est?: string) => {
     const e = (est || '').toLowerCase();
     if (e === 'finalizado') return 'Finalizado';
     if (e === 'en_proceso') return 'En proceso';
+    if (e === 'prefinalizado') return 'Prefinalizado';
     return 'Pendiente';
   };
 
@@ -290,6 +332,7 @@ export default function HomeScreen() {
     const e = (est || '').toLowerCase();
     if (e === 'finalizado') return [styles.badge, { backgroundColor: '#dcfce7', color: '#15803d' }];
     if (e === 'en_proceso') return [styles.badge, { backgroundColor: '#e0f2fe', color: '#0284c7' }];
+    if (e === 'prefinalizado') return [styles.badge, { backgroundColor: '#f5f3ff', color: '#6d28d9' }];
     return [styles.badge, { backgroundColor: '#fef9c3', color: '#a16207' }];
   };
 
@@ -297,12 +340,14 @@ export default function HomeScreen() {
     const e = (est || '').toLowerCase();
     if (e === 'finalizado') return { border: '#22c55e', bg: '#f0fdf4' };
     if (e === 'en_proceso') return { border: '#38bdf8', bg: '#f0f9ff' };
+    if (e === 'prefinalizado') return { border: '#a78bfa', bg: '#f5f3ff' };
     return { border: '#facc15', bg: '#fffbeb' };
   };
   const estadoAccent = (est?: string) => {
     const e = (est || '').toLowerCase();
     if (e === 'finalizado') return '#16a34a';
     if (e === 'en_proceso') return '#2563eb';
+    if (e === 'prefinalizado') return '#7c3aed';
     return '#d97706';
   };
 
@@ -310,20 +355,22 @@ export default function HomeScreen() {
     const e = (est || '').toLowerCase();
     if (e === 'finalizado') return { strong: 'rgba(16, 185, 129, 0.2)', soft: 'rgba(16, 185, 129, 0.1)' };
     if (e === 'en_proceso') return { strong: 'rgba(59, 130, 246, 0.2)', soft: 'rgba(59, 130, 246, 0.1)' };
+    if (e === 'prefinalizado') return { strong: 'rgba(124, 58, 237, 0.2)', soft: 'rgba(124, 58, 237, 0.1)' };
     return { strong: 'rgba(245, 158, 11, 0.2)', soft: 'rgba(245, 158, 11, 0.1)' };
   };
   const prioridadEstado = (est?: string) => {
     const e = (est || '').toLowerCase();
     if (e === 'pendiente') return 0;
     if (e === 'en_proceso') return 1;
-    if (e === 'finalizado') return 2;
+    if (e === 'prefinalizado') return 2;
+    if (e === 'finalizado') return 3;
     return 3;
   };
   const armadosParaHome = useMemo(() => {
     if (!Array.isArray(armados) || armados.length === 0) return [];
     const pendientesProceso = armados.filter((a) => {
       const e = (a?.estado || '').toLowerCase();
-      return e === 'pendiente' || e === 'en_proceso';
+      return e === 'pendiente' || e === 'en_proceso' || e === 'prefinalizado';
     });
     if (pendientesProceso.length > 0) {
       return pendientesProceso.sort((a, b) => {
@@ -345,6 +392,56 @@ export default function HomeScreen() {
     return finalizados.slice(0, 1);
   }, [armados]);
 
+  const irAPlanilla = useCallback(
+    async (a: any) => {
+      const armadoId = a?.id_armado || a?.id;
+      const estadoActual = String(a?.estado || '').toLowerCase();
+      let estadoDestino = a?.estado || '';
+
+      if (armadoId && estadoActual === 'pendiente') {
+        try {
+          const hoyIso = new Date().toISOString().slice(0, 10);
+          await updateArmado(armadoId, { estado: 'en_proceso', check_tecnico_fecha: hoyIso });
+          estadoDestino = 'en_proceso';
+          setArmados((prev) =>
+            (Array.isArray(prev) ? prev : []).map((item) => {
+              const itemId = item?.id_armado || item?.id;
+              if (Number(itemId) !== Number(armadoId)) return item;
+              return { ...item, estado: 'en_proceso', check_tecnico_fecha: hoyIso };
+            })
+          );
+        } catch {
+          // Permite continuar a planilla aunque no haya red o falle backend.
+        }
+      }
+
+      const hoyIso = new Date().toISOString().slice(0, 10);
+      const key = String(armadoId || '');
+      if (key) {
+        setFechasAperturaPlanilla((prev) => {
+          const next = { ...(prev || {}), [key]: hoyIso };
+          writeAperturasCache(next).catch(() => {});
+          return next;
+        });
+      }
+
+      router.push({
+        pathname: '(tabs)/armado',
+        params: {
+          armadoId,
+          centro: a?.centro?.nombre || a?.centro_nombre || '-',
+          cliente: a?.centro?.cliente || a?.cliente || '-',
+          estado: estadoDestino,
+          fecha_inicio: a?.fecha_inicio || '',
+          fecha_cierre: a?.fecha_cierre || '',
+          total_cajas: a?.total_cajas ?? 0,
+          centro_id: a?.centro_id || a?.centro?.id || '',
+        },
+      });
+    },
+    [router, writeAperturasCache]
+  );
+
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: '#ffffff' }}>
       <StatusBar style="dark" translucent={false} />
@@ -358,8 +455,9 @@ export default function HomeScreen() {
                 <ThemedText style={styles.avatarText}>{(name || 'U')[0].toUpperCase()}</ThemedText>
               </ThemedView>
               <View style={{ flex: 1 }}>
-                <ThemedText style={styles.headerHello}>HOLA DE NUEVO</ThemedText>
-                <ThemedText style={styles.headerName}>{name || 'Tecnico'}</ThemedText>
+                <ThemedText style={styles.headerName} numberOfLines={1} ellipsizeMode="tail">
+                  {`Hola de nuevo, ${name || 'Tecnico'}`}
+                </ThemedText>
                 {role && (
                   <View style={styles.roleChip}>
                     <ThemedText style={styles.roleChipText}>{role}</ThemedText>
@@ -408,8 +506,8 @@ export default function HomeScreen() {
               <Ionicons name="qr-code-outline" size={18} color="#ffffff" />
             </View>
             <View style={{ flex: 1 }}>
-              <ThemedText style={styles.actionTitle}>Armado de pedidos</ThemedText>
-              <ThemedText style={styles.actionText}>Toma un pedido y escanea productos</ThemedText>
+              <ThemedText style={styles.actionTitle}>Orcagestion Mobile</ThemedText>
+              <ThemedText style={styles.actionText}>Informes, armados, rendiciones y consultas</ThemedText>
             </View>
           </View>
 
@@ -454,6 +552,15 @@ export default function HomeScreen() {
               <ThemedText style={styles.summaryNumber}>{resumen.enProceso}</ThemedText>
               <ThemedText style={styles.summaryText}>En proceso</ThemedText>
             </View>
+            <View style={[styles.summaryBadge, { backgroundColor: '#f5f3ff', borderColor: '#ddd6fe' }]}>
+              <View pointerEvents="none" style={[styles.summaryCornerGlow, { backgroundColor: 'rgba(124, 58, 237, 0.22)' }]} />
+              <View pointerEvents="none" style={[styles.summaryCornerGlowSoft, { backgroundColor: 'rgba(124, 58, 237, 0.12)' }]} />
+              <View style={[styles.summaryIconBubble, { backgroundColor: '#7c3aed' }]}>
+                <Ionicons name="shield-checkmark-outline" size={12} color="#fff" />
+              </View>
+              <ThemedText style={styles.summaryNumber}>{resumen.prefinalizado}</ThemedText>
+              <ThemedText style={styles.summaryText}>Pre-finalizado</ThemedText>
+            </View>
             <View style={[styles.summaryBadge, { backgroundColor: '#ecfdf5', borderColor: '#bbf7d0' }]}>
               <View pointerEvents="none" style={[styles.summaryCornerGlow, { backgroundColor: 'rgba(16, 185, 129, 0.22)' }]} />
               <View pointerEvents="none" style={[styles.summaryCornerGlowSoft, { backgroundColor: 'rgba(16, 185, 129, 0.12)' }]} />
@@ -492,9 +599,9 @@ export default function HomeScreen() {
                   <View style={styles.armadoTitleBlock}>
                     <View style={styles.armadoCenterRow}>
                       <Ionicons
-                        name={a.estado === 'finalizado' ? 'checkmark-circle' : a.estado === 'en_proceso' ? 'time' : 'alert-circle'}
+                        name={a.estado === 'finalizado' ? 'checkmark-circle' : a.estado === 'en_proceso' ? 'time' : a.estado === 'prefinalizado' ? 'shield-checkmark' : 'alert-circle'}
                         size={15}
-                        color={a.estado === 'finalizado' ? '#16a34a' : a.estado === 'en_proceso' ? '#0284c7' : '#a16207'}
+                        color={a.estado === 'finalizado' ? '#16a34a' : a.estado === 'en_proceso' ? '#0284c7' : a.estado === 'prefinalizado' ? '#6d28d9' : '#a16207'}
                       />
                       <ThemedText style={styles.armadoCentro}>{a.centro?.nombre || a.centro_nombre || '-'}</ThemedText>
                     </View>
@@ -524,30 +631,32 @@ export default function HomeScreen() {
                 <View style={styles.armadoMetaRow}>
                   <View style={styles.metaChip}>
                     <Ionicons name="calendar-outline" size={12} color="#0f172a" />
-                    <ThemedText style={styles.metaText}>{formatFecha(a.fecha_asignacion || a.created_at)}</ThemedText>
+                    <ThemedText style={styles.metaText}>
+                      {`Asignado: ${formatFecha(a.fecha_asignacion || a.created_at)}`}
+                    </ThemedText>
                   </View>
                   <View style={styles.metaChip}>
                     <Ionicons name="play-outline" size={12} color="#0f172a" />
-                    <ThemedText style={styles.metaText}>{formatFecha(a.fecha_inicio)}</ThemedText>
+                    <ThemedText style={styles.metaText}>{`Inicio: ${formatFecha(a.fecha_inicio)}`}</ThemedText>
                   </View>
+                  {!!(a.check_tecnico_fecha || fechasAperturaPlanilla[String(a.id_armado || a.id || '')]) && (
+                    <View style={styles.metaChip}>
+                      <Ionicons name="eye-outline" size={12} color="#16a34a" />
+                      <ThemedText style={styles.metaText}>
+                        {`Check tecnico: ${formatFecha(
+                          a.check_tecnico_fecha || fechasAperturaPlanilla[String(a.id_armado || a.id || '')]
+                        )}`}
+                      </ThemedText>
+                    </View>
+                  )}
                 </View>
 
                 <View style={styles.planillaRow}>
                   <Pressable
                     style={styles.planillaBtn}
-                    onPress={() =>
-                      router.push({
-                        pathname: '(tabs)/armado',
-                        params: {
-                          armadoId: a.id_armado || a.id,
-                          centro: a.centro?.nombre || a.centro_nombre || '-',
-                          cliente: a.centro?.cliente || a.cliente || '-',
-                          estado: a.estado || '',
-                          total_cajas: a.total_cajas ?? 0,
-                          centro_id: a.centro_id || a.centro?.id || '',
-                        },
-                      })
-                    }>
+                    onPress={() => {
+                      irAPlanilla(a);
+                    }}>
                     <Ionicons name="list-outline" size={14} color="#fff" style={{ marginRight: 6 }} />
                     <ThemedText style={styles.planillaText}>Ir a planilla</ThemedText>
                   </Pressable>
@@ -689,10 +798,12 @@ const styles = StyleSheet.create({
     letterSpacing: 0.6,
   },
   headerName: {
-    color: '#0f172a',
-    fontWeight: '900',
-    fontSize: 29,
-    lineHeight: 30,
+    color: '#0b3b8c',
+    fontWeight: '800',
+    fontSize: 16,
+    lineHeight: 18,
+    letterSpacing: 0.2,
+    flexShrink: 1,
   },
   avatarText: {
     color: '#ffffff',
@@ -811,8 +922,8 @@ const styles = StyleSheet.create({
   armadoItem: {
     borderWidth: 1,
     borderRadius: 14,
-    padding: 12,
-    gap: 6,
+    padding: 9,
+    gap: 4,
     borderLeftWidth: 1,
     position: 'relative',
     overflow: 'hidden',
@@ -828,17 +939,17 @@ const styles = StyleSheet.create({
     position: 'absolute',
     right: -24,
     top: -24,
-    width: 88,
-    height: 88,
-    borderRadius: 44,
+    width: 72,
+    height: 72,
+    borderRadius: 36,
   },
   armadoGlowSoft: {
     position: 'absolute',
     right: -42,
     top: -42,
-    width: 130,
-    height: 130,
-    borderRadius: 65,
+    width: 104,
+    height: 104,
+    borderRadius: 52,
   },
   clienteRow: {
     flexDirection: 'row',
@@ -870,26 +981,26 @@ const styles = StyleSheet.create({
   armadoRight: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    gap: 8,
   },
   diamond3dWrap: {
-    width: 40,
-    height: 40,
+    width: 34,
+    height: 34,
     alignItems: 'center',
     justifyContent: 'center',
     position: 'relative',
   },
   diamondGhost: {
     position: 'absolute',
-    width: 22,
-    height: 22,
+    width: 18,
+    height: 18,
     transform: [{ rotate: '45deg' }, { translateX: 7 }, { translateY: 7 }],
     backgroundColor: 'rgba(56, 189, 248, 0.35)',
     borderRadius: 2,
   },
   diamondFront: {
-    width: 24,
-    height: 24,
+    width: 20,
+    height: 20,
     transform: [{ rotate: '45deg' }],
     backgroundColor: '#0ea5e9',
     borderRadius: 2,
@@ -897,42 +1008,42 @@ const styles = StyleSheet.create({
     borderColor: '#38bdf8',
   },
   cajasWrap: {
-    minWidth: 92,
+    minWidth: 80,
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: 2,
   },
   cajasLabel: {
     color: '#0f172a',
-    fontSize: 10,
+    fontSize: 9,
     fontWeight: '700',
     marginBottom: 3,
   },
   cajasOrbit: {
-    width: 62,
-    height: 62,
+    width: 52,
+    height: 52,
     alignItems: 'center',
     justifyContent: 'center',
     position: 'relative',
   },
   cajasRingOuter: {
     position: 'absolute',
-    width: 62,
-    height: 62,
-    borderRadius: 31,
+    width: 52,
+    height: 52,
+    borderRadius: 26,
     backgroundColor: 'rgba(37, 99, 235, 0.12)',
   },
   cajasRingInner: {
     position: 'absolute',
-    width: 50,
-    height: 50,
-    borderRadius: 25,
+    width: 42,
+    height: 42,
+    borderRadius: 21,
     backgroundColor: 'rgba(37, 99, 235, 0.2)',
   },
   cajasCore: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 30,
+    height: 30,
+    borderRadius: 15,
     backgroundColor: '#2563eb',
     borderWidth: 1,
     borderColor: '#1d4ed8',
@@ -942,20 +1053,20 @@ const styles = StyleSheet.create({
   cajasCoreNumber: {
     color: '#ffffff',
     fontWeight: '900',
-    fontSize: 16,
+    fontSize: 13,
   },
   armadoCentro: {
     color: '#0f172a',
     fontWeight: '900',
-    fontSize: 17,
-    lineHeight: 17,
+    fontSize: 15,
+    lineHeight: 15,
     marginBottom: 0,
     flex: 1,
   },
   planillaRow: {
     flexDirection: 'row',
     justifyContent: 'flex-end',
-    marginTop: 6,
+    marginTop: 4,
   },
   armadoMetaRow: {
     flexDirection: 'row',
@@ -966,14 +1077,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
     backgroundColor: '#eef2ff',
     borderRadius: 8,
   },
   metaText: {
     color: '#0f172a',
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: '600',
   },
   badge: {
@@ -1111,8 +1222,8 @@ const styles = StyleSheet.create({
   planillaBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 14,
-    paddingVertical: 9,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
     borderRadius: 12,
     backgroundColor: '#0b3b8c',
     shadowColor: '#0b3b8c',
@@ -1124,6 +1235,6 @@ const styles = StyleSheet.create({
   planillaText: {
     color: '#ffffff',
     fontWeight: '700',
-    fontSize: 12.5,
+    fontSize: 11.5,
   },
 });
