@@ -195,6 +195,7 @@ export default function ArmadoScreen() {
   const [estadoVista, setEstadoVista] = useState<string>(estado || '');
   const [fechaInicioVista, setFechaInicioVista] = useState<string>(fechaInicioArmado);
   const [fechaTerminoVista, setFechaTerminoVista] = useState<string>(fechaTerminoArmado);
+  const [armadoActual, setArmadoActual] = useState<any | null>(null);
   const estadoNormalizado = String(estadoVista || estado || '').toLowerCase();
   const esFinalizado = estadoNormalizado === 'finalizado';
   const esPrefinalizado = estadoNormalizado === 'prefinalizado';
@@ -206,6 +207,30 @@ export default function ArmadoScreen() {
     () => `armado_cache_v1:${armadoId || 'sin-armado'}:${centroId || 'sin-centro'}`,
     [armadoId, centroId]
   );
+  const normalizeTechName = useCallback(
+    (value: any) =>
+      String(value || '')
+        .toLowerCase()
+        .trim()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, ''),
+    []
+  );
+  const companerosArmado = useMemo(() => {
+    const lista = Array.isArray(armadoActual?.tecnicos_asignados) ? armadoActual.tecnicos_asignados : [];
+    const uid = Number(userId || 0) || 0;
+    const myName = normalizeTechName(name);
+    return lista
+      .filter((tec: any) => {
+        const tid = Number(tec?.id || 0) || 0;
+        const tname = normalizeTechName(tec?.nombre);
+        if (uid > 0 && tid === uid) return false;
+        if (myName && tname && tname === myName) return false;
+        return !!(tid || tname);
+      })
+      .map((tec: any) => tec?.nombre)
+      .filter(Boolean);
+  }, [armadoActual, name, normalizeTechName, userId]);
 
   const formatFecha = (val?: string) => {
     if (!val) return '-';
@@ -533,6 +558,7 @@ export default function ArmadoScreen() {
           (x: any) => Number(x?.id_armado || x?.id || 0) === Number(armadoId)
         );
         if (!row) return;
+        setArmadoActual(row);
         setEstadoVista(String(row?.estado || estado || ''));
         setFechaInicioVista(String(row?.fecha_inicio || row?.fecha_asignacion || ''));
         setFechaTerminoVista(String(row?.fecha_cierre || ''));
@@ -926,6 +952,12 @@ export default function ArmadoScreen() {
                 <Ionicons name="people-outline" size={13} color="#0b3b8c" />
                 <Text style={styles.metaClientValue}>{cliente}</Text>
               </View>
+              {companerosArmado.length ? (
+                <View style={styles.metaClientRow}>
+                  <Ionicons name="person-add-outline" size={12} color="#64748b" />
+                  <Text style={styles.metaCompanionValue}>{`Compañero: ${companerosArmado.join(', ')}`}</Text>
+                </View>
+              ) : null}
             </View>
             <View style={styles.cajasWrap}>
               <Text style={styles.cajasLabel}>Total cajas</Text>
@@ -1003,6 +1035,15 @@ export default function ArmadoScreen() {
               </Pressable>
             </View>
           </View>
+          {!!String(armadoActual?.observacion || '').trim() && (
+            <View style={styles.metaObsSection}>
+              <Text style={styles.metaLabel}>Observacion</Text>
+              <View style={styles.metaObsBox}>
+                <Ionicons name="document-text-outline" size={12} color="#475569" />
+                <Text style={styles.metaObsText}>{String(armadoActual?.observacion || '').trim()}</Text>
+              </View>
+            </View>
+          )}
         </View>
         {esSoloLectura ? (
           <View style={styles.readOnlyBanner}>
@@ -1497,6 +1538,30 @@ const styles = StyleSheet.create({
     fontSize: 13,
     flex: 1,
   },
+  metaCompanionValue: {
+    color: '#64748b',
+    fontWeight: '700',
+    fontSize: 12,
+    flex: 1,
+  },
+  metaObsBox: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 6,
+    paddingHorizontal: 9,
+    paddingVertical: 7,
+    borderRadius: 10,
+    backgroundColor: '#f1f5f9',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  metaObsText: {
+    color: '#334155',
+    fontWeight: '600',
+    fontSize: 12,
+    flex: 1,
+    lineHeight: 16,
+  },
   cajasWrap: {
     minWidth: 92,
     alignItems: 'center',
@@ -1689,6 +1754,10 @@ const styles = StyleSheet.create({
   metaItemEstado: {
     marginLeft: 8,
     alignSelf: 'flex-end',
+  },
+  metaObsSection: {
+    marginTop: 10,
+    gap: 4,
   },
   metaLabel: {
     fontSize: 12,

@@ -30,6 +30,34 @@ export default function HomeScreen() {
   const cacheKey = useMemo(() => `home_cache_v1_${userId || 'anon'}`, [userId]);
   const aperturasKey = useMemo(() => `home_planilla_open_v1_${userId || 'anon'}`, [userId]);
   const bellPulse = useRef(new Animated.Value(1)).current;
+  const normalizeTechName = useCallback(
+    (value: any) =>
+      String(value || '')
+        .toLowerCase()
+        .trim()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, ''),
+    []
+  );
+
+  const getCompanerosArmado = useCallback(
+    (armado: any) => {
+      const propios = Array.isArray(armado?.tecnicos_asignados) ? armado.tecnicos_asignados : [];
+      const uid = Number(userId || 0) || 0;
+      const myName = normalizeTechName(name);
+      return propios
+        .filter((tec: any) => {
+          const tid = Number(tec?.id || 0) || 0;
+          const tname = normalizeTechName(tec?.nombre);
+          if (uid > 0 && tid === uid) return false;
+          if (myName && tname && tname === myName) return false;
+          return !!(tid || tname);
+        })
+        .map((tec: any) => tec?.nombre)
+        .filter(Boolean);
+    },
+    [name, normalizeTechName, userId]
+  );
 
   const readHomeCache = useCallback(async () => {
     try {
@@ -609,6 +637,14 @@ export default function HomeScreen() {
                       <Ionicons name="business-outline" size={13} color="#0b3b8c" />
                       <ThemedText style={styles.clientePill}>{a.centro?.cliente || a.cliente || '-'}</ThemedText>
                     </View>
+                    {getCompanerosArmado(a).length ? (
+                      <View style={styles.apoyoRow}>
+                        <Ionicons name="people-outline" size={12} color="#64748b" />
+                        <ThemedText style={styles.apoyoText}>
+                          {`Compañero: ${getCompanerosArmado(a).join(', ')}`}
+                        </ThemedText>
+                      </View>
+                    ) : null}
                   </View>
                   <View style={styles.armadoRight}>
                     <View style={styles.diamond3dWrap}>
@@ -957,6 +993,18 @@ const styles = StyleSheet.create({
     gap: 6,
     marginTop: -3,
   },
+  apoyoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    marginTop: 2,
+  },
+  apoyoText: {
+    color: '#64748b',
+    fontWeight: '700',
+    fontSize: 11,
+    flex: 1,
+  },
   clientePill: {
     color: '#0b3b8c',
     fontWeight: '700',
@@ -1126,10 +1174,12 @@ const styles = StyleSheet.create({
   },
   summaryRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
     gap: 7,
   },
   summaryBadge: {
-    flex: 1,
+    width: '48.5%',
     borderWidth: 1,
     borderRadius: 14,
     paddingVertical: 12,
