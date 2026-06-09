@@ -28,6 +28,8 @@ type Material = {
   usuario?: string;
 };
 
+type MaterialActionMode = 'ajuste' | 'incremento';
+
 const MATERIALES_PREDEF: string[] = [
   'Cable Electrico 3 x 1,5mm',
   'Cable Electrico 3 x 0,75mm',
@@ -177,6 +179,11 @@ export default function ArmadoScreen() {
   const [modalGuardarMatVisible, setModalGuardarMatVisible] = useState(false);
   const [modalQuitarCajaVisible, setModalQuitarCajaVisible] = useState(false);
   const [modalPrefinalizadoVisible, setModalPrefinalizadoVisible] = useState(false);
+  const [modalAccionMaterialVisible, setModalAccionMaterialVisible] = useState(false);
+  const [materialAccionModo, setMaterialAccionModo] = useState<MaterialActionMode>('ajuste');
+  const [materialAccionTarget, setMaterialAccionTarget] = useState<Material | null>(null);
+  const [materialAccionCantidad, setMaterialAccionCantidad] = useState('');
+  const [guardandoAccionMaterial, setGuardandoAccionMaterial] = useState(false);
   const [gruposColapsados, setGruposColapsados] = useState<Record<string, boolean>>({});
   const [cacheReady, setCacheReady] = useState(false);
   const [resumenQuitarCaja, setResumenQuitarCaja] = useState({
@@ -259,10 +266,13 @@ export default function ArmadoScreen() {
       return base;
     };
     const usados = new Set<string>();
-    const equiposPorNombre = new Map<string, Equipo>();
+    const equiposPorNombre = new Map<string, Equipo[]>();
     equipos.forEach((e) => {
       const key = norm(e.nombre);
-      if (key && !equiposPorNombre.has(key)) equiposPorNombre.set(key, e);
+      if (!key) return;
+      const lista = equiposPorNombre.get(key) || [];
+      lista.push(e);
+      equiposPorNombre.set(key, lista);
     });
 
     const groups = GRUPOS_EQUIPOS.map((g) => {
@@ -270,7 +280,9 @@ export default function ArmadoScreen() {
       const items = baseItems
         .map((n, idx) => {
           if (typeof n !== 'string') return null;
-          const found = equiposPorNombre.get(norm(n));
+          const key = norm(n);
+          const bucket = key ? equiposPorNombre.get(key) || [] : [];
+          const found = bucket.length ? bucket.shift() : null;
           if (found) {
             usados.add(found.id);
             // Muestra el nombre canonico del grupo (ej: IP PC -> PC)
@@ -323,6 +335,8 @@ export default function ArmadoScreen() {
   const materialTieneContenido = useCallback((m: Pick<Material, 'cantidad'>) => {
     return Number(m.cantidad || 0) > 0;
   }, []);
+
+  const materialEstaGuardado = useCallback((m: Pick<Material, 'id'>) => /^\d+$/.test(String(m.id || '').trim()), []);
 
   const cajasConContenido = useMemo(() => {
     const set = new Set<string>();
@@ -630,6 +644,74 @@ export default function ArmadoScreen() {
     setMateriales((prev) => prev.map((m) => (m.id === id ? { ...m, ...cambios } : m)));
   };
 
+  const abrirAccionMaterial = useCallback(
+    (material: Material, modo: MaterialActionMode) => {
+      if (esSoloLectura) return;
+      if (!materialEstaGuardado(material)) return;
+      if (modo === 'ajuste') {
+        Alert.alert('Editar cantidad', `Deseas editar la cantidad de ${material.nombre}?`, [
+          { text: 'No', style: 'cancel' },
+          {
+            text: 'Si',
+            onPress: () => {
+              setMaterialAccionTarget(material);
+              setMaterialAccionModo('ajuste');
+              setMaterialAccionCantidad(String(Number(material.cantidad || 0)));
+              setModalAccionMaterialVisible(true);
+            },
+          },
+        ]);
+        return;
+      }
+      setMaterialAccionTarget(material);
+      setMaterialAccionModo('incremento');
+      setMaterialAccionCantidad('');
+      setModalAccionMaterialVisible(true);
+    },
+    [esSoloLectura, materialEstaGuardado]
+  );
+
+  const confirmarAccionMaterial = useCallback(async () => {
+    if (!armadoId || !materialAccionTarget) return;
+    const valor = Number(materialAccionCantidad || 0);
+    if (materialAccionModo === 'incremento' && valor <= 0) {
+      Alert.alert('Cantidad invalida', 'Ingresa una cantidad mayor a 0 para agregar.');
+      return;
+    }
+    if (materialAccionModo === 'ajuste' && valor < 0) {
+      Alert.alert('Cantidad invalida', 'La cantidad no puede ser negativa.');
+      return;
+    }
+    const payload = [
+      {
+        id_material: materialAccionTarget.id,
+        nombre: materialAccionTarget.nombre,
+        caja: materialAccionTarget.caja || 'Caja 1',
+        caja_tecnico_id: userId || undefined,
+        accion_material: materialAccionModo,
+        ...(materialAccionModo === 'incremento'
+          ? { cantidad_delta: valor }
+          : { cantidad: valor }),
+      },
+    ];
+    try {
+      setGuardandoAccionMaterial(true);
+      await saveMaterialesArmado(armadoId, payload);
+      setModalAccionMaterialVisible(false);
+      setMaterialAccionTarget(null);
+      setMaterialAccionCantidad('');
+      await cargarMat();
+    } catch (_e) {
+      await enqueueOfflineOp('save_materiales', { armadoId, materiales: payload });
+      setModalAccionMaterialVisible(false);
+      setMaterialAccionTarget(null);
+      setMaterialAccionCantidad('');
+      Alert.alert('Sin conexion', 'La accion quedo pendiente para sincronizar.');
+    } finally {
+      setGuardandoAccionMaterial(false);
+    }
+  }, [armadoId, cargarMat, materialAccionCantidad, materialAccionModo, materialAccionTarget, userId]);
+
   const abrirCamaraSerie = (equipoId: string, nombre: string) => {
     if (esSoloLectura) return;
     setCamEquipoId(String(equipoId));
@@ -687,6 +769,7 @@ export default function ArmadoScreen() {
       payload = materiales
         .filter((m) => {
           if (!materialTieneContenido(m)) return false;
+          if (materialEstaGuardado(m)) return false;
           const idStr = String(m.id);
           const actualHash = hashMaterial(m);
           const previoHash = materialesSnapshotRef.current[idStr];
@@ -1212,6 +1295,7 @@ export default function ArmadoScreen() {
               <>
                 {materiales.map((m) => (
                   (() => {
+                    const materialGuardado = materialEstaGuardado(m);
                     const tieneRegistro =
                       (m.usuario && String(m.usuario).trim().length > 0) ||
                       Number(m.cantidad || 0) > 0 ||
@@ -1230,18 +1314,37 @@ export default function ArmadoScreen() {
                         <Ionicons name="hammer-outline" size={16} color="#0b3b8c" />
                         <Text style={[styles.cardTitle, { color: '#0f172a' }]}>{m.nombre}</Text>
                       </View>
-                    <View style={{ alignItems: 'flex-end' }}>
+                    <View style={{ alignItems: 'flex-end', gap: 8 }}>
+                    <View style={styles.materialActionRow}>
+                    {materialGuardado ? (
+                      <Pressable
+                        style={styles.materialActionBtn}
+                        onPress={() => abrirAccionMaterial(m, 'ajuste')}
+                        disabled={esSoloLectura}>
+                        <Ionicons name="checkmark-done-circle" size={18} color="#f59e0b" />
+                      </Pressable>
+                    ) : null}
+                    {materialGuardado ? (
+                      <Pressable
+                        style={styles.materialActionBtn}
+                        onPress={() => abrirAccionMaterial(m, 'incremento')}
+                        disabled={esSoloLectura}>
+                        <Ionicons name="add-circle" size={18} color="#0b3b8c" />
+                      </Pressable>
+                    ) : null}
                     <Pressable
                       style={[styles.cardBadge, { borderColor: '#0b3b8c' }]}
                       onPress={() => actualizarMaterial(m.id, { caja: siguienteCaja(m.caja) })}
-                      disabled={esSoloLectura}>
+                      disabled={esSoloLectura || materialGuardado}>
                       <Text style={{ color: '#0b3b8c', fontWeight: '700' }}>{m.caja || 'Caja 1'}</Text>
                     </Pressable>
+                    </View>
+                    {materialGuardado ? <Text style={styles.materialSavedText}>Guardado</Text> : null}
                       </View>
                     </View>
                     <Text style={[styles.metaText, { color: '#0f172a' }]}>Cantidad:</Text>
                     <TextInput
-                      placeholder="0"
+                      placeholder={materialGuardado ? 'Edita con el icono' : '0'}
                       keyboardType="numeric"
                       value={m.cantidad !== undefined && m.cantidad !== null ? String(m.cantidad) : ''}
                       onChangeText={(t) =>
@@ -1250,8 +1353,11 @@ export default function ArmadoScreen() {
                           usuario: name || m.usuario,
                         })
                       }
-                      style={[styles.input, { color: '#0f172a', borderColor: '#d7e3f4', backgroundColor: '#f8fbff' }]}
-                      editable={!esSoloLectura}
+                      style={[
+                        styles.input,
+                        { color: '#0f172a', borderColor: '#d7e3f4', backgroundColor: materialGuardado ? '#eef2ff' : '#f8fbff' },
+                      ]}
+                      editable={!esSoloLectura && !materialGuardado}
                     />
                     {m.usuario ? <Text style={[styles.metaText, { color: '#475569' }]}>Por: {m.usuario}</Text> : null}
                   </View>
@@ -1358,6 +1464,65 @@ export default function ArmadoScreen() {
                   await guardarMaterialesApp();
                 }}>
                 <Text style={styles.confirmSaveText}>Guardar</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={modalAccionMaterialVisible} animationType="fade" transparent>
+        <View style={styles.camOverlay}>
+          <View style={styles.confirmBox}>
+            <View
+              style={[
+                styles.confirmIconWrap,
+                { backgroundColor: materialAccionModo === 'incremento' ? '#dbeafe' : '#fef3c7' },
+              ]}>
+              <Ionicons
+                name={materialAccionModo === 'incremento' ? 'add-circle-outline' : 'create-outline'}
+                size={20}
+                color={materialAccionModo === 'incremento' ? '#1d4ed8' : '#d97706'}
+              />
+            </View>
+            <Text style={styles.confirmTitle}>
+              {materialAccionModo === 'incremento' ? 'Agregar mas material' : 'Editar cantidad'}
+            </Text>
+            <Text style={styles.confirmText}>
+              {materialAccionTarget?.nombre || 'Material'}
+            </Text>
+            <Text style={[styles.confirmText, { marginTop: -4, marginBottom: 12 }]}>
+              Cantidad actual: {Number(materialAccionTarget?.cantidad || 0)}
+            </Text>
+            <TextInput
+              style={styles.materialActionInput}
+              placeholder={materialAccionModo === 'incremento' ? 'Cantidad a sumar' : 'Nueva cantidad total'}
+              keyboardType="numeric"
+              value={materialAccionCantidad}
+              onChangeText={setMaterialAccionCantidad}
+            />
+            {materialAccionModo === 'incremento' && materialAccionTarget ? (
+              <Text style={[styles.confirmText, { marginTop: 10 }]}>
+                Total final: {Number(materialAccionTarget.cantidad || 0) + (Number(materialAccionCantidad || 0) || 0)}
+              </Text>
+            ) : null}
+            <View style={styles.confirmActions}>
+              <Pressable
+                style={styles.confirmCancelBtn}
+                onPress={() => {
+                  if (guardandoAccionMaterial) return;
+                  setModalAccionMaterialVisible(false);
+                  setMaterialAccionTarget(null);
+                  setMaterialAccionCantidad('');
+                }}>
+                <Text style={styles.confirmCancelText}>Cancelar</Text>
+              </Pressable>
+              <Pressable
+                style={styles.confirmSaveBtn}
+                disabled={guardandoAccionMaterial}
+                onPress={confirmarAccionMaterial}>
+                <Text style={styles.confirmSaveText}>
+                  {guardandoAccionMaterial ? 'Guardando...' : materialAccionModo === 'incremento' ? 'Agregar' : 'Guardar cambio'}
+                </Text>
               </Pressable>
             </View>
           </View>
@@ -1619,6 +1784,26 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
   },
+  materialActionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  materialActionBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+  },
+  materialSavedText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#b45309',
+  },
   inputScanRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1661,6 +1846,16 @@ const styles = StyleSheet.create({
     color: '#475569',
     fontSize: 14,
     marginBottom: 14,
+  },
+  materialActionInput: {
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 11,
+    fontSize: 15,
+    color: '#0f172a',
+    backgroundColor: '#f8fafc',
   },
   confirmActions: {
     flexDirection: 'row',
