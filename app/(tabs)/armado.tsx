@@ -192,7 +192,8 @@ export default function ArmadoScreen() {
     equipos: 0,
     materiales: 0,
   });
-  const [cantidadCajas, setCantidadCajas] = useState('1');
+  const [descripcionCajaPrincipal, setDescripcionCajaPrincipal] = useState('');
+  const [descripcionCajaNueva, setDescripcionCajaNueva] = useState('');
   const centro = (params.centro as string) || '-';
   const cliente = (params.cliente as string) || '-';
   const armadoId = (params.armadoId as string) || '';
@@ -337,6 +338,7 @@ export default function ArmadoScreen() {
   }, []);
 
   const materialEstaGuardado = useCallback((m: Pick<Material, 'id'>) => /^\d+$/.test(String(m.id || '').trim()), []);
+  const esIdPersistido = useCallback((value: any) => /^\d+$/.test(String(value || '').trim()), []);
 
   const cajasConContenido = useMemo(() => {
     const set = new Set<string>();
@@ -872,7 +874,8 @@ export default function ArmadoScreen() {
 
   const agregarCaja = () => {
     if (esSoloLectura) return;
-    setCantidadCajas('1');
+    setDescripcionCajaPrincipal(obtenerDescripcionCaja(cajaPrincipalActual));
+    setDescripcionCajaNueva('');
     setModalCajasVisible(true);
   };
 
@@ -880,6 +883,37 @@ export default function ArmadoScreen() {
     const n = parseInt(String(caja || '').replace(/[^\d]/g, ''), 10);
     return Number.isFinite(n) ? n : 0;
   };
+
+  const obtenerDescripcionCaja = useCallback((caja?: string) => {
+    const texto = String(caja || '').trim();
+    const match = texto.match(/^Caja\s*\d+\s*-\s*(.+)$/i);
+    return String(match?.[1] || '').trim();
+  }, []);
+
+  const construirNombreCaja = useCallback((numero: number, descripcion?: string) => {
+    const detalle = String(descripcion || '')
+      .trim()
+      .replace(/\s+/g, ' ');
+    return detalle ? `Caja ${numero} - ${detalle}` : `Caja ${numero}`;
+  }, []);
+
+  const cajaPrincipalActual = useMemo(() => {
+    const encontrada = cajas.find((c) => numeroCaja(c) === 1);
+    return encontrada || 'Caja 1';
+  }, [cajas]);
+
+  const siguienteNumeroCaja = useMemo(
+    () =>
+      cajas.reduce((max, c) => {
+        const n = parseInt(String(c).replace(/[^\d]/g, ''), 10);
+        return Number.isFinite(n) ? Math.max(max, n) : max;
+      }, 0) + 1,
+    [cajas]
+  );
+
+  const siguienteCajaBase = `Caja ${siguienteNumeroCaja}`;
+  const cajaPrincipalPreview = construirNombreCaja(1, descripcionCajaPrincipal);
+  const cajaNuevaPreview = construirNombreCaja(siguienteNumeroCaja, descripcionCajaNueva);
 
   const abrirQuitarCaja = () => {
     if (esSoloLectura) return;
@@ -905,15 +939,74 @@ export default function ArmadoScreen() {
 
   const confirmarAgregarCajas = () => {
     if (esSoloLectura) return;
-    const qty = Math.max(1, Number.parseInt(cantidadCajas || '1', 10));
-    const maxNum = cajas.reduce((max, c) => {
-      const n = parseInt(String(c).replace(/[^\d]/g, ''), 10);
-      return Number.isFinite(n) ? Math.max(max, n) : max;
-    }, 0);
-    const nuevas = Array.from({ length: qty }, (_, i) => `Caja ${maxNum + i + 1}`);
-    const totalNuevo = maxNum + qty;
-    setCajas((prev) => Array.from(new Set([...prev, ...nuevas])));
+    const cajaPrincipalRenombrada = construirNombreCaja(1, descripcionCajaPrincipal);
+    const nuevaCajaDescripcion = String(descripcionCajaNueva || '').trim();
+    const nuevaCaja = nuevaCajaDescripcion ? construirNombreCaja(siguienteNumeroCaja, descripcionCajaNueva) : '';
+    if (cajaPrincipalRenombrada !== cajaPrincipalActual && cajas.some((c) => c !== cajaPrincipalActual && c === cajaPrincipalRenombrada)) {
+      Alert.alert('Caja existente', 'Ya existe una caja con ese nombre para la caja principal.');
+      return;
+    }
+    if (nuevaCaja && (cajas.includes(nuevaCaja) || nuevaCaja === cajaPrincipalRenombrada)) {
+      Alert.alert('Caja existente', 'Ya existe una caja con ese nombre.');
+      return;
+    }
+    const renombrandoCajaPrincipal = cajaPrincipalRenombrada !== cajaPrincipalActual;
+    const equiposPersistidosRenombrados = renombrandoCajaPrincipal
+      ? equipos
+          .filter((e) => (e.caja || 'Caja 1') === cajaPrincipalActual && esIdPersistido(e.id) && equipoTieneContenido(e))
+          .map((e) => ({
+            id: e.id,
+            data: {
+              numero_serie: e.serie,
+              codigo: e.codigo,
+              caja: cajaPrincipalRenombrada,
+              caja_tecnico_id: userId || undefined,
+              armado_id: armadoId ? Number(armadoId) : undefined,
+            },
+            next: { ...e, caja: cajaPrincipalRenombrada },
+          }))
+      : [];
+    const materialesPersistidosRenombrados = renombrandoCajaPrincipal
+      ? materiales
+          .filter((m) => (m.caja || 'Caja 1') === cajaPrincipalActual && esIdPersistido(m.id) && materialTieneContenido(m))
+          .map((m) => ({
+            id_material: m.id,
+            nombre: m.nombre,
+            cantidad: m.cantidad,
+            caja: cajaPrincipalRenombrada,
+            caja_tecnico_id: userId || undefined,
+            next: { ...m, caja: cajaPrincipalRenombrada },
+          }))
+      : [];
+    const cajasRenombradas = cajas.map((c) => (c === cajaPrincipalActual ? cajaPrincipalRenombrada : c));
+    const nextCajas = nuevaCaja ? Array.from(new Set([...cajasRenombradas, nuevaCaja])) : cajasRenombradas;
+    const totalNuevo = Math.max(1, nextCajas.length);
+    if (renombrandoCajaPrincipal) {
+      setEquipos((prev) =>
+        prev.map((e) => ((e.caja || 'Caja 1') === cajaPrincipalActual ? { ...e, caja: cajaPrincipalRenombrada } : e))
+      );
+      setMateriales((prev) =>
+        prev.map((m) => ((m.caja || 'Caja 1') === cajaPrincipalActual ? { ...m, caja: cajaPrincipalRenombrada } : m))
+      );
+      if (equiposPersistidosRenombrados.length) {
+        const nextSnap = { ...equiposSnapshotRef.current };
+        equiposPersistidosRenombrados.forEach((item) => {
+          nextSnap[String(item.id)] = hashEquipo(item.next);
+        });
+        equiposSnapshotRef.current = nextSnap;
+      }
+      if (materialesPersistidosRenombrados.length) {
+        const nextSnap = { ...materialesSnapshotRef.current };
+        materialesPersistidosRenombrados.forEach((item) => {
+          nextSnap[String(item.id_material)] = hashMaterial(item.next);
+        });
+        materialesSnapshotRef.current = nextSnap;
+      }
+    }
+    setCajas(nextCajas);
     setTotalCajas(totalNuevo);
+    setDescripcionCajaPrincipal('');
+    setDescripcionCajaNueva('');
     if (armadoId) {
       ignoreNextRealtimeRefreshRef.current = true;
       setTimeout(() => {
@@ -923,6 +1016,19 @@ export default function ArmadoScreen() {
         ignoreNextRealtimeRefreshRef.current = false;
         await enqueueOfflineOp('update_armado', { armadoId, data: { total_cajas_manual: totalNuevo } });
       });
+      if (renombrandoCajaPrincipal) {
+        equiposPersistidosRenombrados.forEach((item) => {
+          updateEquipo(item.id, item.data).catch(async () => {
+            await enqueueOfflineOp('update_equipo', { id_equipo: item.id, data: item.data });
+          });
+        });
+        if (materialesPersistidosRenombrados.length) {
+          const materialesPayload = materialesPersistidosRenombrados.map(({ next, ...payload }) => payload);
+          saveMaterialesArmado(armadoId, materialesPayload).catch(async () => {
+            await enqueueOfflineOp('save_materiales', { armadoId, materiales: materialesPayload });
+          });
+        }
+      }
     }
     setModalCajasVisible(false);
   };
@@ -1416,24 +1522,46 @@ export default function ArmadoScreen() {
 
       <Modal visible={modalCajasVisible} animationType="fade" transparent>
         <View style={styles.camOverlay}>
-          <View style={[styles.camBox, { aspectRatio: undefined, padding: 16, backgroundColor: '#f8fafc' }]}>
-            <Text style={{ fontWeight: '800', fontSize: 16, marginBottom: 8, color: '#0f172a' }}>
-              ¿Cuantas cajas agregar?
+          <View style={[styles.camBox, styles.boxNameModal]}>
+            <Text style={styles.boxNameModalTitle}>Agregar caja</Text>
+            <Text style={styles.boxNameModalText}>
+              Puedes renombrar la caja principal y crear la siguiente manteniendo el formato del sistema.
             </Text>
-            <Text style={{ marginBottom: 12, color: '#475569' }}>
-              Actualmente existe Caja 1. Ingresa cuantas cajas nuevas quieres crear.
-            </Text>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+            <View style={styles.boxNameSection}>
+              <Text style={styles.boxNameSectionLabel}>Caja principal</Text>
+              <View style={styles.boxNamePreview}>
+                <Ionicons name="cube-outline" size={16} color="#0b3b8c" />
+                <Text style={styles.boxNamePreviewText}>{cajaPrincipalPreview}</Text>
+              </View>
               <TextInput
-                value={cantidadCajas}
-                onChangeText={setCantidadCajas}
-                keyboardType="numeric"
-                style={[
-                  styles.input,
-                  { flex: 1, borderColor: '#d7e3f4', backgroundColor: '#fff', color: '#0f172a' },
-                ]}
-                placeholder="1"
+                value={descripcionCajaPrincipal}
+                onChangeText={setDescripcionCajaPrincipal}
+                style={[styles.input, styles.boxNameInput]}
+                placeholder="Ejemplo: equipos"
+                placeholderTextColor="#94a3b8"
+                maxLength={40}
               />
+            </View>
+            <View style={styles.boxNameSection}>
+              <Text style={styles.boxNameSectionLabel}>Nueva caja</Text>
+              <Text style={styles.boxNameModalText}>
+                Se creara <Text style={styles.boxNameModalStrong}>{siguienteCajaBase}</Text>. Si quieres, agrega una descripcion como
+                {' '}materiales. Si lo dejas vacio, solo se actualizara la Caja 1.
+              </Text>
+            </View>
+            <View style={styles.boxNamePreview}>
+              <Ionicons name="cube-outline" size={16} color="#0b3b8c" />
+              <Text style={styles.boxNamePreviewText}>{cajaNuevaPreview}</Text>
+            </View>
+            <TextInput
+              value={descripcionCajaNueva}
+              onChangeText={setDescripcionCajaNueva}
+              style={[styles.input, styles.boxNameInput]}
+              placeholder="Ejemplo: equipos o materiales"
+              placeholderTextColor="#94a3b8"
+              maxLength={40}
+            />
+            <View style={styles.boxNameActions}>
               <Pressable style={[styles.camBtn, { backgroundColor: '#e2e8f0' }]} onPress={() => setModalCajasVisible(false)}>
                 <Text style={{ color: '#0f172a', fontWeight: '700' }}>Cancelar</Text>
               </Pressable>
@@ -1814,6 +1942,65 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderRadius: 10,
     backgroundColor: '#0b3b8c',
+  },
+  boxNameModal: {
+    aspectRatio: undefined,
+    padding: 18,
+    backgroundColor: '#f8fafc',
+  },
+  boxNameModalTitle: {
+    fontWeight: '800',
+    fontSize: 17,
+    marginBottom: 8,
+    color: '#0f172a',
+  },
+  boxNameModalText: {
+    marginBottom: 12,
+    color: '#475569',
+    lineHeight: 20,
+  },
+  boxNameModalStrong: {
+    color: '#0b3b8c',
+    fontWeight: '800',
+  },
+  boxNameSection: {
+    marginBottom: 12,
+  },
+  boxNameSectionLabel: {
+    color: '#334155',
+    fontSize: 12,
+    fontWeight: '800',
+    marginBottom: 8,
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  boxNamePreview: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 11,
+    borderRadius: 12,
+    backgroundColor: '#eff6ff',
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    marginBottom: 12,
+  },
+  boxNamePreviewText: {
+    flex: 1,
+    color: '#0f172a',
+    fontWeight: '700',
+  },
+  boxNameInput: {
+    borderColor: '#d7e3f4',
+    backgroundColor: '#fff',
+    color: '#0f172a',
+    marginBottom: 14,
+  },
+  boxNameActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 10,
   },
   confirmBox: {
     width: '88%',
