@@ -29,6 +29,13 @@ type Material = {
 };
 
 type MaterialActionMode = 'ajuste' | 'incremento';
+type CajaEstado = 'abierta' | 'cerrada';
+type BoxSelectorTarget = {
+  tipo: 'equipo' | 'material';
+  id: string;
+  actual: string;
+  nombre: string;
+};
 
 const MATERIALES_PREDEF: string[] = [
   'Cable Electrico 3 x 1,5mm',
@@ -176,16 +183,20 @@ export default function ArmadoScreen() {
   const equiposSnapshotRef = useRef<Record<string, string>>({});
   const materialesSnapshotRef = useRef<Record<string, string>>({});
   const [modalCajasVisible, setModalCajasVisible] = useState(false);
+  const [modalGestionCajasVisible, setModalGestionCajasVisible] = useState(false);
   const [modalGuardarMatVisible, setModalGuardarMatVisible] = useState(false);
   const [modalQuitarCajaVisible, setModalQuitarCajaVisible] = useState(false);
   const [modalPrefinalizadoVisible, setModalPrefinalizadoVisible] = useState(false);
   const [modalAccionMaterialVisible, setModalAccionMaterialVisible] = useState(false);
+  const [modalSelectorCajaVisible, setModalSelectorCajaVisible] = useState(false);
+  const [selectorCajaTarget, setSelectorCajaTarget] = useState<BoxSelectorTarget | null>(null);
   const [materialAccionModo, setMaterialAccionModo] = useState<MaterialActionMode>('ajuste');
   const [materialAccionTarget, setMaterialAccionTarget] = useState<Material | null>(null);
   const [materialAccionCantidad, setMaterialAccionCantidad] = useState('');
   const [guardandoAccionMaterial, setGuardandoAccionMaterial] = useState(false);
   const [gruposColapsados, setGruposColapsados] = useState<Record<string, boolean>>({});
   const [cacheReady, setCacheReady] = useState(false);
+  const [cajasEstado, setCajasEstado] = useState<Record<string, CajaEstado>>({});
   const [resumenQuitarCaja, setResumenQuitarCaja] = useState({
     target: '',
     destino: '',
@@ -239,6 +250,73 @@ export default function ArmadoScreen() {
       .map((tec: any) => tec?.nombre)
       .filter(Boolean);
   }, [armadoActual, name, normalizeTechName, userId]);
+
+  const numeroCaja = useCallback((caja?: string) => {
+    const n = parseInt(String(caja || '').replace(/[^\d]/g, ''), 10);
+    return Number.isFinite(n) ? n : 0;
+  }, []);
+
+  const normalizarCajaTexto = useCallback((value?: string) => {
+    const raw = String(value || '').trim().replace(/\s+/g, ' ');
+    if (!raw) return 'Caja 1';
+    const match = raw.match(/^Caja\s*(\d+)(?:\s*-\s*(.+))?$/i);
+    if (!match) return raw;
+    const numero = Number.parseInt(match[1], 10);
+    const descripcion = String(match[2] || '').trim();
+    return descripcion ? `Caja ${numero} - ${descripcion}` : `Caja ${numero}`;
+  }, []);
+
+  const unificarCajas = useCallback((items: string[]) => {
+    const porNumero = new Map<number, string>();
+    const extras: string[] = [];
+    items.forEach((item) => {
+      const normalizada = normalizarCajaTexto(item);
+      const match = normalizada.match(/^Caja\s*(\d+)(?:\s*-\s*(.+))?$/i);
+      if (!match) {
+        if (!extras.includes(normalizada)) extras.push(normalizada);
+        return;
+      }
+      const numero = Number.parseInt(match[1], 10);
+      const actual = porNumero.get(numero);
+      const actualTieneDetalle = !!String(actual || '').match(/^Caja\s*\d+\s*-\s*.+$/i);
+      const nuevaTieneDetalle = !!String(normalizada || '').match(/^Caja\s*\d+\s*-\s*.+$/i);
+      if (!actual || (nuevaTieneDetalle && !actualTieneDetalle) || (nuevaTieneDetalle && actualTieneDetalle)) {
+        porNumero.set(numero, normalizada);
+      }
+    });
+    const cajasOrdenadas = Array.from(porNumero.entries())
+      .sort((a, b) => a[0] - b[0])
+      .map(([, label]) => label);
+    return [...cajasOrdenadas, ...extras];
+  }, [normalizarCajaTexto]);
+
+  const normalizarCajaEstado = useCallback((value: any): CajaEstado => {
+    return String(value || '').trim().toLowerCase() === 'cerrada' ? 'cerrada' : 'abierta';
+  }, []);
+
+  const sincronizarEstadosCajas = useCallback((listaCajas: string[], estadosBase?: Record<string, any>) => {
+    const cajasNormalizadas = unificarCajas(listaCajas);
+    const fuente = estadosBase && typeof estadosBase === 'object' ? estadosBase : {};
+    const estadoPorNumero = new Map<number, CajaEstado>();
+    Object.entries(fuente).forEach(([key, value]) => {
+      const numero = numeroCaja(key);
+      if (!numero) return;
+      if (!estadoPorNumero.has(numero)) {
+        estadoPorNumero.set(numero, normalizarCajaEstado(value));
+      }
+    });
+    const resultado: Record<string, CajaEstado> = {};
+    cajasNormalizadas.forEach((caja) => {
+      const numero = numeroCaja(caja);
+      resultado[caja] = normalizarCajaEstado(fuente[caja] ?? estadoPorNumero.get(numero) ?? 'abierta');
+    });
+    return resultado;
+  }, [normalizarCajaEstado, numeroCaja, unificarCajas]);
+
+  const estadoCaja = useCallback((caja?: string): CajaEstado => {
+    const nombre = normalizarCajaTexto(caja);
+    return normalizarCajaEstado(cajasEstado[nombre] || 'abierta');
+  }, [cajasEstado, normalizarCajaEstado, normalizarCajaTexto]);
 
   const formatFecha = (val?: string) => {
     if (!val) return '-';
@@ -450,7 +528,10 @@ export default function ArmadoScreen() {
         materialesSnapshotRef.current = snap;
       }
       if (cached?.cajas && Array.isArray(cached.cajas) && cached.cajas.length > 0) {
-        setCajas(cached.cajas);
+        setCajas(unificarCajas(cached.cajas));
+      }
+      if (cached?.cajasEstado && typeof cached.cajasEstado === 'object') {
+        setCajasEstado(cached.cajasEstado as Record<string, CajaEstado>);
       }
       if (typeof cached?.totalCajas === 'number') {
         setTotalCajas(cached.totalCajas);
@@ -460,15 +541,20 @@ export default function ArmadoScreen() {
     return () => {
       active = false;
     };
-  }, [readCache, hashEquipo, hashMaterial]);
+  }, [readCache, hashEquipo, hashMaterial, unificarCajas]);
 
   useEffect(() => {
     if (!cacheReady) return;
     const timer = setTimeout(() => {
-      writeCache({ equipos, materiales, cajas, totalCajas });
+      writeCache({ equipos, materiales, cajas, cajasEstado, totalCajas });
     }, 350);
     return () => clearTimeout(timer);
-  }, [cacheReady, equipos, materiales, cajas, totalCajas, writeCache]);
+  }, [cacheReady, equipos, materiales, cajas, cajasEstado, totalCajas, writeCache]);
+
+  useEffect(() => {
+    if (!cajas?.length) return;
+    setCajasEstado((prev) => sincronizarEstadosCajas(cajas, prev));
+  }, [cajas, sincronizarEstadosCajas]);
 
   const cargarEquipos = useCallback(async () => {
     if (!centroId) return;
@@ -490,8 +576,8 @@ export default function ArmadoScreen() {
           snap[String(e.id)] = hashEquipo(e);
         });
         equiposSnapshotRef.current = snap;
-        const cajasDetect = Array.from(new Set(mapped.map((e) => e.caja || 'Caja 1')));
-        setCajas((prev) => Array.from(new Set([...prev, ...cajasDetect])));
+        const cajasDetect = mapped.map((e) => e.caja || 'Caja 1');
+        setCajas((prev) => unificarCajas([...prev, ...cajasDetect]));
         await writeCache({ equipos: mapped });
       }
     } catch (e) {
@@ -510,7 +596,7 @@ export default function ArmadoScreen() {
     } finally {
       setLoading(false);
     }
-  }, [centroId, hashEquipo, readCache, writeCache]);
+  }, [centroId, hashEquipo, readCache, writeCache, unificarCajas]);
 
   useEffect(() => {
     cargarEquipos();
@@ -538,7 +624,7 @@ export default function ArmadoScreen() {
       });
       materialesSnapshotRef.current = snap;
       const cajasDetect = mapped.map((m: any) => m.caja || 'Caja 1');
-      setCajas((prev) => Array.from(new Set([...prev, ...cajasDetect])));
+      setCajas((prev) => unificarCajas([...prev, ...cajasDetect]));
       await writeCache({ materiales: mapped });
     } catch (_e) {
       const cached = await readCache();
@@ -553,7 +639,7 @@ export default function ArmadoScreen() {
     } finally {
       setLoadingMateriales(false);
     }
-  }, [armadoId, hashMaterial, mergeMateriales, readCache, writeCache]);
+  }, [armadoId, hashMaterial, mergeMateriales, readCache, writeCache, unificarCajas]);
 
   useEffect(() => {
     cargarMat();
@@ -584,6 +670,11 @@ export default function ArmadoScreen() {
     };
     cargarFechasArmado();
   }, [armadoId]);
+
+  useEffect(() => {
+    if (!armadoActual?.cajas_estado) return;
+    setCajasEstado((prev) => sincronizarEstadosCajas(cajas, armadoActual.cajas_estado || prev));
+  }, [armadoActual, cajas, sincronizarEstadosCajas]);
 
   const pasarAPrefinalizado = useCallback(async () => {
     if (!armadoId || estadoNormalizado !== 'en_proceso') return;
@@ -645,6 +736,64 @@ export default function ArmadoScreen() {
     if (esSoloLectura) return;
     setMateriales((prev) => prev.map((m) => (m.id === id ? { ...m, ...cambios } : m)));
   };
+
+  const abrirSelectorCaja = useCallback((target: BoxSelectorTarget) => {
+    if (esSoloLectura) return;
+    setSelectorCajaTarget(target);
+    setModalSelectorCajaVisible(true);
+  }, [esSoloLectura]);
+
+  const seleccionarCaja = useCallback((caja: string) => {
+    if (!selectorCajaTarget) return;
+    if (estadoCaja(caja) === 'cerrada' && caja !== selectorCajaTarget.actual) return;
+    if (selectorCajaTarget.tipo === 'equipo') {
+      actualizarEquipo(selectorCajaTarget.id, { caja, nombre: selectorCajaTarget.nombre });
+    } else {
+      actualizarMaterial(selectorCajaTarget.id, { caja });
+    }
+    setModalSelectorCajaVisible(false);
+    setSelectorCajaTarget(null);
+  }, [actualizarEquipo, actualizarMaterial, estadoCaja, selectorCajaTarget]);
+
+  const persistirConfiguracionCajas = useCallback(async (nextCajas: string[], nextEstados: Record<string, CajaEstado>) => {
+    if (!armadoId) return;
+    const cajasNormalizadas = unificarCajas(nextCajas);
+    const estadosNormalizados = sincronizarEstadosCajas(cajasNormalizadas, nextEstados);
+    const totalNuevo = Math.max(1, cajasNormalizadas.length);
+    ignoreNextRealtimeRefreshRef.current = true;
+    setTimeout(() => {
+      ignoreNextRealtimeRefreshRef.current = false;
+    }, 2000);
+    updateArmado(armadoId, {
+      total_cajas_manual: totalNuevo,
+      cajas_estado: estadosNormalizados,
+    }).catch(async () => {
+      ignoreNextRealtimeRefreshRef.current = false;
+      await enqueueOfflineOp('update_armado', {
+        armadoId,
+        data: {
+          total_cajas_manual: totalNuevo,
+          cajas_estado: estadosNormalizados,
+        },
+      });
+    });
+  }, [armadoId, sincronizarEstadosCajas, unificarCajas]);
+
+  const abrirGestionCajas = useCallback(() => {
+    if (esSoloLectura) return;
+    setModalGestionCajasVisible(true);
+  }, [esSoloLectura]);
+
+  const toggleEstadoCaja = useCallback((caja: string) => {
+    const nombre = normalizarCajaTexto(caja);
+    const siguienteEstado: CajaEstado = estadoCaja(nombre) === 'cerrada' ? 'abierta' : 'cerrada';
+    const nextEstados = sincronizarEstadosCajas(cajas, {
+      ...cajasEstado,
+      [nombre]: siguienteEstado,
+    });
+    setCajasEstado(nextEstados);
+    persistirConfiguracionCajas(cajas, nextEstados);
+  }, [cajas, cajasEstado, estadoCaja, normalizarCajaTexto, persistirConfiguracionCajas, sincronizarEstadosCajas]);
 
   const abrirAccionMaterial = useCallback(
     (material: Material, modo: MaterialActionMode) => {
@@ -874,14 +1023,10 @@ export default function ArmadoScreen() {
 
   const agregarCaja = () => {
     if (esSoloLectura) return;
+    setModalGestionCajasVisible(false);
     setDescripcionCajaPrincipal(obtenerDescripcionCaja(cajaPrincipalActual));
     setDescripcionCajaNueva('');
     setModalCajasVisible(true);
-  };
-
-  const numeroCaja = (caja?: string) => {
-    const n = parseInt(String(caja || '').replace(/[^\d]/g, ''), 10);
-    return Number.isFinite(n) ? n : 0;
   };
 
   const obtenerDescripcionCaja = useCallback((caja?: string) => {
@@ -915,20 +1060,32 @@ export default function ArmadoScreen() {
   const cajaPrincipalPreview = construirNombreCaja(1, descripcionCajaPrincipal);
   const cajaNuevaPreview = construirNombreCaja(siguienteNumeroCaja, descripcionCajaNueva);
 
-  const abrirQuitarCaja = () => {
-    if (esSoloLectura) return;
-    if (cajas.length <= 1) return;
+  const construirResumenQuitarCaja = useCallback((targetCaja?: string) => {
     const ordered = [...cajas].sort((a, b) => numeroCaja(a) - numeroCaja(b));
-    const target = ordered[ordered.length - 1];
-    const destino = ordered[ordered.length - 2] || 'Caja 1';
+    const target = ordered.includes(String(targetCaja || '')) ? String(targetCaja) : ordered[ordered.length - 1] || '';
+    const restantes = ordered.filter((c) => c !== target);
+    const numeroTarget = numeroCaja(target);
+    const destino =
+      restantes
+        .filter((c) => numeroCaja(c) < numeroTarget)
+        .sort((a, b) => numeroCaja(b) - numeroCaja(a))[0] ||
+      restantes[0] ||
+      'Caja 1';
     const equiposCount = equipos.filter((e) => (e.caja || 'Caja 1') === target).length;
     const materialesCount = materiales.filter((m) => (m.caja || 'Caja 1') === target).length;
-    setResumenQuitarCaja({
+    return {
       target,
       destino,
       equipos: equiposCount,
       materiales: materialesCount,
-    });
+    };
+  }, [cajas, equipos, materiales]);
+
+  const abrirQuitarCaja = (targetCaja?: string) => {
+    if (esSoloLectura) return;
+    if (cajas.length <= 1) return;
+    setModalGestionCajasVisible(false);
+    setResumenQuitarCaja(construirResumenQuitarCaja(targetCaja));
     setModalQuitarCajaVisible(true);
   };
 
@@ -979,8 +1136,21 @@ export default function ArmadoScreen() {
           }))
       : [];
     const cajasRenombradas = cajas.map((c) => (c === cajaPrincipalActual ? cajaPrincipalRenombrada : c));
-    const nextCajas = nuevaCaja ? Array.from(new Set([...cajasRenombradas, nuevaCaja])) : cajasRenombradas;
+    const nextCajas = unificarCajas(nuevaCaja ? [...cajasRenombradas, nuevaCaja] : cajasRenombradas);
     const totalNuevo = Math.max(1, nextCajas.length);
+    const nextEstadosBase: Record<string, CajaEstado> = {};
+    nextCajas.forEach((caja) => {
+      if (renombrandoCajaPrincipal && caja === cajaPrincipalRenombrada) {
+        nextEstadosBase[caja] = estadoCaja(cajaPrincipalActual);
+        return;
+      }
+      if (caja === nuevaCaja) {
+        nextEstadosBase[caja] = 'abierta';
+        return;
+      }
+      nextEstadosBase[caja] = estadoCaja(caja);
+    });
+    const nextEstados = sincronizarEstadosCajas(nextCajas, nextEstadosBase);
     if (renombrandoCajaPrincipal) {
       setEquipos((prev) =>
         prev.map((e) => ((e.caja || 'Caja 1') === cajaPrincipalActual ? { ...e, caja: cajaPrincipalRenombrada } : e))
@@ -1004,18 +1174,12 @@ export default function ArmadoScreen() {
       }
     }
     setCajas(nextCajas);
+    setCajasEstado(nextEstados);
     setTotalCajas(totalNuevo);
     setDescripcionCajaPrincipal('');
     setDescripcionCajaNueva('');
     if (armadoId) {
-      ignoreNextRealtimeRefreshRef.current = true;
-      setTimeout(() => {
-        ignoreNextRealtimeRefreshRef.current = false;
-      }, 2000);
-      updateArmado(armadoId, { total_cajas_manual: totalNuevo }).catch(async () => {
-        ignoreNextRealtimeRefreshRef.current = false;
-        await enqueueOfflineOp('update_armado', { armadoId, data: { total_cajas_manual: totalNuevo } });
-      });
+      persistirConfiguracionCajas(nextCajas, nextEstados);
       if (renombrandoCajaPrincipal) {
         equiposPersistidosRenombrados.forEach((item) => {
           updateEquipo(item.id, item.data).catch(async () => {
@@ -1044,19 +1208,14 @@ export default function ArmadoScreen() {
     setMateriales((prev) =>
       prev.map((m) => ((m.caja || 'Caja 1') === target ? { ...m, caja: destino } : m))
     );
-    const nextCajas = cajas.filter((c) => c !== target);
+    const nextCajas = unificarCajas(cajas.filter((c) => c !== target));
+    const nextEstados = sincronizarEstadosCajas(nextCajas, cajasEstado);
     setCajas(nextCajas);
+    setCajasEstado(nextEstados);
     const totalNuevo = Math.max(1, nextCajas.length);
     setTotalCajas(totalNuevo);
     if (armadoId) {
-      ignoreNextRealtimeRefreshRef.current = true;
-      setTimeout(() => {
-        ignoreNextRealtimeRefreshRef.current = false;
-      }, 2000);
-      updateArmado(armadoId, { total_cajas_manual: totalNuevo }).catch(async () => {
-        ignoreNextRealtimeRefreshRef.current = false;
-        await enqueueOfflineOp('update_armado', { armadoId, data: { total_cajas_manual: totalNuevo } });
-      });
+      persistirConfiguracionCajas(nextCajas, nextEstados);
     }
     setModalQuitarCajaVisible(false);
   };
@@ -1072,12 +1231,6 @@ export default function ArmadoScreen() {
     if (!cajas?.length) return;
     setTotalCajas(Math.max(1, cajas.length));
   }, [cajas]);
-
-  const siguienteCaja = (actual?: string) => {
-    if (cajas.length === 0) return 'Caja 1';
-    const idx = cajas.indexOf(actual || 'Caja 1');
-    return cajas[(idx + 1) % cajas.length];
-  };
 
   const getGrupoVisual = (titulo: string) => {
     const key = String(titulo || '').toLowerCase();
@@ -1100,8 +1253,10 @@ export default function ArmadoScreen() {
   };
 
   return (
-    <SafeAreaView style={[styles.safe, { backgroundColor: '#ffffff' }]}>
-      <ScrollView contentContainerStyle={styles.container} style={{ backgroundColor: '#ffffff' }}>
+    <SafeAreaView edges={['top']} style={[styles.safe, { backgroundColor: '#f4f8ff' }]}>
+      <ScrollView
+        contentContainerStyle={styles.container}
+        style={styles.scroll}>
         {!token ? (
           <Text style={[styles.subtitle, { color: 'red', textAlign: 'center' }]}>
             Debes iniciar sesiÃƒÂ³n para ver tus armados.
@@ -1264,17 +1419,10 @@ export default function ArmadoScreen() {
           </Pressable>
           <Pressable
             style={({ pressed }) => [styles.addBoxBtn, esSoloLectura && styles.btnDisabled, pressed && styles.btnPressed]}
-            onPress={agregarCaja}
+            onPress={abrirGestionCajas}
             disabled={esSoloLectura}>
-            <Ionicons name="add-circle-outline" size={16} color="#0b3b8c" />
-            <Text style={styles.addBoxText}>Agregar caja</Text>
-          </Pressable>
-          <Pressable
-            style={({ pressed }) => [styles.removeBoxBtn, esSoloLectura && styles.btnDisabled, pressed && styles.btnPressed]}
-            onPress={abrirQuitarCaja}
-            disabled={esSoloLectura}>
-            <Ionicons name="remove-circle-outline" size={16} color="#b91c1c" />
-            <Text style={styles.removeBoxText}>Quitar caja</Text>
+            <Ionicons name="file-tray-full-outline" size={16} color="#0b3b8c" />
+            <Text style={styles.addBoxText}>Cajas</Text>
           </Pressable>
         </View>
 
@@ -1348,7 +1496,12 @@ export default function ArmadoScreen() {
                           </View>
                         <Pressable
                           style={[styles.cardBadge, { borderColor: '#0b3b8c' }]}
-                          onPress={() => actualizarEquipo(eq.id, { caja: siguienteCaja(eq.caja), nombre: eq.nombre })}
+                          onPress={() => abrirSelectorCaja({
+                            tipo: 'equipo',
+                            id: String(eq.id),
+                            actual: eq.caja || 'Caja 1',
+                            nombre: eq.nombre,
+                          })}
                           disabled={esSoloLectura}>
                           <Text style={{ color: '#0b3b8c', fontWeight: '700' }}>{eq.caja}</Text>
                         </Pressable>
@@ -1407,50 +1560,39 @@ export default function ArmadoScreen() {
                       Number(m.cantidad || 0) > 0 ||
                       String(m.caja || 'Caja 1').trim() !== 'Caja 1';
                     return (
-                  <View
-                    key={m.id}
-                    style={[
-                      styles.card,
+	                  <View
+	                    key={m.id}
+	                    style={[
+	                      styles.card,
                       tieneRegistro
                         ? { borderColor: '#93c5fd', backgroundColor: '#dbeafe', borderLeftColor: '#1d4ed8' }
                         : { borderColor: palette.tabIconDefault, backgroundColor: '#ffffff' },
-                    ]}>
-                    <View style={styles.cardHeader}>
-                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                        <Ionicons name="hammer-outline" size={16} color="#0b3b8c" />
-                        <Text style={[styles.cardTitle, { color: '#0f172a' }]}>{m.nombre}</Text>
-                      </View>
-                    <View style={{ alignItems: 'flex-end', gap: 8 }}>
-                    <View style={styles.materialActionRow}>
-                    {materialGuardado ? (
-                      <Pressable
-                        style={styles.materialActionBtn}
-                        onPress={() => abrirAccionMaterial(m, 'ajuste')}
-                        disabled={esSoloLectura}>
-                        <Ionicons name="checkmark-done-circle" size={18} color="#f59e0b" />
-                      </Pressable>
-                    ) : null}
-                    {materialGuardado ? (
-                      <Pressable
-                        style={styles.materialActionBtn}
-                        onPress={() => abrirAccionMaterial(m, 'incremento')}
-                        disabled={esSoloLectura}>
-                        <Ionicons name="add-circle" size={18} color="#0b3b8c" />
-                      </Pressable>
-                    ) : null}
-                    <Pressable
-                      style={[styles.cardBadge, { borderColor: '#0b3b8c' }]}
-                      onPress={() => actualizarMaterial(m.id, { caja: siguienteCaja(m.caja) })}
-                      disabled={esSoloLectura || materialGuardado}>
-                      <Text style={{ color: '#0b3b8c', fontWeight: '700' }}>{m.caja || 'Caja 1'}</Text>
-                    </Pressable>
-                    </View>
-                    {materialGuardado ? <Text style={styles.materialSavedText}>Guardado</Text> : null}
-                      </View>
-                    </View>
-                    <Text style={[styles.metaText, { color: '#0f172a' }]}>Cantidad:</Text>
-                    <TextInput
-                      placeholder={materialGuardado ? 'Edita con el icono' : '0'}
+	                    ]}>
+	                    <View style={styles.cardHeader}>
+	                      <View style={styles.materialHeaderMain}>
+	                        <Ionicons name="hammer-outline" size={16} color="#0b3b8c" />
+	                        <Text style={[styles.cardTitle, { color: '#0f172a' }]}>{m.nombre}</Text>
+	                      </View>
+	                      <View style={styles.materialHeaderAside}>
+	                        <View style={styles.materialCajaWrap}>
+	                          <Pressable
+	                            style={[styles.cardBadge, styles.materialCardBadge, { borderColor: '#0b3b8c' }]}
+	                            onPress={() => abrirSelectorCaja({
+	                              tipo: 'material',
+	                              id: String(m.id),
+	                              actual: m.caja || 'Caja 1',
+	                              nombre: m.nombre,
+	                            })}
+	                            disabled={esSoloLectura || materialGuardado}>
+	                            <Text style={styles.materialCardBadgeText}>{m.caja || 'Caja 1'}</Text>
+	                          </Pressable>
+	                        </View>
+	                        {materialGuardado ? <Text style={styles.materialSavedText}>Guardado</Text> : null}
+	                      </View>
+	                    </View>
+	                    <Text style={[styles.metaText, { color: '#0f172a' }]}>Cantidad:</Text>
+	                    <TextInput
+	                      placeholder={materialGuardado ? 'Edita con el icono' : '0'}
                       keyboardType="numeric"
                       value={m.cantidad !== undefined && m.cantidad !== null ? String(m.cantidad) : ''}
                       onChangeText={(t) =>
@@ -1462,13 +1604,31 @@ export default function ArmadoScreen() {
                       style={[
                         styles.input,
                         { color: '#0f172a', borderColor: '#d7e3f4', backgroundColor: materialGuardado ? '#eef2ff' : '#f8fbff' },
-                      ]}
-                      editable={!esSoloLectura && !materialGuardado}
-                    />
-                    {m.usuario ? <Text style={[styles.metaText, { color: '#475569' }]}>Por: {m.usuario}</Text> : null}
-                  </View>
-                    );
-                  })()
+	                      ]}
+	                      editable={!esSoloLectura && !materialGuardado}
+	                    />
+	                    <View style={styles.materialFooterRow}>
+	                      {m.usuario ? <Text style={[styles.metaText, styles.materialUserText]}>Por: {m.usuario}</Text> : <View />}
+	                      {materialGuardado ? (
+	                        <View style={styles.materialActionRow}>
+	                          <Pressable
+	                            style={styles.materialActionBtn}
+	                            onPress={() => abrirAccionMaterial(m, 'ajuste')}
+	                            disabled={esSoloLectura}>
+	                            <Ionicons name="checkmark-done-circle" size={18} color="#f59e0b" />
+	                          </Pressable>
+	                          <Pressable
+	                            style={styles.materialActionBtn}
+	                            onPress={() => abrirAccionMaterial(m, 'incremento')}
+	                            disabled={esSoloLectura}>
+	                            <Ionicons name="add-circle" size={18} color="#0b3b8c" />
+	                          </Pressable>
+	                        </View>
+	                      ) : null}
+	                    </View>
+	                  </View>
+	                    );
+	                  })()
                 ))}
               </>
             )}
@@ -1516,6 +1676,82 @@ export default function ArmadoScreen() {
                 <Ionicons name="close-circle" size={26} color="#fff" />
               </Pressable>
             </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={modalGestionCajasVisible} animationType="fade" transparent>
+        <View style={styles.camOverlay}>
+          <View style={styles.boxManagerModal}>
+            <View style={styles.boxSelectorHeader}>
+              <View style={styles.boxSelectorTitleWrap}>
+                <Ionicons name="file-tray-full-outline" size={18} color="#0b3b8c" />
+                <Text style={styles.boxSelectorTitle}>Cajas</Text>
+              </View>
+              <Pressable onPress={() => setModalGestionCajasVisible(false)}>
+                <Ionicons name="close-circle" size={24} color="#64748b" />
+              </Pressable>
+            </View>
+            <Text style={styles.boxSelectorText}>
+              Administra nombres, estado y eliminacion de cajas del armado.
+            </Text>
+            <Pressable style={styles.boxManagerAddBtn} onPress={agregarCaja}>
+              <Ionicons name="add-circle-outline" size={18} color="#ffffff" />
+              <Text style={styles.boxManagerAddText}>Agregar caja</Text>
+            </Pressable>
+            <ScrollView style={styles.boxManagerList} contentContainerStyle={styles.boxSelectorListContent}>
+              {cajas.map((caja) => {
+                const estado = estadoCaja(caja);
+                const equiposCount = equipos.filter((e) => (e.caja || 'Caja 1') === caja).length;
+                const materialesCount = materiales.filter((m) => (m.caja || 'Caja 1') === caja).length;
+                return (
+                  <View key={`manager-caja-${caja}`} style={styles.boxManagerRow}>
+                    <View style={styles.boxManagerRowTop}>
+                      <View style={styles.boxManagerInfo}>
+                        <View style={styles.boxManagerTitleRow}>
+                          <View style={styles.boxSelectorOptionLeft}>
+                            <Ionicons name="cube-outline" size={16} color="#0b3b8c" />
+                            <Text style={styles.boxSelectorOptionText}>{caja}</Text>
+                          </View>
+                          <View style={[styles.boxStatusBadge, estado === 'cerrada' ? styles.boxStatusClosed : styles.boxStatusOpen]}>
+                            <Text style={[styles.boxStatusText, estado === 'cerrada' ? styles.boxStatusTextClosed : styles.boxStatusTextOpen]}>
+                              {estado === 'cerrada' ? 'Cerrada' : 'Abierta'}
+                            </Text>
+                          </View>
+                        </View>
+                        <Text style={styles.boxManagerMeta}>Equipos: {equiposCount} | Materiales: {materialesCount}</Text>
+                      </View>
+                    </View>
+                    <View style={styles.boxManagerDivider} />
+                    <View style={styles.boxManagerActionsBottom}>
+                      {cajas.length > 1 ? (
+                        <Pressable
+                          style={[styles.boxManagerIconBtn, styles.boxManagerIconDanger]}
+                          onPress={() => abrirQuitarCaja(caja)}>
+                          <Ionicons name="trash-outline" size={13} color="#b91c1c" />
+                        </Pressable>
+                      ) : null}
+                      <Pressable
+                        style={[styles.boxManagerActionBtn, estado === 'cerrada' ? styles.boxManagerReopenBtn : styles.boxManagerCloseBtn]}
+                        onPress={() => toggleEstadoCaja(caja)}>
+                        <Ionicons
+                          name={estado === 'cerrada' ? 'lock-open-outline' : 'lock-closed-outline'}
+                          size={13}
+                          color={estado === 'cerrada' ? '#0369a1' : '#a16207'}
+                        />
+                        <Text
+                          style={[
+                            styles.boxManagerActionText,
+                            estado === 'cerrada' ? styles.boxManagerActionTextInfo : styles.boxManagerActionTextWarn,
+                          ]}>
+                          {estado === 'cerrada' ? 'Reabrir caja' : 'Cerrar caja'}
+                        </Text>
+                      </Pressable>
+                    </View>
+                  </View>
+                );
+              })}
+            </ScrollView>
           </View>
         </View>
       </Modal>
@@ -1569,6 +1805,68 @@ export default function ArmadoScreen() {
                 <Text style={{ color: '#fff', fontWeight: '700' }}>Agregar</Text>
               </Pressable>
             </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={modalSelectorCajaVisible} animationType="fade" transparent>
+        <View style={styles.camOverlay}>
+          <View style={styles.boxSelectorModal}>
+            <View style={styles.boxSelectorHeader}>
+              <View style={styles.boxSelectorTitleWrap}>
+                <Ionicons name="file-tray-full-outline" size={18} color="#0b3b8c" />
+                <Text style={styles.boxSelectorTitle}>Seleccionar caja</Text>
+              </View>
+              <Pressable
+                onPress={() => {
+                  setModalSelectorCajaVisible(false);
+                  setSelectorCajaTarget(null);
+                }}>
+                <Ionicons name="close-circle" size={24} color="#64748b" />
+              </Pressable>
+            </View>
+            <Text style={styles.boxSelectorText}>
+              {selectorCajaTarget?.nombre || 'Elemento'} actualmente esta en{' '}
+              <Text style={styles.boxNameModalStrong}>{selectorCajaTarget?.actual || 'Caja 1'}</Text>
+            </Text>
+            <ScrollView style={styles.boxSelectorList} contentContainerStyle={styles.boxSelectorListContent}>
+              {cajas.map((caja) => {
+                const activa = caja === (selectorCajaTarget?.actual || '');
+                const cerrada = estadoCaja(caja) === 'cerrada';
+                const bloqueada = cerrada && !activa;
+                return (
+                  <Pressable
+                    key={`selector-caja-${caja}`}
+                    style={[
+                      styles.boxSelectorOption,
+                      activa && styles.boxSelectorOptionActive,
+                      bloqueada && styles.boxSelectorOptionDisabled,
+                    ]}
+                    onPress={() => seleccionarCaja(caja)}
+                    disabled={bloqueada}>
+                    <View style={styles.boxSelectorOptionLeft}>
+                      <Ionicons
+                        name={activa ? 'checkmark-circle' : 'cube-outline'}
+                        size={18}
+                        color={bloqueada ? '#94a3b8' : activa ? '#2563eb' : '#0b3b8c'}
+                      />
+                      <Text
+                        style={[
+                          styles.boxSelectorOptionText,
+                          activa && styles.boxSelectorOptionTextActive,
+                          bloqueada && styles.boxSelectorOptionTextDisabled,
+                        ]}>
+                        {caja}
+                      </Text>
+                    </View>
+                    <View style={styles.boxSelectorRight}>
+                      {cerrada ? <Text style={styles.boxSelectorClosedText}>Cerrada</Text> : null}
+                      {activa ? <Text style={styles.boxSelectorCurrentText}>Actual</Text> : null}
+                    </View>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
           </View>
         </View>
       </Modal>
@@ -1693,6 +1991,27 @@ export default function ArmadoScreen() {
             <Text style={styles.confirmText}>
               Los elementos de esa caja se moveran a {resumenQuitarCaja.destino}.
             </Text>
+            <Text style={[styles.boxNameSectionLabel, { marginBottom: 8 }]}>Selecciona la caja a quitar</Text>
+            <ScrollView style={styles.removeBoxList} contentContainerStyle={styles.boxSelectorListContent}>
+              {cajas.map((caja) => {
+                const activa = caja === resumenQuitarCaja.target;
+                return (
+                  <Pressable
+                    key={`remove-caja-${caja}`}
+                    style={[styles.boxSelectorOption, activa && styles.boxSelectorOptionActive]}
+                    onPress={() => setResumenQuitarCaja(construirResumenQuitarCaja(caja))}>
+                    <View style={styles.boxSelectorOptionLeft}>
+                      <Ionicons
+                        name={activa ? 'radio-button-on' : 'radio-button-off'}
+                        size={18}
+                        color={activa ? '#2563eb' : '#0b3b8c'}
+                      />
+                      <Text style={[styles.boxSelectorOptionText, activa && styles.boxSelectorOptionTextActive]}>{caja}</Text>
+                    </View>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
             <Text style={[styles.confirmText, { marginBottom: 10 }]}>
               Equipos: {resumenQuitarCaja.equipos} | Materiales: {resumenQuitarCaja.materiales}
             </Text>
@@ -1714,6 +2033,9 @@ export default function ArmadoScreen() {
 const styles = StyleSheet.create({
   safe: {
     flex: 1,
+  },
+  scroll: {
+    backgroundColor: '#f4f8ff',
   },
   container: {
     padding: 16,
@@ -1917,6 +2239,33 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
   },
+  materialHeaderMain: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    flex: 1,
+    paddingRight: 10,
+  },
+  materialHeaderAside: {
+    alignItems: 'flex-end',
+    gap: 3,
+    maxWidth: '42%',
+    marginTop: -6,
+  },
+  materialCajaWrap: {
+    alignSelf: 'flex-end',
+    marginTop: -2,
+  },
+  materialCardBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  materialCardBadgeText: {
+    color: '#0b3b8c',
+    fontWeight: '700',
+    fontSize: 11.5,
+    lineHeight: 14,
+  },
   materialActionBtn: {
     width: 28,
     height: 28,
@@ -1931,6 +2280,16 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '800',
     color: '#b45309',
+  },
+  materialFooterRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  materialUserText: {
+    color: '#475569',
+    flex: 1,
   },
   inputScanRow: {
     flexDirection: 'row',
@@ -2001,6 +2360,272 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'flex-end',
     gap: 10,
+  },
+  boxManagerModal: {
+    width: '90%',
+    maxHeight: '78%',
+    backgroundColor: '#ffffff',
+    borderRadius: 20,
+    padding: 18,
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+    shadowColor: '#000',
+    shadowOpacity: 0.12,
+    shadowRadius: 14,
+    elevation: 6,
+  },
+  boxManagerAddBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#0f3f91',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#1d4ed8',
+    paddingVertical: 11,
+    marginBottom: 14,
+    shadowColor: '#0b3b8c',
+    shadowOpacity: 0.16,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 3,
+  },
+  boxManagerAddText: {
+    color: '#ffffff',
+    fontWeight: '800',
+    fontSize: 12.5,
+  },
+  boxManagerList: {
+    maxHeight: 380,
+  },
+  boxManagerRow: {
+    borderWidth: 1,
+    borderColor: '#cfe2ff',
+    backgroundColor: '#fbfdff',
+    borderRadius: 16,
+    padding: 13,
+    gap: 9,
+  },
+  boxManagerRowTop: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  boxManagerInfo: {
+    flex: 1,
+    gap: 7,
+  },
+  boxManagerTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  boxManagerMeta: {
+    color: '#475569',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  boxManagerDivider: {
+    height: 1,
+    backgroundColor: '#e2e8f0',
+  },
+  boxManagerActionsBottom: {
+    marginTop: 2,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: 8,
+  },
+  boxManagerActionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    borderRadius: 12,
+    paddingVertical: 9,
+    paddingHorizontal: 12,
+  },
+  boxManagerCloseBtn: {
+    backgroundColor: '#fff7ed',
+    borderWidth: 1,
+    borderColor: '#fdba74',
+  },
+  boxManagerReopenBtn: {
+    backgroundColor: '#eff6ff',
+    borderWidth: 1,
+    borderColor: '#93c5fd',
+  },
+  boxManagerRemoveBtn: {
+    backgroundColor: '#dc2626',
+  },
+  boxManagerActionText: {
+    fontWeight: '800',
+    fontSize: 12,
+  },
+  boxManagerActionTextWarn: {
+    color: '#a16207',
+  },
+  boxManagerActionTextInfo: {
+    color: '#0369a1',
+  },
+  boxManagerActionsCompact: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  boxManagerCompactBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+  },
+  boxManagerCompactText: {
+    fontSize: 11.5,
+    fontWeight: '800',
+  },
+  boxManagerCompactDanger: {
+    backgroundColor: '#fff1f2',
+    borderColor: '#fecdd3',
+  },
+  boxManagerCompactDangerText: {
+    color: '#b91c1c',
+  },
+  boxManagerIconBtn: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+  },
+  boxManagerIconDanger: {
+    backgroundColor: '#fff1f2',
+    borderColor: '#fecdd3',
+  },
+  boxStatusBadge: {
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderWidth: 1,
+  },
+  boxStatusOpen: {
+    backgroundColor: '#ecfdf5',
+    borderColor: '#86efac',
+  },
+  boxStatusClosed: {
+    backgroundColor: '#fef2f2',
+    borderColor: '#fecaca',
+  },
+  boxStatusText: {
+    fontWeight: '800',
+    fontSize: 11.5,
+  },
+  boxStatusTextOpen: {
+    color: '#15803d',
+  },
+  boxStatusTextClosed: {
+    color: '#b91c1c',
+  },
+  boxSelectorModal: {
+    width: '88%',
+    maxHeight: '72%',
+    backgroundColor: '#ffffff',
+    borderRadius: 18,
+    padding: 18,
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+    shadowColor: '#000',
+    shadowOpacity: 0.12,
+    shadowRadius: 14,
+    elevation: 6,
+  },
+  boxSelectorHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  boxSelectorTitleWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  boxSelectorTitle: {
+    fontSize: 17,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  boxSelectorText: {
+    color: '#475569',
+    lineHeight: 20,
+    marginBottom: 14,
+  },
+  boxSelectorList: {
+    maxHeight: 320,
+  },
+  removeBoxList: {
+    maxHeight: 180,
+    marginBottom: 10,
+  },
+  boxSelectorListContent: {
+    gap: 10,
+  },
+  boxSelectorOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+    backgroundColor: '#f8fbff',
+  },
+  boxSelectorOptionActive: {
+    borderColor: '#60a5fa',
+    backgroundColor: '#eff6ff',
+  },
+  boxSelectorOptionDisabled: {
+    opacity: 0.58,
+    backgroundColor: '#f8fafc',
+  },
+  boxSelectorOptionLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    flex: 1,
+  },
+  boxSelectorOptionText: {
+    color: '#0f172a',
+    fontWeight: '700',
+    flex: 1,
+  },
+  boxSelectorOptionTextActive: {
+    color: '#1d4ed8',
+  },
+  boxSelectorOptionTextDisabled: {
+    color: '#94a3b8',
+  },
+  boxSelectorRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  boxSelectorClosedText: {
+    color: '#b91c1c',
+    fontWeight: '800',
+    fontSize: 11.5,
+  },
+  boxSelectorCurrentText: {
+    color: '#2563eb',
+    fontWeight: '800',
+    fontSize: 12,
   },
   confirmBox: {
     width: '88%',
@@ -2299,14 +2924,14 @@ const styles = StyleSheet.create({
   },
   tabs: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 10,
+    flexWrap: 'nowrap',
+    gap: 8,
     marginTop: 12,
   },
   tabBtn: {
-    flexBasis: '48%',
-    minHeight: 44,
-    paddingHorizontal: 10,
+    flex: 1,
+    minHeight: 42,
+    paddingHorizontal: 8,
     borderRadius: 12,
     borderWidth: 1,
     borderColor: '#cbd5e1',
@@ -2333,33 +2958,33 @@ const styles = StyleSheet.create({
   tabText: {
     fontWeight: '700',
     color: '#475569',
-    fontSize: 12.5,
+    fontSize: 11.5,
   },
   tabTextActive: {
     color: '#ffffff',
   },
   addBoxBtn: {
-    flexBasis: '48%',
+    flex: 1,
     flexDirection: 'row',
     gap: 6,
-    minHeight: 44,
-    paddingHorizontal: 10,
-    borderRadius: 12,
+    minHeight: 42,
+    paddingHorizontal: 8,
+    borderRadius: 14,
     borderWidth: 1,
-    borderColor: '#93c5fd',
-    backgroundColor: '#eff6ff',
+    borderColor: '#bfdbfe',
+    backgroundColor: '#f8fbff',
     alignItems: 'center',
     justifyContent: 'center',
     shadowColor: '#2563eb',
-    shadowOpacity: 0.08,
-    shadowRadius: 4,
-    shadowOffset: { width: 0, height: 1 },
-    elevation: 1,
+    shadowOpacity: 0.07,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 2,
   },
   addBoxText: {
     fontWeight: '800',
-    fontSize: 12.5,
-    color: '#1d4ed8',
+    fontSize: 11.5,
+    color: '#0b3b8c',
   },
   removeBoxBtn: {
     flexBasis: '48%',
