@@ -512,6 +512,33 @@ export default function ArmadoScreen() {
     );
   }, []);
 
+  const normalizarSerieLocal = useCallback((serie?: string) => {
+    return String(serie || '')
+      .trim()
+      .toUpperCase()
+      .replace(/\s+/g, '');
+  }, []);
+
+  const obtenerConflictoSerieLocal = useCallback((serie?: string, equipoActualId?: string | null) => {
+    const serieNormalizada = normalizarSerieLocal(serie);
+    if (!serieNormalizada) return null;
+    const actualId = String(equipoActualId || '').trim();
+    return (
+      equipos.find((eq) => {
+        const eqId = String(eq.id || '').trim();
+        if (actualId && eqId === actualId) return false;
+        return normalizarSerieLocal(eq.serie) === serieNormalizada;
+      }) || null
+    );
+  }, [equipos, normalizarSerieLocal]);
+
+  const mostrarSerieDuplicadaLocal = useCallback((serie: string, equipoNombre?: string) => {
+    Alert.alert(
+      'Serie ya ingresada',
+      `Ya ingresaste la serie ${serie} en el equipo ${equipoNombre || 'seleccionado'}.`
+    );
+  }, []);
+
   const readCache = useCallback(async () => {
     try {
       const raw = await SecureStore.getItemAsync(cacheKey);
@@ -1014,6 +1041,12 @@ export default function ArmadoScreen() {
     const soloNumeros = raw.replace(/\D+/g, '');
     const serie = soloNumeros.length ? soloNumeros : raw;
     const codigo = soloNumeros.length ? soloNumeros.slice(0, 5) : raw.slice(0, 5);
+    const conflictoLocal = obtenerConflictoSerieLocal(serie, camEquipoId);
+    if (conflictoLocal) {
+      mostrarSerieDuplicadaLocal(serie, conflictoLocal.nombre);
+      scannedOnce.current = false;
+      return;
+    }
     if (serie && !seriesConfirmadasRef.current.has(serie)) {
       try {
         const esNumerico = /^\d+$/.test(String(camEquipoId || ''));
@@ -1083,6 +1116,17 @@ export default function ArmadoScreen() {
     try {
       setGuardandoEq(true);
       suppressRealtimeRefreshRef.current = true;
+      const seriesLocales = new Map<string, string>();
+      for (const equipo of equipos) {
+        const serieNormalizada = normalizarSerieLocal(equipo.serie);
+        if (!serieNormalizada) continue;
+        const previo = seriesLocales.get(serieNormalizada);
+        if (previo && previo !== equipo.nombre) {
+          mostrarSerieDuplicadaLocal(String(equipo.serie || '').trim(), previo);
+          return;
+        }
+        seriesLocales.set(serieNormalizada, equipo.nombre);
+      }
       const seriesAprobadas = new Set<string>(Array.from(seriesConfirmadasRef.current));
       if (cajasVacias.length) {
         Alert.alert(
@@ -1725,7 +1769,14 @@ export default function ArmadoScreen() {
                                 { flex: 1, color: '#0f172a', borderColor: '#d7e3f4', backgroundColor: '#f8fbff', paddingRight: 12 },
                               ]}
                               value={eq.serie ? String(eq.serie) : ''}
-                              onChangeText={(t) => actualizarEquipo(eq.id, { serie: t, codigo: t.slice(0, 5), nombre: eq.nombre })}
+                              onChangeText={(t) => {
+                                const conflictoLocal = obtenerConflictoSerieLocal(t, eq.id);
+                                if (conflictoLocal) {
+                                  mostrarSerieDuplicadaLocal(t, conflictoLocal.nombre);
+                                  return;
+                                }
+                                actualizarEquipo(eq.id, { serie: t, codigo: t.slice(0, 5), nombre: eq.nombre });
+                              }}
                               keyboardType="numeric"
                               editable={!esSoloLectura}
                             />
