@@ -37,6 +37,9 @@ type BoxSelectorTarget = {
   nombre: string;
 };
 
+const DEFAULT_PENDING_BOX = 'Pendiente de caja';
+const DEFAULT_FIRST_BOX = 'Caja 1';
+
 const MATERIALES_PREDEF: string[] = [
   'Cable Electrico 3 x 1,5mm',
   'Cable Electrico 3 x 0,75mm',
@@ -152,7 +155,7 @@ const BASE_EQUIPOS: Equipo[] = GRUPOS_EQUIPOS.flatMap((g, gi) =>
   g.items.map((nombre, idx) => ({
     id: `${g.titulo}-${idx}`,
     nombre,
-    caja: 'Caja 1',
+    caja: DEFAULT_PENDING_BOX,
     serie: '',
     codigo: '',
   }))
@@ -172,7 +175,7 @@ export default function ArmadoScreen() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<'equipos' | 'materiales'>('equipos');
-  const [cajas, setCajas] = useState<string[]>(['Caja 1']);
+  const [cajas, setCajas] = useState<string[]>([DEFAULT_PENDING_BOX]);
   const [camVisible, setCamVisible] = useState(false);
   const [camEquipoId, setCamEquipoId] = useState<string | null>(null);
   const [camEquipoNombre, setCamEquipoNombre] = useState<string | null>(null);
@@ -180,6 +183,7 @@ export default function ArmadoScreen() {
   const scannedOnce = useRef(false);
   const seriesConfirmadasRef = useRef<Set<string>>(new Set());
   const ignoreNextRealtimeRefreshRef = useRef(false);
+  const suppressRealtimeRefreshRef = useRef(false);
   const equiposSnapshotRef = useRef<Record<string, string>>({});
   const materialesSnapshotRef = useRef<Record<string, string>>({});
   const [modalCajasVisible, setModalCajasVisible] = useState(false);
@@ -193,6 +197,7 @@ export default function ArmadoScreen() {
   const [materialAccionModo, setMaterialAccionModo] = useState<MaterialActionMode>('ajuste');
   const [materialAccionTarget, setMaterialAccionTarget] = useState<Material | null>(null);
   const [materialAccionCantidad, setMaterialAccionCantidad] = useState('');
+  const [materialAccionCaja, setMaterialAccionCaja] = useState(DEFAULT_PENDING_BOX);
   const [guardandoAccionMaterial, setGuardandoAccionMaterial] = useState(false);
   const [gruposColapsados, setGruposColapsados] = useState<Record<string, boolean>>({});
   const [cacheReady, setCacheReady] = useState(false);
@@ -258,7 +263,7 @@ export default function ArmadoScreen() {
 
   const normalizarCajaTexto = useCallback((value?: string) => {
     const raw = String(value || '').trim().replace(/\s+/g, ' ');
-    if (!raw) return 'Caja 1';
+    if (!raw) return DEFAULT_PENDING_BOX;
     const match = raw.match(/^Caja\s*(\d+)(?:\s*-\s*(.+))?$/i);
     if (!match) return raw;
     const numero = Number.parseInt(match[1], 10);
@@ -287,7 +292,11 @@ export default function ArmadoScreen() {
     const cajasOrdenadas = Array.from(porNumero.entries())
       .sort((a, b) => a[0] - b[0])
       .map(([, label]) => label);
-    return [...cajasOrdenadas, ...extras];
+    const pendiente = extras.find((item) => normalizarCajaTexto(item) === DEFAULT_PENDING_BOX);
+    const otrosExtras = extras
+      .filter((item) => normalizarCajaTexto(item) !== DEFAULT_PENDING_BOX)
+      .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+    return [...(pendiente ? [DEFAULT_PENDING_BOX] : []), ...cajasOrdenadas, ...otrosExtras];
   }, [normalizarCajaTexto]);
 
   const normalizarCajaEstado = useCallback((value: any): CajaEstado => {
@@ -317,6 +326,44 @@ export default function ArmadoScreen() {
     const nombre = normalizarCajaTexto(caja);
     return normalizarCajaEstado(cajasEstado[nombre] || 'abierta');
   }, [cajasEstado, normalizarCajaEstado, normalizarCajaTexto]);
+
+  const esCajaPendiente = useCallback(
+    (caja?: string) => normalizarCajaTexto(caja) === DEFAULT_PENDING_BOX,
+    [normalizarCajaTexto]
+  );
+
+  const contarCajasReales = useCallback(
+    (lista: string[] = []) =>
+      unificarCajas(lista).filter((caja) => !esCajaPendiente(caja) && numeroCaja(caja) > 0).length,
+    [esCajaPendiente, numeroCaja, unificarCajas]
+  );
+
+  const mismasCajas = useCallback((a: string[] = [], b: string[] = []) => {
+    if (a === b) return true;
+    if (a.length !== b.length) return false;
+    return a.every((item, index) => item === b[index]);
+  }, []);
+
+  const cajasOrdenadasEdicionMaterial = useMemo(() => {
+    return [...cajas].sort((a, b) => {
+      const cierreA = estadoCaja(a) === 'cerrada' ? 1 : 0;
+      const cierreB = estadoCaja(b) === 'cerrada' ? 1 : 0;
+      if (cierreA !== cierreB) return cierreA - cierreB;
+      const numeroDiff = numeroCaja(a) - numeroCaja(b);
+      if (numeroDiff !== 0) return numeroDiff;
+      return String(a).localeCompare(String(b), undefined, { sensitivity: 'base' });
+    });
+  }, [cajas, estadoCaja, numeroCaja]);
+
+  const cajasAbiertasEdicionMaterial = useMemo(
+    () => cajasOrdenadasEdicionMaterial.filter((caja) => estadoCaja(caja) !== 'cerrada'),
+    [cajasOrdenadasEdicionMaterial, estadoCaja]
+  );
+
+  const cajasCerradasEdicionMaterial = useMemo(
+    () => cajasOrdenadasEdicionMaterial.filter((caja) => estadoCaja(caja) === 'cerrada'),
+    [cajasOrdenadasEdicionMaterial, estadoCaja]
+  );
 
   const formatFecha = (val?: string) => {
     if (!val) return '-';
@@ -371,7 +418,7 @@ export default function ArmadoScreen() {
           return {
             id: `${g.titulo}-${idx}`,
             nombre: n,
-            caja: 'Caja 1',
+            caja: DEFAULT_PENDING_BOX,
             serie: '',
             codigo: '',
           } as Equipo;
@@ -397,13 +444,13 @@ export default function ArmadoScreen() {
   const hashEquipo = useCallback((e: Pick<Equipo, 'serie' | 'codigo' | 'caja'>) => {
     const serie = String(e.serie || '').trim();
     const codigo = String(e.codigo || '').trim();
-    const caja = String(e.caja || 'Caja 1').trim();
+    const caja = String(e.caja || DEFAULT_PENDING_BOX).trim();
     return `${serie}|${codigo}|${caja}`;
   }, []);
 
   const hashMaterial = useCallback((m: Pick<Material, 'cantidad' | 'caja'>) => {
     const cantidad = Number(m.cantidad) || 0;
-    const caja = String(m.caja || 'Caja 1').trim();
+    const caja = String(m.caja || DEFAULT_PENDING_BOX).trim();
     return `${cantidad}|${caja}`;
   }, []);
 
@@ -415,6 +462,26 @@ export default function ArmadoScreen() {
     return Number(m.cantidad || 0) > 0;
   }, []);
 
+  const normalizarCajaEquipoInicial = useCallback(
+    (caja?: string, serie?: string, codigo?: string) => {
+      const cajaNormalizada = normalizarCajaTexto(caja);
+      const tieneContenido = String(serie || '').trim().length > 0 || String(codigo || '').trim().length > 0;
+      if (!tieneContenido && cajaNormalizada === DEFAULT_FIRST_BOX) return DEFAULT_PENDING_BOX;
+      return cajaNormalizada || DEFAULT_PENDING_BOX;
+    },
+    [normalizarCajaTexto]
+  );
+
+  const normalizarCajaMaterialInicial = useCallback(
+    (caja?: string, cantidad?: number) => {
+      const cajaNormalizada = normalizarCajaTexto(caja);
+      const tieneContenido = Number(cantidad || 0) > 0;
+      if (!tieneContenido && cajaNormalizada === DEFAULT_FIRST_BOX) return DEFAULT_PENDING_BOX;
+      return cajaNormalizada || DEFAULT_PENDING_BOX;
+    },
+    [normalizarCajaTexto]
+  );
+
   const materialEstaGuardado = useCallback((m: Pick<Material, 'id'>) => /^\d+$/.test(String(m.id || '').trim()), []);
   const esIdPersistido = useCallback((value: any) => /^\d+$/.test(String(value || '').trim()), []);
 
@@ -422,18 +489,18 @@ export default function ArmadoScreen() {
     const set = new Set<string>();
     equipos.forEach((e) => {
       if (!equipoTieneContenido(e)) return;
-      set.add(String(e.caja || 'Caja 1').trim());
+      set.add(String(e.caja || DEFAULT_PENDING_BOX).trim());
     });
     materiales.forEach((m) => {
       if (!materialTieneContenido(m)) return;
-      set.add(String(m.caja || 'Caja 1').trim());
+      set.add(String(m.caja || DEFAULT_PENDING_BOX).trim());
     });
     return set;
   }, [equipos, materiales, equipoTieneContenido, materialTieneContenido]);
 
   const cajasVacias = useMemo(
-    () => (cajas || []).filter((c) => !cajasConContenido.has(String(c || '').trim())),
-    [cajas, cajasConContenido]
+    () => (cajas || []).filter((c) => !esCajaPendiente(c) && !cajasConContenido.has(String(c || '').trim())),
+    [cajas, cajasConContenido, esCajaPendiente]
   );
 
   const mostrarSerieDuplicada = useCallback((serie: string, conflicto: any) => {
@@ -484,11 +551,12 @@ export default function ArmadoScreen() {
 
     const base: Material[] = MATERIALES_PREDEF.map((nombre, idx) => {
       const found = mapa.get(normalizar(nombre));
+      const cantidad = Number(found?.cantidad) || 0;
       return {
         id: String(found?.id_material || found?.id || `base-${idx}`),
         nombre,
-        cantidad: Number(found?.cantidad) || 0,
-        caja: found?.caja || 'Caja 1',
+        cantidad,
+        caja: normalizarCajaMaterialInicial(found?.caja, cantidad),
         usuario: found?.caja_tecnico_nombre || (found?.caja_tecnico_id ? `ID ${found.caja_tecnico_id}` : '') || found?.usuario || '',
       };
     });
@@ -496,15 +564,15 @@ export default function ArmadoScreen() {
     const extras: Material[] = (listaBackend || [])
       .filter((m) => !MATERIALES_PREDEF.some((n) => normalizar(n) === normalizar(m?.nombre)))
       .map((m: any, idx: number) => ({
+        cantidad: Number(m.cantidad) || 0,
         id: String(m.id_material || m.id || `extra-${idx}`),
         nombre: m.nombre || `Material ${idx + 1}`,
-        cantidad: Number(m.cantidad) || 0,
-        caja: m.caja || 'Caja 1',
+        caja: normalizarCajaMaterialInicial(m.caja, Number(m.cantidad) || 0),
         usuario: m.caja_tecnico_nombre || (m.caja_tecnico_id ? `ID ${m.caja_tecnico_id}` : '') || m.usuario || '',
       }));
 
     return [...base, ...extras];
-  }, []);
+  }, [normalizarCajaMaterialInicial]);
 
   useEffect(() => {
     let active = true;
@@ -512,17 +580,25 @@ export default function ArmadoScreen() {
       const cached = await readCache();
       if (!active) return;
       if (cached?.equipos && Array.isArray(cached.equipos) && cached.equipos.length > 0) {
-        setEquipos(cached.equipos);
+        const equiposCache = cached.equipos.map((e: Equipo) => ({
+          ...e,
+          caja: normalizarCajaEquipoInicial(e.caja, e.serie, e.codigo),
+        }));
+        setEquipos(equiposCache);
         const snap: Record<string, string> = {};
-        cached.equipos.forEach((e: Equipo) => {
+        equiposCache.forEach((e: Equipo) => {
           snap[String(e.id)] = hashEquipo(e);
         });
         equiposSnapshotRef.current = snap;
       }
       if (cached?.materiales && Array.isArray(cached.materiales) && cached.materiales.length > 0) {
-        setMateriales(cached.materiales);
+        const materialesCache = cached.materiales.map((m: Material) => ({
+          ...m,
+          caja: normalizarCajaMaterialInicial(m.caja, m.cantidad),
+        }));
+        setMateriales(materialesCache);
         const snap: Record<string, string> = {};
-        cached.materiales.forEach((m: Material) => {
+        materialesCache.forEach((m: Material) => {
           snap[String(m.id)] = hashMaterial(m);
         });
         materialesSnapshotRef.current = snap;
@@ -541,7 +617,7 @@ export default function ArmadoScreen() {
     return () => {
       active = false;
     };
-  }, [readCache, hashEquipo, hashMaterial, unificarCajas]);
+  }, [readCache, hashEquipo, hashMaterial, normalizarCajaEquipoInicial, normalizarCajaMaterialInicial, unificarCajas]);
 
   useEffect(() => {
     if (!cacheReady) return;
@@ -556,19 +632,25 @@ export default function ArmadoScreen() {
     setCajasEstado((prev) => sincronizarEstadosCajas(cajas, prev));
   }, [cajas, sincronizarEstadosCajas]);
 
-  const cargarEquipos = useCallback(async () => {
+  const cargarEquipos = useCallback(async (options?: { silent?: boolean }) => {
     if (!centroId) return;
-    setLoading(true);
-    setError(null);
+    if (!options?.silent) {
+      setLoading(true);
+      setError(null);
+    }
     try {
       const data = await getEquipos(centroId);
       if (Array.isArray(data)) {
         const mapped = data.map((eq: any) => ({
           id: String(eq.id_equipo || eq.id || `${eq.nombre}-${eq.ip || ''}`),
           nombre: eq.nombre || 'Equipo',
-          caja: eq.caja || 'Caja 1',
           serie: eq.numero_serie || eq.serie || '',
           codigo: eq.codigo || (eq.numero_serie ? String(eq.numero_serie).slice(0, 5) : ''),
+          caja: normalizarCajaEquipoInicial(
+            eq.caja,
+            eq.numero_serie || eq.serie || '',
+            eq.codigo || (eq.numero_serie ? String(eq.numero_serie).slice(0, 5) : '')
+          ),
         }));
         setEquipos(mapped);
         const snap: Record<string, string> = {};
@@ -576,27 +658,37 @@ export default function ArmadoScreen() {
           snap[String(e.id)] = hashEquipo(e);
         });
         equiposSnapshotRef.current = snap;
-        const cajasDetect = mapped.map((e) => e.caja || 'Caja 1');
+        const cajasDetect = mapped.map((e) => e.caja || DEFAULT_PENDING_BOX);
         setCajas((prev) => unificarCajas([...prev, ...cajasDetect]));
         await writeCache({ equipos: mapped });
       }
     } catch (e) {
       const cached = await readCache();
       if (cached?.equipos && Array.isArray(cached.equipos) && cached.equipos.length > 0) {
-        setEquipos(cached.equipos);
+        const equiposCache = cached.equipos.map((eq: Equipo) => ({
+          ...eq,
+          caja: normalizarCajaEquipoInicial(eq.caja, eq.serie, eq.codigo),
+        }));
+        setEquipos(equiposCache);
         const snap: Record<string, string> = {};
-        cached.equipos.forEach((eq: Equipo) => {
+        equiposCache.forEach((eq: Equipo) => {
           snap[String(eq.id)] = hashEquipo(eq);
         });
         equiposSnapshotRef.current = snap;
-        setError('Sin internet: mostrando equipos guardados localmente.');
+        if (!options?.silent) {
+          setError('Sin internet: mostrando equipos guardados localmente.');
+        }
       } else {
-        setError('No se pudieron cargar los equipos.');
+        if (!options?.silent) {
+          setError('No se pudieron cargar los equipos.');
+        }
       }
     } finally {
-      setLoading(false);
+      if (!options?.silent) {
+        setLoading(false);
+      }
     }
-  }, [centroId, hashEquipo, readCache, writeCache, unificarCajas]);
+  }, [centroId, hashEquipo, normalizarCajaEquipoInicial, readCache, writeCache, unificarCajas]);
 
   useEffect(() => {
     cargarEquipos();
@@ -609,10 +701,12 @@ export default function ArmadoScreen() {
     }
   }, [camVisible, camPerm, requestCamPerm]);
 
-  const cargarMat = useCallback(async () => {
+  const cargarMat = useCallback(async (options?: { silent?: boolean }) => {
     if (!armadoId) return;
-    setLoadingMateriales(true);
-    setMateriales([]);
+    if (!options?.silent) {
+      setLoadingMateriales(true);
+      setMateriales([]);
+    }
     try {
       const data = await getMaterialesArmado(armadoId);
       const lista = Array.isArray(data) ? data : Array.isArray(data?.items) ? data.items : [];
@@ -623,7 +717,7 @@ export default function ArmadoScreen() {
         snap[String(m.id)] = hashMaterial(m);
       });
       materialesSnapshotRef.current = snap;
-      const cajasDetect = mapped.map((m: any) => m.caja || 'Caja 1');
+      const cajasDetect = mapped.map((m: any) => m.caja || DEFAULT_PENDING_BOX);
       setCajas((prev) => unificarCajas([...prev, ...cajasDetect]));
       await writeCache({ materiales: mapped });
     } catch (_e) {
@@ -637,7 +731,9 @@ export default function ArmadoScreen() {
         materialesSnapshotRef.current = snap;
       }
     } finally {
-      setLoadingMateriales(false);
+      if (!options?.silent) {
+        setLoadingMateriales(false);
+      }
     }
   }, [armadoId, hashMaterial, mergeMateriales, readCache, writeCache, unificarCajas]);
 
@@ -673,8 +769,25 @@ export default function ArmadoScreen() {
 
   useEffect(() => {
     if (!armadoActual?.cajas_estado) return;
-    setCajasEstado((prev) => sincronizarEstadosCajas(cajas, armadoActual.cajas_estado || prev));
+    setCajasEstado((prev) =>
+      sincronizarEstadosCajas(cajas, {
+        ...prev,
+        ...(armadoActual.cajas_estado || {}),
+      })
+    );
   }, [armadoActual, cajas, sincronizarEstadosCajas]);
+
+  useEffect(() => {
+    const cajasEstadoBackend =
+      armadoActual?.cajas_estado && typeof armadoActual.cajas_estado === 'object'
+        ? Object.keys(armadoActual.cajas_estado)
+        : [];
+    const cajasEquipos = equipos.map((eq) => eq.caja || DEFAULT_PENDING_BOX);
+    const cajasMateriales = materiales.map((mat) => mat.caja || DEFAULT_PENDING_BOX);
+    const next = unificarCajas([...cajasEstadoBackend, ...cajasEquipos, ...cajasMateriales]);
+    const normalizadas = next.length ? next : [DEFAULT_PENDING_BOX];
+    setCajas((prev) => (mismasCajas(prev, normalizadas) ? prev : normalizadas));
+  }, [armadoActual, equipos, materiales, mismasCajas, unificarCajas]);
 
   const pasarAPrefinalizado = useCallback(async () => {
     if (!armadoId || estadoNormalizado !== 'en_proceso') return;
@@ -697,12 +810,13 @@ export default function ArmadoScreen() {
     if (!token || !armadoId) return;
     const onArmadoUpdated = (evt: any) => {
       if (Number(evt?.armado_id || 0) !== Number(armadoId)) return;
+      if (suppressRealtimeRefreshRef.current) return;
       if (ignoreNextRealtimeRefreshRef.current && String(evt?.tipo || '') === 'armado') {
         ignoreNextRealtimeRefreshRef.current = false;
         return;
       }
-      cargarEquipos();
-      cargarMat();
+      cargarEquipos({ silent: true });
+      cargarMat({ silent: true });
     };
     return subscribeArmadoUpdated(onArmadoUpdated);
   }, [token, armadoId, cargarEquipos, cargarMat]);
@@ -719,16 +833,16 @@ export default function ArmadoScreen() {
       }
       // Si es un equipo placeholder (aún no viene de backend), lo creamos en estado local
       // para que no se borre al escribir manualmente o al escanear.
-      return [
-        ...prev,
-        {
-          id: idStr,
-          nombre: cambios.nombre || 'Equipo',
-          caja: cambios.caja || 'Caja 1',
-          serie: cambios.serie || '',
-          codigo: cambios.codigo || '',
-        },
-      ];
+          return [
+            ...prev,
+            {
+              id: idStr,
+              nombre: cambios.nombre || 'Equipo',
+              caja: cambios.caja || DEFAULT_PENDING_BOX,
+              serie: cambios.serie || '',
+              codigo: cambios.codigo || '',
+            },
+          ];
     });
   };
 
@@ -759,7 +873,21 @@ export default function ArmadoScreen() {
     if (!armadoId) return;
     const cajasNormalizadas = unificarCajas(nextCajas);
     const estadosNormalizados = sincronizarEstadosCajas(cajasNormalizadas, nextEstados);
-    const totalNuevo = Math.max(1, cajasNormalizadas.length);
+    const totalNuevo = contarCajasReales(cajasNormalizadas);
+    setArmadoActual((prev: any) =>
+      prev
+        ? {
+            ...prev,
+            total_cajas_manual: totalNuevo,
+            cajas_estado: estadosNormalizados,
+          }
+        : prev
+    );
+    writeCache({
+      cajas: cajasNormalizadas,
+      cajasEstado: estadosNormalizados,
+      totalCajas: totalNuevo,
+    }).catch(() => {});
     ignoreNextRealtimeRefreshRef.current = true;
     setTimeout(() => {
       ignoreNextRealtimeRefreshRef.current = false;
@@ -777,7 +905,7 @@ export default function ArmadoScreen() {
         },
       });
     });
-  }, [armadoId, sincronizarEstadosCajas, unificarCajas]);
+  }, [armadoId, contarCajasReales, sincronizarEstadosCajas, unificarCajas, writeCache]);
 
   const abrirGestionCajas = useCallback(() => {
     if (esSoloLectura) return;
@@ -808,6 +936,7 @@ export default function ArmadoScreen() {
               setMaterialAccionTarget(material);
               setMaterialAccionModo('ajuste');
               setMaterialAccionCantidad(String(Number(material.cantidad || 0)));
+              setMaterialAccionCaja(material.caja || DEFAULT_PENDING_BOX);
               setModalAccionMaterialVisible(true);
             },
           },
@@ -817,6 +946,7 @@ export default function ArmadoScreen() {
       setMaterialAccionTarget(material);
       setMaterialAccionModo('incremento');
       setMaterialAccionCantidad('');
+      setMaterialAccionCaja(material.caja || DEFAULT_PENDING_BOX);
       setModalAccionMaterialVisible(true);
     },
     [esSoloLectura, materialEstaGuardado]
@@ -837,7 +967,10 @@ export default function ArmadoScreen() {
       {
         id_material: materialAccionTarget.id,
         nombre: materialAccionTarget.nombre,
-        caja: materialAccionTarget.caja || 'Caja 1',
+        caja:
+          materialAccionModo === 'ajuste'
+            ? materialAccionCaja || materialAccionTarget.caja || DEFAULT_PENDING_BOX
+            : materialAccionTarget.caja || DEFAULT_PENDING_BOX,
         caja_tecnico_id: userId || undefined,
         accion_material: materialAccionModo,
         ...(materialAccionModo === 'incremento'
@@ -851,17 +984,19 @@ export default function ArmadoScreen() {
       setModalAccionMaterialVisible(false);
       setMaterialAccionTarget(null);
       setMaterialAccionCantidad('');
+      setMaterialAccionCaja(DEFAULT_PENDING_BOX);
       await cargarMat();
     } catch (_e) {
       await enqueueOfflineOp('save_materiales', { armadoId, materiales: payload });
       setModalAccionMaterialVisible(false);
       setMaterialAccionTarget(null);
       setMaterialAccionCantidad('');
+      setMaterialAccionCaja(DEFAULT_PENDING_BOX);
       Alert.alert('Sin conexion', 'La accion quedo pendiente para sincronizar.');
     } finally {
       setGuardandoAccionMaterial(false);
     }
-  }, [armadoId, cargarMat, materialAccionCantidad, materialAccionModo, materialAccionTarget, userId]);
+  }, [armadoId, cargarMat, materialAccionCaja, materialAccionCantidad, materialAccionModo, materialAccionTarget, userId]);
 
   const abrirCamaraSerie = (equipoId: string, nombre: string) => {
     if (esSoloLectura) return;
@@ -930,7 +1065,7 @@ export default function ArmadoScreen() {
           id_material: m.id,
           nombre: m.nombre,
           cantidad: m.cantidad,
-          caja: m.caja || 'Caja 1',
+          caja: m.caja || DEFAULT_PENDING_BOX,
           caja_tecnico_id: userId || undefined,
         }));
       if (payload.length === 0) return;
@@ -947,6 +1082,7 @@ export default function ArmadoScreen() {
     if (esSoloLectura) return;
     try {
       setGuardandoEq(true);
+      suppressRealtimeRefreshRef.current = true;
       const seriesAprobadas = new Set<string>(Array.from(seriesConfirmadasRef.current));
       if (cajasVacias.length) {
         Alert.alert(
@@ -977,8 +1113,6 @@ export default function ArmadoScreen() {
           seriesConfirmadasRef.current.add(serie);
         }
         if (esNumerico) {
-          // No persistir equipos vacios (sin serie/codigo), aunque cambie solo la caja.
-          if (!equipoTieneContenido(e)) continue;
           if (previoHash === actualHash) continue;
           const data = {
             numero_serie: e.serie,
@@ -1013,10 +1147,16 @@ export default function ArmadoScreen() {
           }
         }
       }
-      await cargarEquipos();
+      await Promise.all([
+        cargarEquipos({ silent: true }),
+        cargarMat({ silent: true }),
+      ]);
     } catch (_e) {
       // silencioso
     } finally {
+      setTimeout(() => {
+        suppressRealtimeRefreshRef.current = false;
+      }, 1200);
       setGuardandoEq(false);
     }
   };
@@ -1024,7 +1164,7 @@ export default function ArmadoScreen() {
   const agregarCaja = () => {
     if (esSoloLectura) return;
     setModalGestionCajasVisible(false);
-    setDescripcionCajaPrincipal(obtenerDescripcionCaja(cajaPrincipalActual));
+    setDescripcionCajaPrincipal(tieneCajaPrincipalReal ? obtenerDescripcionCaja(cajaPrincipalActual) : '');
     setDescripcionCajaNueva('');
     setModalCajasVisible(true);
   };
@@ -1044,8 +1184,13 @@ export default function ArmadoScreen() {
 
   const cajaPrincipalActual = useMemo(() => {
     const encontrada = cajas.find((c) => numeroCaja(c) === 1);
-    return encontrada || 'Caja 1';
+    return encontrada || DEFAULT_FIRST_BOX;
   }, [cajas]);
+
+  const tieneCajaPrincipalReal = useMemo(
+    () => cajas.some((c) => numeroCaja(c) === 1),
+    [cajas, numeroCaja]
+  );
 
   const siguienteNumeroCaja = useMemo(
     () =>
@@ -1070,16 +1215,16 @@ export default function ArmadoScreen() {
         .filter((c) => numeroCaja(c) < numeroTarget)
         .sort((a, b) => numeroCaja(b) - numeroCaja(a))[0] ||
       restantes[0] ||
-      'Caja 1';
-    const equiposCount = equipos.filter((e) => (e.caja || 'Caja 1') === target).length;
-    const materialesCount = materiales.filter((m) => (m.caja || 'Caja 1') === target).length;
+      DEFAULT_PENDING_BOX;
+    const equiposCount = equipos.filter((e) => (e.caja || DEFAULT_PENDING_BOX) === target && equipoTieneContenido(e)).length;
+    const materialesCount = materiales.filter((m) => (m.caja || DEFAULT_PENDING_BOX) === target && materialTieneContenido(m)).length;
     return {
       target,
       destino,
       equipos: equiposCount,
       materiales: materialesCount,
     };
-  }, [cajas, equipos, materiales]);
+  }, [cajas, equipoTieneContenido, equipos, materialTieneContenido, materiales]);
 
   const abrirQuitarCaja = (targetCaja?: string) => {
     if (esSoloLectura) return;
@@ -1098,19 +1243,21 @@ export default function ArmadoScreen() {
     if (esSoloLectura) return;
     const cajaPrincipalRenombrada = construirNombreCaja(1, descripcionCajaPrincipal);
     const nuevaCajaDescripcion = String(descripcionCajaNueva || '').trim();
-    const nuevaCaja = nuevaCajaDescripcion ? construirNombreCaja(siguienteNumeroCaja, descripcionCajaNueva) : '';
-    if (cajaPrincipalRenombrada !== cajaPrincipalActual && cajas.some((c) => c !== cajaPrincipalActual && c === cajaPrincipalRenombrada)) {
+    const nuevaCaja = tieneCajaPrincipalReal
+      ? (nuevaCajaDescripcion ? construirNombreCaja(siguienteNumeroCaja, descripcionCajaNueva) : '')
+      : construirNombreCaja(1, descripcionCajaNueva);
+    if (tieneCajaPrincipalReal && cajaPrincipalRenombrada !== cajaPrincipalActual && cajas.some((c) => c !== cajaPrincipalActual && c === cajaPrincipalRenombrada)) {
       Alert.alert('Caja existente', 'Ya existe una caja con ese nombre para la caja principal.');
       return;
     }
-    if (nuevaCaja && (cajas.includes(nuevaCaja) || nuevaCaja === cajaPrincipalRenombrada)) {
+    if (nuevaCaja && (cajas.includes(nuevaCaja) || (tieneCajaPrincipalReal && nuevaCaja === cajaPrincipalRenombrada))) {
       Alert.alert('Caja existente', 'Ya existe una caja con ese nombre.');
       return;
     }
-    const renombrandoCajaPrincipal = cajaPrincipalRenombrada !== cajaPrincipalActual;
+    const renombrandoCajaPrincipal = tieneCajaPrincipalReal && cajaPrincipalRenombrada !== cajaPrincipalActual;
     const equiposPersistidosRenombrados = renombrandoCajaPrincipal
       ? equipos
-          .filter((e) => (e.caja || 'Caja 1') === cajaPrincipalActual && esIdPersistido(e.id) && equipoTieneContenido(e))
+          .filter((e) => (e.caja || DEFAULT_PENDING_BOX) === cajaPrincipalActual && esIdPersistido(e.id) && equipoTieneContenido(e))
           .map((e) => ({
             id: e.id,
             data: {
@@ -1125,7 +1272,7 @@ export default function ArmadoScreen() {
       : [];
     const materialesPersistidosRenombrados = renombrandoCajaPrincipal
       ? materiales
-          .filter((m) => (m.caja || 'Caja 1') === cajaPrincipalActual && esIdPersistido(m.id) && materialTieneContenido(m))
+          .filter((m) => (m.caja || DEFAULT_PENDING_BOX) === cajaPrincipalActual && esIdPersistido(m.id) && materialTieneContenido(m))
           .map((m) => ({
             id_material: m.id,
             nombre: m.nombre,
@@ -1137,7 +1284,7 @@ export default function ArmadoScreen() {
       : [];
     const cajasRenombradas = cajas.map((c) => (c === cajaPrincipalActual ? cajaPrincipalRenombrada : c));
     const nextCajas = unificarCajas(nuevaCaja ? [...cajasRenombradas, nuevaCaja] : cajasRenombradas);
-    const totalNuevo = Math.max(1, nextCajas.length);
+    const totalNuevo = contarCajasReales(nextCajas);
     const nextEstadosBase: Record<string, CajaEstado> = {};
     nextCajas.forEach((caja) => {
       if (renombrandoCajaPrincipal && caja === cajaPrincipalRenombrada) {
@@ -1153,10 +1300,10 @@ export default function ArmadoScreen() {
     const nextEstados = sincronizarEstadosCajas(nextCajas, nextEstadosBase);
     if (renombrandoCajaPrincipal) {
       setEquipos((prev) =>
-        prev.map((e) => ((e.caja || 'Caja 1') === cajaPrincipalActual ? { ...e, caja: cajaPrincipalRenombrada } : e))
+        prev.map((e) => ((e.caja || DEFAULT_PENDING_BOX) === cajaPrincipalActual ? { ...e, caja: cajaPrincipalRenombrada } : e))
       );
       setMateriales((prev) =>
-        prev.map((m) => ((m.caja || 'Caja 1') === cajaPrincipalActual ? { ...m, caja: cajaPrincipalRenombrada } : m))
+        prev.map((m) => ((m.caja || DEFAULT_PENDING_BOX) === cajaPrincipalActual ? { ...m, caja: cajaPrincipalRenombrada } : m))
       );
       if (equiposPersistidosRenombrados.length) {
         const nextSnap = { ...equiposSnapshotRef.current };
@@ -1204,18 +1351,66 @@ export default function ArmadoScreen() {
       setModalQuitarCajaVisible(false);
       return;
     }
-    setEquipos((prev) => prev.map((e) => ((e.caja || 'Caja 1') === target ? { ...e, caja: destino } : e)));
+    const equiposPersistidosMovidos = equipos
+      .filter((e) => (e.caja || DEFAULT_PENDING_BOX) === target && esIdPersistido(e.id) && equipoTieneContenido(e))
+      .map((e) => ({
+        id: e.id,
+        data: {
+          numero_serie: e.serie,
+          codigo: e.codigo,
+          caja: destino,
+          caja_tecnico_id: userId || undefined,
+          armado_id: armadoId ? Number(armadoId) : undefined,
+        },
+        next: { ...e, caja: destino },
+      }));
+    const materialesPersistidosMovidos = materiales
+      .filter((m) => (m.caja || DEFAULT_PENDING_BOX) === target && esIdPersistido(m.id) && materialTieneContenido(m))
+      .map((m) => ({
+        id_material: m.id,
+        nombre: m.nombre,
+        cantidad: m.cantidad,
+        caja: destino,
+        caja_tecnico_id: userId || undefined,
+        next: { ...m, caja: destino },
+      }));
+    setEquipos((prev) => prev.map((e) => ((e.caja || DEFAULT_PENDING_BOX) === target ? { ...e, caja: destino } : e)));
     setMateriales((prev) =>
-      prev.map((m) => ((m.caja || 'Caja 1') === target ? { ...m, caja: destino } : m))
+      prev.map((m) => ((m.caja || DEFAULT_PENDING_BOX) === target ? { ...m, caja: destino } : m))
     );
+    if (equiposPersistidosMovidos.length) {
+      const nextSnap = { ...equiposSnapshotRef.current };
+      equiposPersistidosMovidos.forEach((item) => {
+        nextSnap[String(item.id)] = hashEquipo(item.next);
+      });
+      equiposSnapshotRef.current = nextSnap;
+    }
+    if (materialesPersistidosMovidos.length) {
+      const nextSnap = { ...materialesSnapshotRef.current };
+      materialesPersistidosMovidos.forEach((item) => {
+        nextSnap[String(item.id_material)] = hashMaterial(item.next);
+      });
+      materialesSnapshotRef.current = nextSnap;
+    }
     const nextCajas = unificarCajas(cajas.filter((c) => c !== target));
     const nextEstados = sincronizarEstadosCajas(nextCajas, cajasEstado);
     setCajas(nextCajas);
     setCajasEstado(nextEstados);
-    const totalNuevo = Math.max(1, nextCajas.length);
+    const totalNuevo = contarCajasReales(nextCajas);
     setTotalCajas(totalNuevo);
     if (armadoId) {
       persistirConfiguracionCajas(nextCajas, nextEstados);
+      equiposPersistidosMovidos.forEach((item) => {
+        updateEquipo(item.id, item.data).catch(async () => {
+          await enqueueOfflineOp('update_equipo', { id_equipo: item.id, data: item.data });
+        });
+      });
+      if (materialesPersistidosMovidos.length) {
+        const materialesPayload = materialesPersistidosMovidos.map(({ next, ...payload }) => payload);
+        saveMaterialesArmado(armadoId, materialesPayload).catch(async () => {
+          await enqueueOfflineOp('save_materiales', { armadoId, materiales: materialesPayload });
+        });
+      }
     }
     setModalQuitarCajaVisible(false);
   };
@@ -1228,9 +1423,13 @@ export default function ArmadoScreen() {
   }, []);
 
   useEffect(() => {
-    if (!cajas?.length) return;
-    setTotalCajas(Math.max(1, cajas.length));
-  }, [cajas]);
+    if (!cajas?.length) {
+      setTotalCajas(0);
+      return;
+    }
+    const totalReal = contarCajasReales(cajas);
+    setTotalCajas((prev) => (prev === totalReal ? prev : totalReal));
+  }, [cajas, contarCajasReales]);
 
   const getGrupoVisual = (titulo: string) => {
     const key = String(titulo || '').toLowerCase();
@@ -1309,7 +1508,7 @@ export default function ArmadoScreen() {
                 <View style={styles.cajasRingOuter} />
                 <View style={styles.cajasRingInner} />
                 <View style={styles.cajasCore}>
-                  <Text style={styles.cajasCoreNumber}>{totalCajas ?? 1}</Text>
+                  <Text style={styles.cajasCoreNumber}>{totalCajas ?? 0}</Text>
                 </View>
               </View>
             </View>
@@ -1490,21 +1689,29 @@ export default function ArmadoScreen() {
                             : { borderColor: palette.tabIconDefault, backgroundColor: '#ffffff' },
                         ]}>
                         <View style={styles.cardHeader}>
-                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                          <View style={styles.cardHeaderMainCompact}>
                             <Ionicons name="cube-outline" size={16} color="#0b3b8c" />
                             <Text style={[styles.cardTitle, { color: '#0f172a' }]}>{eq.nombre}</Text>
                           </View>
-                        <Pressable
-                          style={[styles.cardBadge, { borderColor: '#0b3b8c' }]}
-                          onPress={() => abrirSelectorCaja({
-                            tipo: 'equipo',
-                            id: String(eq.id),
-                            actual: eq.caja || 'Caja 1',
-                            nombre: eq.nombre,
-                          })}
-                          disabled={esSoloLectura}>
-                          <Text style={{ color: '#0b3b8c', fontWeight: '700' }}>{eq.caja}</Text>
-                        </Pressable>
+                          <View style={styles.cardHeaderAsideCompact}>
+	                          <Pressable
+	                            style={[
+	                              styles.cardBadge,
+	                              styles.cardBadgeCompact,
+	                              esCajaPendiente(eq.caja) ? styles.pendingBoxBadge : { borderColor: '#0b3b8c' },
+	                            ]}
+	                            onPress={() => abrirSelectorCaja({
+	                              tipo: 'equipo',
+	                              id: String(eq.id),
+	                              actual: eq.caja || DEFAULT_PENDING_BOX,
+	                              nombre: eq.nombre,
+	                            })}
+	                            disabled={esSoloLectura}>
+	                            <Text style={esCajaPendiente(eq.caja) ? styles.pendingBoxBadgeTextCompact : styles.cardBadgeTextCompact}>
+	                              {eq.caja || DEFAULT_PENDING_BOX}
+	                            </Text>
+	                          </Pressable>
+                          </View>
                         </View>
 
                         <View style={styles.field}>
@@ -1554,11 +1761,11 @@ export default function ArmadoScreen() {
               <>
                 {materiales.map((m) => (
                   (() => {
-                    const materialGuardado = materialEstaGuardado(m);
-                    const tieneRegistro =
-                      (m.usuario && String(m.usuario).trim().length > 0) ||
-                      Number(m.cantidad || 0) > 0 ||
-                      String(m.caja || 'Caja 1').trim() !== 'Caja 1';
+	                    const materialGuardado = materialEstaGuardado(m);
+	                    const tieneRegistro =
+	                      (m.usuario && String(m.usuario).trim().length > 0) ||
+	                      Number(m.cantidad || 0) > 0 ||
+	                      String(m.caja || DEFAULT_PENDING_BOX).trim() !== DEFAULT_PENDING_BOX;
                     return (
 	                  <View
 	                    key={m.id}
@@ -1575,16 +1782,23 @@ export default function ArmadoScreen() {
 	                      </View>
 	                      <View style={styles.materialHeaderAside}>
 	                        <View style={styles.materialCajaWrap}>
-	                          <Pressable
-	                            style={[styles.cardBadge, styles.materialCardBadge, { borderColor: '#0b3b8c' }]}
-	                            onPress={() => abrirSelectorCaja({
-	                              tipo: 'material',
-	                              id: String(m.id),
-	                              actual: m.caja || 'Caja 1',
-	                              nombre: m.nombre,
-	                            })}
-	                            disabled={esSoloLectura || materialGuardado}>
-	                            <Text style={styles.materialCardBadgeText}>{m.caja || 'Caja 1'}</Text>
+		                          <Pressable
+		                            style={[
+		                              styles.cardBadge,
+                              styles.materialCardBadge,
+                              styles.cardBadgeCompact,
+                              esCajaPendiente(m.caja) ? styles.pendingBoxBadge : { borderColor: '#0b3b8c' },
+                            ]}
+		                            onPress={() => abrirSelectorCaja({
+		                              tipo: 'material',
+		                              id: String(m.id),
+		                              actual: m.caja || DEFAULT_PENDING_BOX,
+		                              nombre: m.nombre,
+		                            })}
+		                            disabled={esSoloLectura || materialGuardado}>
+	                            <Text style={esCajaPendiente(m.caja) ? styles.pendingBoxBadgeTextCompact : styles.materialCardBadgeText}>
+	                              {m.caja || DEFAULT_PENDING_BOX}
+	                            </Text>
 	                          </Pressable>
 	                        </View>
 	                        {materialGuardado ? <Text style={styles.materialSavedText}>Guardado</Text> : null}
@@ -1700,57 +1914,76 @@ export default function ArmadoScreen() {
               <Text style={styles.boxManagerAddText}>Agregar caja</Text>
             </Pressable>
             <ScrollView style={styles.boxManagerList} contentContainerStyle={styles.boxSelectorListContent}>
-              {cajas.map((caja) => {
-                const estado = estadoCaja(caja);
-                const equiposCount = equipos.filter((e) => (e.caja || 'Caja 1') === caja).length;
-                const materialesCount = materiales.filter((m) => (m.caja || 'Caja 1') === caja).length;
-                return (
-                  <View key={`manager-caja-${caja}`} style={styles.boxManagerRow}>
-                    <View style={styles.boxManagerRowTop}>
-                      <View style={styles.boxManagerInfo}>
-                        <View style={styles.boxManagerTitleRow}>
-                          <View style={styles.boxSelectorOptionLeft}>
-                            <Ionicons name="cube-outline" size={16} color="#0b3b8c" />
-                            <Text style={styles.boxSelectorOptionText}>{caja}</Text>
-                          </View>
-                          <View style={[styles.boxStatusBadge, estado === 'cerrada' ? styles.boxStatusClosed : styles.boxStatusOpen]}>
-                            <Text style={[styles.boxStatusText, estado === 'cerrada' ? styles.boxStatusTextClosed : styles.boxStatusTextOpen]}>
-                              {estado === 'cerrada' ? 'Cerrada' : 'Abierta'}
-                            </Text>
-                          </View>
-                        </View>
-                        <Text style={styles.boxManagerMeta}>Equipos: {equiposCount} | Materiales: {materialesCount}</Text>
-                      </View>
-                    </View>
-                    <View style={styles.boxManagerDivider} />
-                    <View style={styles.boxManagerActionsBottom}>
-                      {cajas.length > 1 ? (
-                        <Pressable
-                          style={[styles.boxManagerIconBtn, styles.boxManagerIconDanger]}
-                          onPress={() => abrirQuitarCaja(caja)}>
-                          <Ionicons name="trash-outline" size={13} color="#b91c1c" />
-                        </Pressable>
-                      ) : null}
-                      <Pressable
-                        style={[styles.boxManagerActionBtn, estado === 'cerrada' ? styles.boxManagerReopenBtn : styles.boxManagerCloseBtn]}
-                        onPress={() => toggleEstadoCaja(caja)}>
-                        <Ionicons
-                          name={estado === 'cerrada' ? 'lock-open-outline' : 'lock-closed-outline'}
-                          size={13}
-                          color={estado === 'cerrada' ? '#0369a1' : '#a16207'}
-                        />
-                        <Text
-                          style={[
-                            styles.boxManagerActionText,
-                            estado === 'cerrada' ? styles.boxManagerActionTextInfo : styles.boxManagerActionTextWarn,
-                          ]}>
-                          {estado === 'cerrada' ? 'Reabrir caja' : 'Cerrar caja'}
-                        </Text>
-                      </Pressable>
-                    </View>
-                  </View>
-                );
-              })}
+	              {cajas.map((caja) => {
+	                const estado = estadoCaja(caja);
+	                const esPendiente = esCajaPendiente(caja);
+		                const equiposCount = equipos.filter((e) => (e.caja || DEFAULT_PENDING_BOX) === caja && equipoTieneContenido(e)).length;
+		                const materialesCount = materiales.filter((m) => (m.caja || DEFAULT_PENDING_BOX) === caja && materialTieneContenido(m)).length;
+	                return (
+	                  <View key={`manager-caja-${caja}`} style={styles.boxManagerRow}>
+	                    <View style={styles.boxManagerRowTop}>
+	                      <View style={styles.boxManagerInfo}>
+	                        <View style={styles.boxManagerTitleRow}>
+	                          <View style={styles.boxSelectorOptionLeft}>
+	                            <Ionicons name="cube-outline" size={16} color="#0b3b8c" />
+	                            <Text style={styles.boxSelectorOptionText}>{caja}</Text>
+	                          </View>
+	                          {cajas.length > 1 && !esPendiente ? (
+	                            <Pressable
+	                              style={[styles.boxManagerIconBtn, styles.boxManagerIconDanger]}
+	                              onPress={() => abrirQuitarCaja(caja)}>
+	                              <Ionicons name="trash-outline" size={13} color="#b91c1c" />
+	                            </Pressable>
+	                          ) : null}
+	                        </View>
+	                        <Text style={styles.boxManagerMeta}>Equipos: {equiposCount} | Materiales: {materialesCount}</Text>
+	                      </View>
+	                    </View>
+	                    <View style={styles.boxManagerDivider} />
+	                    <View style={styles.boxManagerActionsBottom}>
+	                      <View
+	                        style={[
+	                          styles.boxStatusBadge,
+	                          esPendiente
+	                            ? styles.pendingBoxStatusBadge
+	                            : estado === 'cerrada'
+	                              ? styles.boxStatusClosed
+	                              : styles.boxStatusOpen,
+	                        ]}>
+	                        <Text
+	                          style={[
+	                            styles.boxStatusText,
+	                            esPendiente
+	                              ? styles.pendingBoxStatusText
+	                              : estado === 'cerrada'
+	                                ? styles.boxStatusTextClosed
+	                                : styles.boxStatusTextOpen,
+	                          ]}>
+	                          {esPendiente ? 'Pendiente' : estado === 'cerrada' ? 'Cerrada' : 'Abierta'}
+	                        </Text>
+	                      </View>
+	                      {!esPendiente ? (
+	                        <Pressable
+	                          style={[styles.boxManagerActionBtn, estado === 'cerrada' ? styles.boxManagerReopenBtn : styles.boxManagerCloseBtn]}
+	                          onPress={() => toggleEstadoCaja(caja)}>
+	                          <Ionicons
+	                            name={estado === 'cerrada' ? 'lock-open-outline' : 'lock-closed-outline'}
+	                            size={13}
+	                            color={estado === 'cerrada' ? '#0369a1' : '#a16207'}
+	                          />
+	                          <Text
+	                            style={[
+	                              styles.boxManagerActionText,
+	                              estado === 'cerrada' ? styles.boxManagerActionTextInfo : styles.boxManagerActionTextWarn,
+	                            ]}>
+	                            {estado === 'cerrada' ? 'Reabrir caja' : 'Cerrar caja'}
+	                          </Text>
+	                        </Pressable>
+	                      ) : null}
+	                    </View>
+	                  </View>
+	                );
+	              })}
             </ScrollView>
           </View>
         </View>
@@ -1758,33 +1991,37 @@ export default function ArmadoScreen() {
 
       <Modal visible={modalCajasVisible} animationType="fade" transparent>
         <View style={styles.camOverlay}>
-          <View style={[styles.camBox, styles.boxNameModal]}>
-            <Text style={styles.boxNameModalTitle}>Agregar caja</Text>
-            <Text style={styles.boxNameModalText}>
-              Puedes renombrar la caja principal y crear la siguiente manteniendo el formato del sistema.
-            </Text>
-            <View style={styles.boxNameSection}>
-              <Text style={styles.boxNameSectionLabel}>Caja principal</Text>
-              <View style={styles.boxNamePreview}>
-                <Ionicons name="cube-outline" size={16} color="#0b3b8c" />
-                <Text style={styles.boxNamePreviewText}>{cajaPrincipalPreview}</Text>
-              </View>
-              <TextInput
-                value={descripcionCajaPrincipal}
-                onChangeText={setDescripcionCajaPrincipal}
-                style={[styles.input, styles.boxNameInput]}
-                placeholder="Ejemplo: equipos"
-                placeholderTextColor="#94a3b8"
-                maxLength={40}
-              />
-            </View>
-            <View style={styles.boxNameSection}>
-              <Text style={styles.boxNameSectionLabel}>Nueva caja</Text>
-              <Text style={styles.boxNameModalText}>
-                Se creara <Text style={styles.boxNameModalStrong}>{siguienteCajaBase}</Text>. Si quieres, agrega una descripcion como
-                {' '}materiales. Si lo dejas vacio, solo se actualizara la Caja 1.
-              </Text>
-            </View>
+	          <View style={[styles.camBox, styles.boxNameModal]}>
+	            <Text style={styles.boxNameModalTitle}>Agregar caja</Text>
+	            <Text style={styles.boxNameModalText}>
+	              {tieneCajaPrincipalReal
+	                ? 'Puedes renombrar la Caja 1 actual y crear una nueva caja manteniendo el formato del sistema.'
+	                : 'Los nuevos elementos quedaran en Pendiente de caja hasta que los asignes a una caja real.'}
+	            </Text>
+	            {tieneCajaPrincipalReal ? (
+	              <View style={styles.boxNameSection}>
+	                <Text style={styles.boxNameSectionLabel}>Caja principal</Text>
+	                <View style={styles.boxNamePreview}>
+	                  <Ionicons name="cube-outline" size={16} color="#0b3b8c" />
+	                  <Text style={styles.boxNamePreviewText}>{cajaPrincipalPreview}</Text>
+	                </View>
+	                <TextInput
+	                  value={descripcionCajaPrincipal}
+	                  onChangeText={setDescripcionCajaPrincipal}
+	                  style={[styles.input, styles.boxNameInput]}
+	                  placeholder="Ejemplo: equipos"
+	                  placeholderTextColor="#94a3b8"
+	                  maxLength={40}
+	                />
+	              </View>
+	            ) : null}
+	            <View style={styles.boxNameSection}>
+	              <Text style={styles.boxNameSectionLabel}>{tieneCajaPrincipalReal ? 'Nueva caja' : 'Primera caja real'}</Text>
+	              <Text style={styles.boxNameModalText}>
+	                Se creara <Text style={styles.boxNameModalStrong}>{siguienteCajaBase}</Text>. Si quieres, agrega una descripcion como
+	                {' '}materiales. Si lo dejas vacio, se creara con el nombre base.
+	              </Text>
+	            </View>
             <View style={styles.boxNamePreview}>
               <Ionicons name="cube-outline" size={16} color="#0b3b8c" />
               <Text style={styles.boxNamePreviewText}>{cajaNuevaPreview}</Text>
@@ -1825,10 +2062,10 @@ export default function ArmadoScreen() {
                 <Ionicons name="close-circle" size={24} color="#64748b" />
               </Pressable>
             </View>
-            <Text style={styles.boxSelectorText}>
-              {selectorCajaTarget?.nombre || 'Elemento'} actualmente esta en{' '}
-              <Text style={styles.boxNameModalStrong}>{selectorCajaTarget?.actual || 'Caja 1'}</Text>
-            </Text>
+	            <Text style={styles.boxSelectorText}>
+	              {selectorCajaTarget?.nombre || 'Elemento'} actualmente esta en{' '}
+	              <Text style={styles.boxNameModalStrong}>{selectorCajaTarget?.actual || DEFAULT_PENDING_BOX}</Text>
+	            </Text>
             <ScrollView style={styles.boxSelectorList} contentContainerStyle={styles.boxSelectorListContent}>
               {cajas.map((caja) => {
                 const activa = caja === (selectorCajaTarget?.actual || '');
@@ -1926,6 +2163,81 @@ export default function ArmadoScreen() {
               value={materialAccionCantidad}
               onChangeText={setMaterialAccionCantidad}
             />
+            {materialAccionModo === 'ajuste' && materialAccionTarget ? (
+              <View style={styles.materialActionBoxSection}>
+                <Text style={styles.materialActionBoxLabel}>Caja destino</Text>
+                {cajasAbiertasEdicionMaterial.length ? (
+                  <View style={styles.materialActionBoxGroup}>
+                    <View style={[styles.materialActionBoxGroupHeader, styles.materialActionBoxGroupHeaderOpen]}>
+                      <Text style={[styles.materialActionBoxGroupTitle, styles.materialActionBoxGroupTitleOpen]}>
+                        Cajas abiertas
+                      </Text>
+                    </View>
+                    <View style={styles.materialActionBoxList}>
+                      {cajasAbiertasEdicionMaterial.map((caja) => {
+                        const seleccionada = caja === materialAccionCaja;
+                        return (
+                          <Pressable
+                            key={`material-action-box-open-${caja}`}
+                            style={[
+                              styles.materialActionBoxChip,
+                              seleccionada && styles.materialActionBoxChipActive,
+                            ]}
+                            onPress={() => setMaterialAccionCaja(caja)}>
+                            <Text
+                              style={[
+                                styles.materialActionBoxChipText,
+                                seleccionada && styles.materialActionBoxChipTextActive,
+                              ]}>
+                              {caja}
+                            </Text>
+                          </Pressable>
+                        );
+                      })}
+                    </View>
+                  </View>
+                ) : null}
+                {cajasCerradasEdicionMaterial.length ? (
+                  <View style={styles.materialActionBoxGroup}>
+                    <View style={[styles.materialActionBoxGroupHeader, styles.materialActionBoxGroupHeaderClosed]}>
+                      <Text style={[styles.materialActionBoxGroupTitle, styles.materialActionBoxGroupTitleClosed]}>
+                        Cajas cerradas
+                      </Text>
+                    </View>
+                    <View style={styles.materialActionBoxList}>
+                      {cajasCerradasEdicionMaterial.map((caja) => {
+                        const actual = caja === (materialAccionTarget.caja || DEFAULT_PENDING_BOX);
+                        const seleccionada = caja === materialAccionCaja;
+                        const bloqueada = !actual;
+                        return (
+                          <Pressable
+                            key={`material-action-box-closed-${caja}`}
+                            style={[
+                              styles.materialActionBoxChip,
+                              seleccionada && styles.materialActionBoxChipActive,
+                              bloqueada && styles.materialActionBoxChipDisabled,
+                            ]}
+                            onPress={() => setMaterialAccionCaja(caja)}
+                            disabled={bloqueada}>
+                            <Text
+                              style={[
+                                styles.materialActionBoxChipText,
+                                seleccionada && styles.materialActionBoxChipTextActive,
+                                bloqueada && styles.materialActionBoxChipTextDisabled,
+                              ]}>
+                              {caja}
+                            </Text>
+                            <Text style={styles.materialActionBoxChipMeta}>
+                              {actual ? 'Actual cerrada' : 'Cerrada'}
+                            </Text>
+                          </Pressable>
+                        );
+                      })}
+                    </View>
+                  </View>
+                ) : null}
+              </View>
+            ) : null}
             {materialAccionModo === 'incremento' && materialAccionTarget ? (
               <Text style={[styles.confirmText, { marginTop: 10 }]}>
                 Total final: {Number(materialAccionTarget.cantidad || 0) + (Number(materialAccionCantidad || 0) || 0)}
@@ -1939,6 +2251,7 @@ export default function ArmadoScreen() {
                   setModalAccionMaterialVisible(false);
                   setMaterialAccionTarget(null);
                   setMaterialAccionCantidad('');
+                  setMaterialAccionCaja(DEFAULT_PENDING_BOX);
                 }}>
                 <Text style={styles.confirmCancelText}>Cancelar</Text>
               </Pressable>
@@ -2246,25 +2559,38 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingRight: 10,
   },
+  cardHeaderMainCompact: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    flex: 1,
+    paddingRight: 8,
+  },
+  cardHeaderAsideCompact: {
+    alignItems: 'flex-end',
+    alignSelf: 'flex-start',
+    maxWidth: '43%',
+    marginTop: -7,
+    marginLeft: 8,
+  },
   materialHeaderAside: {
     alignItems: 'flex-end',
     gap: 3,
-    maxWidth: '42%',
-    marginTop: -6,
+    maxWidth: '43%',
+    marginTop: -8,
   },
   materialCajaWrap: {
     alignSelf: 'flex-end',
-    marginTop: -2,
+    marginTop: -3,
   },
   materialCardBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 3,
+    maxWidth: '100%',
   },
   materialCardBadgeText: {
     color: '#0b3b8c',
     fontWeight: '700',
-    fontSize: 11.5,
-    lineHeight: 14,
+    fontSize: 10.5,
+    lineHeight: 12,
   },
   materialActionBtn: {
     width: 28,
@@ -2436,7 +2762,7 @@ const styles = StyleSheet.create({
     marginTop: 2,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'flex-end',
+    justifyContent: 'space-between',
     gap: 8,
   },
   boxManagerActionBtn: {
@@ -2522,6 +2848,10 @@ const styles = StyleSheet.create({
     backgroundColor: '#fef2f2',
     borderColor: '#fecaca',
   },
+  pendingBoxStatusBadge: {
+    backgroundColor: '#fef2f2',
+    borderColor: '#fda4af',
+  },
   boxStatusText: {
     fontWeight: '800',
     fontSize: 11.5,
@@ -2531,6 +2861,9 @@ const styles = StyleSheet.create({
   },
   boxStatusTextClosed: {
     color: '#b91c1c',
+  },
+  pendingBoxStatusText: {
+    color: '#dc2626',
   },
   boxSelectorModal: {
     width: '88%',
@@ -2668,6 +3001,86 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: '#0f172a',
     backgroundColor: '#f8fafc',
+  },
+  materialActionBoxSection: {
+    marginTop: 12,
+    marginBottom: 4,
+  },
+  materialActionBoxGroup: {
+    marginTop: 8,
+  },
+  materialActionBoxGroupHeader: {
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 10,
+    marginBottom: 8,
+    borderWidth: 1,
+  },
+  materialActionBoxGroupHeaderOpen: {
+    backgroundColor: '#eff6ff',
+    borderColor: '#bfdbfe',
+  },
+  materialActionBoxGroupHeaderClosed: {
+    backgroundColor: '#fff7ed',
+    borderColor: '#fed7aa',
+  },
+  materialActionBoxGroupTitle: {
+    fontSize: 12,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+    letterSpacing: 0.35,
+  },
+  materialActionBoxGroupTitleOpen: {
+    color: '#1d4ed8',
+  },
+  materialActionBoxGroupTitleClosed: {
+    color: '#c2410c',
+  },
+  materialActionBoxLabel: {
+    color: '#334155',
+    fontSize: 12,
+    fontWeight: '800',
+    marginBottom: 8,
+    textTransform: 'uppercase',
+    letterSpacing: 0.3,
+  },
+  materialActionBoxList: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  materialActionBoxChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    backgroundColor: '#f8fafc',
+    gap: 2,
+  },
+  materialActionBoxChipActive: {
+    borderColor: '#2563eb',
+    backgroundColor: '#dbeafe',
+  },
+  materialActionBoxChipDisabled: {
+    opacity: 0.55,
+    backgroundColor: '#f1f5f9',
+  },
+  materialActionBoxChipText: {
+    color: '#334155',
+    fontWeight: '700',
+    fontSize: 12.5,
+  },
+  materialActionBoxChipTextActive: {
+    color: '#1d4ed8',
+  },
+  materialActionBoxChipTextDisabled: {
+    color: '#64748b',
+  },
+  materialActionBoxChipMeta: {
+    color: '#b45309',
+    fontSize: 10.5,
+    fontWeight: '700',
   },
   confirmActions: {
     flexDirection: 'row',
@@ -3045,6 +3458,34 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     fontSize: 12,
     fontWeight: '600',
+  },
+  cardBadgeCompact: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+  },
+  cardBadgeTextDefault: {
+    color: '#0b3b8c',
+    fontWeight: '700',
+  },
+  cardBadgeTextCompact: {
+    color: '#0b3b8c',
+    fontWeight: '700',
+    fontSize: 10.5,
+    lineHeight: 12,
+  },
+  pendingBoxBadge: {
+    borderColor: '#fda4af',
+    backgroundColor: '#fff1f2',
+  },
+  pendingBoxBadgeText: {
+    color: '#dc2626',
+    fontWeight: '800',
+  },
+  pendingBoxBadgeTextCompact: {
+    color: '#dc2626',
+    fontWeight: '800',
+    fontSize: 10.5,
+    lineHeight: 12,
   },
   field: {
     gap: 4,
