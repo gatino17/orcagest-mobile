@@ -53,6 +53,7 @@ const MATERIALES_PREDEF: string[] = [
   'Cinta Engomada',
   'Cable Power',
   'Cable UPS',
+  'Bandeja Rack - tornillos',
   'Regleta 6-8mm',
   'Amarras Plasticas 4,5x300mm (med)',
   'Amarras Plasticas 7,5x500mm (gran)',
@@ -128,10 +129,12 @@ const MATERIALES_PREDEF: string[] = [
   'Perno Pasado',
 ];
 
+const EQUIPOS_MIGRADOS_A_MATERIALES = new Set(['bandeja rack - tornillos']);
+
 const GRUPOS_EQUIPOS: { titulo: string; items: string[] }[] = [
   {
     titulo: 'Oficina',
-    items: ['PC', 'Monitor', 'Mouse', 'Teclado', 'Router', 'Switch', 'Switch (Cisco)', 'Switch raqueable', 'Camara Interior', 'Parlantes', 'Sensor Magnetico', 'Rack 9U - tuercas - tornillos', 'Bandeja Rack - tornillos', 'Zapatilla Rack (PDU)'],
+    items: ['PC', 'Monitor', 'Mouse', 'Teclado', 'Router', 'Switch', 'Switch (Cisco)', 'Switch raqueable', 'Camara Interior', 'Parlantes', 'Sensor Magnetico', 'Rack 9U - tuercas - tornillos', 'Zapatilla Rack (PDU)'],
   },
   {
     titulo: 'Tablero Alarma',
@@ -202,6 +205,8 @@ export default function ArmadoScreen() {
   const [gruposColapsados, setGruposColapsados] = useState<Record<string, boolean>>({});
   const [cacheReady, setCacheReady] = useState(false);
   const [cajasEstado, setCajasEstado] = useState<Record<string, CajaEstado>>({});
+  const [busquedaEquipo, setBusquedaEquipo] = useState('');
+  const [busquedaMaterial, setBusquedaMaterial] = useState('');
   const [resumenQuitarCaja, setResumenQuitarCaja] = useState({
     target: '',
     destino: '',
@@ -257,7 +262,8 @@ export default function ArmadoScreen() {
   }, [armadoActual, name, normalizeTechName, userId]);
 
   const numeroCaja = useCallback((caja?: string) => {
-    const n = parseInt(String(caja || '').replace(/[^\d]/g, ''), 10);
+    const match = String(caja || '').trim().match(/^Caja\s*(\d+)/i);
+    const n = match ? Number.parseInt(match[1], 10) : 0;
     return Number.isFinite(n) ? n : 0;
   }, []);
 
@@ -365,6 +371,21 @@ export default function ArmadoScreen() {
     [cajasOrdenadasEdicionMaterial, estadoCaja]
   );
 
+  const normalizarTextoBusqueda = useCallback((value?: string) => {
+    return String(value || '')
+      .trim()
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/\s+/g, ' ');
+  }, []);
+
+  const materialesFiltrados = useMemo(() => {
+    const termino = normalizarTextoBusqueda(busquedaMaterial);
+    if (!termino) return materiales;
+    return materiales.filter((m) => normalizarTextoBusqueda(m?.nombre).includes(termino));
+  }, [busquedaMaterial, materiales, normalizarTextoBusqueda]);
+
   const formatFecha = (val?: string) => {
     if (!val) return '-';
     const raw = String(val).trim();
@@ -432,10 +453,28 @@ export default function ArmadoScreen() {
     return groups;
   }, [equipos]);
 
+  const gruposEquiposFiltrados = useMemo(() => {
+    const termino = normalizarTextoBusqueda(busquedaEquipo);
+    const gruposBase = Array.isArray(gruposRender) ? gruposRender : [];
+    if (!termino) return gruposBase;
+    return gruposBase
+      .map((grupo) => ({
+        ...grupo,
+        items: (Array.isArray(grupo?.items) ? grupo.items : []).filter((eq) =>
+          normalizarTextoBusqueda(eq?.nombre).includes(termino)
+        ),
+      }))
+      .filter((grupo) => Array.isArray(grupo?.items) && grupo.items.length > 0);
+  }, [busquedaEquipo, gruposRender, normalizarTextoBusqueda]);
+
   const resumenEquipos = useMemo(() => {
-    const total = gruposRender.reduce((acc, g) => acc + g.items.length, 0);
+    const total = gruposRender.reduce((acc, g) => acc + (Array.isArray(g?.items) ? g.items.length : 0), 0);
     const conSerie = gruposRender.reduce(
-      (acc, g) => acc + g.items.filter((it) => (it.serie || '').trim().length > 0).length,
+      (acc, g) =>
+        acc +
+        (Array.isArray(g?.items)
+          ? g.items.filter((it) => (it.serie || '').trim().length > 0).length
+          : 0),
       0
     );
     return { total, conSerie };
@@ -519,18 +558,29 @@ export default function ArmadoScreen() {
       .replace(/\s+/g, '');
   }, []);
 
+  const esEquipoMigradoAMaterial = useCallback((nombre?: string) => {
+    return EQUIPOS_MIGRADOS_A_MATERIALES.has(
+      String(nombre || '')
+        .trim()
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+    );
+  }, []);
+
   const obtenerConflictoSerieLocal = useCallback((serie?: string, equipoActualId?: string | null) => {
     const serieNormalizada = normalizarSerieLocal(serie);
     if (!serieNormalizada) return null;
     const actualId = String(equipoActualId || '').trim();
     return (
       equipos.find((eq) => {
+        if (esEquipoMigradoAMaterial(eq.nombre)) return false;
         const eqId = String(eq.id || '').trim();
         if (actualId && eqId === actualId) return false;
         return normalizarSerieLocal(eq.serie) === serieNormalizada;
       }) || null
     );
-  }, [equipos, normalizarSerieLocal]);
+  }, [equipos, esEquipoMigradoAMaterial, normalizarSerieLocal]);
 
   const mostrarSerieDuplicadaLocal = useCallback((serie: string, equipoNombre?: string) => {
     Alert.alert(
@@ -607,10 +657,12 @@ export default function ArmadoScreen() {
       const cached = await readCache();
       if (!active) return;
       if (cached?.equipos && Array.isArray(cached.equipos) && cached.equipos.length > 0) {
-        const equiposCache = cached.equipos.map((e: Equipo) => ({
-          ...e,
-          caja: normalizarCajaEquipoInicial(e.caja, e.serie, e.codigo),
-        }));
+        const equiposCache = cached.equipos
+          .filter((e: Equipo) => !esEquipoMigradoAMaterial(e?.nombre))
+          .map((e: Equipo) => ({
+            ...e,
+            caja: normalizarCajaEquipoInicial(e.caja, e.serie, e.codigo),
+          }));
         setEquipos(equiposCache);
         const snap: Record<string, string> = {};
         equiposCache.forEach((e: Equipo) => {
@@ -644,7 +696,7 @@ export default function ArmadoScreen() {
     return () => {
       active = false;
     };
-  }, [readCache, hashEquipo, hashMaterial, normalizarCajaEquipoInicial, normalizarCajaMaterialInicial, unificarCajas]);
+  }, [esEquipoMigradoAMaterial, readCache, hashEquipo, hashMaterial, normalizarCajaEquipoInicial, normalizarCajaMaterialInicial, unificarCajas]);
 
   useEffect(() => {
     if (!cacheReady) return;
@@ -659,6 +711,13 @@ export default function ArmadoScreen() {
     setCajasEstado((prev) => sincronizarEstadosCajas(cajas, prev));
   }, [cajas, sincronizarEstadosCajas]);
 
+  useEffect(() => {
+    setEquipos((prev) => {
+      const filtrados = prev.filter((eq) => !esEquipoMigradoAMaterial(eq?.nombre));
+      return filtrados.length === prev.length ? prev : filtrados;
+    });
+  }, [esEquipoMigradoAMaterial]);
+
   const cargarEquipos = useCallback(async (options?: { silent?: boolean }) => {
     if (!centroId) return;
     if (!options?.silent) {
@@ -668,17 +727,19 @@ export default function ArmadoScreen() {
     try {
       const data = await getEquipos(centroId);
       if (Array.isArray(data)) {
-        const mapped = data.map((eq: any) => ({
-          id: String(eq.id_equipo || eq.id || `${eq.nombre}-${eq.ip || ''}`),
-          nombre: eq.nombre || 'Equipo',
-          serie: eq.numero_serie || eq.serie || '',
-          codigo: eq.codigo || (eq.numero_serie ? String(eq.numero_serie).slice(0, 5) : ''),
-          caja: normalizarCajaEquipoInicial(
-            eq.caja,
-            eq.numero_serie || eq.serie || '',
-            eq.codigo || (eq.numero_serie ? String(eq.numero_serie).slice(0, 5) : '')
-          ),
-        }));
+        const mapped = data
+          .filter((eq: any) => !esEquipoMigradoAMaterial(eq?.nombre))
+          .map((eq: any) => ({
+            id: String(eq.id_equipo || eq.id || `${eq.nombre}-${eq.ip || ''}`),
+            nombre: eq.nombre || 'Equipo',
+            serie: eq.numero_serie || eq.serie || '',
+            codigo: eq.codigo || (eq.numero_serie ? String(eq.numero_serie).slice(0, 5) : ''),
+            caja: normalizarCajaEquipoInicial(
+              eq.caja,
+              eq.numero_serie || eq.serie || '',
+              eq.codigo || (eq.numero_serie ? String(eq.numero_serie).slice(0, 5) : '')
+            ),
+          }));
         setEquipos(mapped);
         const snap: Record<string, string> = {};
         mapped.forEach((e) => {
@@ -690,12 +751,14 @@ export default function ArmadoScreen() {
         await writeCache({ equipos: mapped });
       }
     } catch (e) {
-      const cached = await readCache();
-      if (cached?.equipos && Array.isArray(cached.equipos) && cached.equipos.length > 0) {
-        const equiposCache = cached.equipos.map((eq: Equipo) => ({
-          ...eq,
-          caja: normalizarCajaEquipoInicial(eq.caja, eq.serie, eq.codigo),
-        }));
+        const cached = await readCache();
+        if (cached?.equipos && Array.isArray(cached.equipos) && cached.equipos.length > 0) {
+        const equiposCache = cached.equipos
+          .filter((eq: Equipo) => !esEquipoMigradoAMaterial(eq?.nombre))
+          .map((eq: Equipo) => ({
+            ...eq,
+            caja: normalizarCajaEquipoInicial(eq.caja, eq.serie, eq.codigo),
+          }));
         setEquipos(equiposCache);
         const snap: Record<string, string> = {};
         equiposCache.forEach((eq: Equipo) => {
@@ -715,7 +778,7 @@ export default function ArmadoScreen() {
         setLoading(false);
       }
     }
-  }, [centroId, hashEquipo, normalizarCajaEquipoInicial, readCache, writeCache, unificarCajas]);
+  }, [centroId, esEquipoMigradoAMaterial, hashEquipo, normalizarCajaEquipoInicial, readCache, writeCache, unificarCajas]);
 
   useEffect(() => {
     cargarEquipos();
@@ -1239,10 +1302,10 @@ export default function ArmadoScreen() {
   const siguienteNumeroCaja = useMemo(
     () =>
       cajas.reduce((max, c) => {
-        const n = parseInt(String(c).replace(/[^\d]/g, ''), 10);
+        const n = numeroCaja(c);
         return Number.isFinite(n) ? Math.max(max, n) : max;
       }, 0) + 1,
-    [cajas]
+    [cajas, numeroCaja]
   );
 
   const siguienteCajaBase = `Caja ${siguienteNumeroCaja}`;
@@ -1670,6 +1733,50 @@ export default function ArmadoScreen() {
         </View>
 
         {tab === 'equipos' ? (
+          <View style={styles.materialSearchWrap}>
+            <View style={styles.materialSearchBox}>
+              <Ionicons name="search-outline" size={16} color="#64748b" />
+              <TextInput
+                placeholder="Buscar equipo"
+                placeholderTextColor="#94a3b8"
+                style={styles.materialSearchInput}
+                value={busquedaEquipo}
+                onChangeText={setBusquedaEquipo}
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+              {busquedaEquipo ? (
+                <Pressable onPress={() => setBusquedaEquipo('')} hitSlop={6}>
+                  <Ionicons name="close-circle" size={18} color="#94a3b8" />
+                </Pressable>
+              ) : null}
+            </View>
+          </View>
+        ) : null}
+
+        {tab === 'materiales' ? (
+          <View style={styles.materialSearchWrap}>
+            <View style={styles.materialSearchBox}>
+              <Ionicons name="search-outline" size={16} color="#64748b" />
+              <TextInput
+                placeholder="Buscar material"
+                placeholderTextColor="#94a3b8"
+                style={styles.materialSearchInput}
+                value={busquedaMaterial}
+                onChangeText={setBusquedaMaterial}
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+              {busquedaMaterial ? (
+                <Pressable onPress={() => setBusquedaMaterial('')} hitSlop={6}>
+                  <Ionicons name="close-circle" size={18} color="#94a3b8" />
+                </Pressable>
+              ) : null}
+            </View>
+          </View>
+        ) : null}
+
+        {tab === 'equipos' ? (
           <>
             <View style={styles.summary}>
               <View style={styles.summaryIcon}>
@@ -1694,9 +1801,11 @@ export default function ArmadoScreen() {
               </View>
             ) : error ? (
               <Text style={{ color: 'red', textAlign: 'center' }}>{error}</Text>
+            ) : gruposEquiposFiltrados.length === 0 ? (
+              <Text style={{ textAlign: 'center', color: '#475569', paddingVertical: 12 }}>No se encontraron equipos</Text>
             ) : (
-              gruposRender.map((grupo) => {
-                const items = grupo.items;
+              gruposEquiposFiltrados.map((grupo) => {
+                const items = Array.isArray(grupo?.items) ? grupo.items : [];
                 const groupVisual = getGrupoVisual(grupo.titulo);
                 const colapsado = !!gruposColapsados[grupo.titulo];
                 return (
@@ -1771,7 +1880,8 @@ export default function ArmadoScreen() {
                               value={eq.serie ? String(eq.serie) : ''}
                               onChangeText={(t) => {
                                 const serieNumerica = String(t || '').replace(/\D+/g, '');
-                                const conflictoLocal = obtenerConflictoSerieLocal(serieNumerica, eq.id);
+                                const conflictoLocal =
+                                  serieNumerica.length >= 5 ? obtenerConflictoSerieLocal(serieNumerica, eq.id) : null;
                                 if (conflictoLocal) {
                                   mostrarSerieDuplicadaLocal(serieNumerica, conflictoLocal.nombre);
                                   return;
@@ -1809,9 +1919,11 @@ export default function ArmadoScreen() {
               </Text>
             ) : materiales.length === 0 ? (
               <Text style={{ textAlign: 'center', color: '#475569', paddingVertical: 12 }}>Sin materiales</Text>
+            ) : materialesFiltrados.length === 0 ? (
+              <Text style={{ textAlign: 'center', color: '#475569', paddingVertical: 12 }}>No se encontraron materiales</Text>
             ) : (
               <>
-                {materiales.map((m) => (
+                {materialesFiltrados.map((m) => (
                   (() => {
 	                    const materialGuardado = materialEstaGuardado(m);
 	                    const tieneRegistro =
@@ -2187,135 +2299,141 @@ export default function ArmadoScreen() {
 
       <Modal visible={modalAccionMaterialVisible} animationType="fade" transparent>
         <View style={styles.camOverlay}>
-          <View style={styles.confirmBox}>
-            <View
-              style={[
-                styles.confirmIconWrap,
-                { backgroundColor: materialAccionModo === 'incremento' ? '#dbeafe' : '#fef3c7' },
-              ]}>
-              <Ionicons
-                name={materialAccionModo === 'incremento' ? 'add-circle-outline' : 'create-outline'}
-                size={20}
-                color={materialAccionModo === 'incremento' ? '#1d4ed8' : '#d97706'}
-              />
-            </View>
-            <Text style={styles.confirmTitle}>
-              {materialAccionModo === 'incremento' ? 'Agregar mas material' : 'Editar cantidad'}
-            </Text>
-            <Text style={styles.confirmText}>
-              {materialAccionTarget?.nombre || 'Material'}
-            </Text>
-            <Text style={[styles.confirmText, { marginTop: -4, marginBottom: 12 }]}>
-              Cantidad actual: {Number(materialAccionTarget?.cantidad || 0)}
-            </Text>
-            <TextInput
-              style={styles.materialActionInput}
-              placeholder={materialAccionModo === 'incremento' ? 'Cantidad a sumar' : 'Nueva cantidad total'}
-              keyboardType="numeric"
-              value={materialAccionCantidad}
-              onChangeText={setMaterialAccionCantidad}
-            />
-            {materialAccionModo === 'ajuste' && materialAccionTarget ? (
-              <View style={styles.materialActionBoxSection}>
-                <Text style={styles.materialActionBoxLabel}>Caja destino</Text>
-                {cajasAbiertasEdicionMaterial.length ? (
-                  <View style={styles.materialActionBoxGroup}>
-                    <View style={[styles.materialActionBoxGroupHeader, styles.materialActionBoxGroupHeaderOpen]}>
-                      <Text style={[styles.materialActionBoxGroupTitle, styles.materialActionBoxGroupTitleOpen]}>
-                        Cajas abiertas
-                      </Text>
-                    </View>
-                    <View style={styles.materialActionBoxList}>
-                      {cajasAbiertasEdicionMaterial.map((caja) => {
-                        const seleccionada = caja === materialAccionCaja;
-                        return (
-                          <Pressable
-                            key={`material-action-box-open-${caja}`}
-                            style={[
-                              styles.materialActionBoxChip,
-                              seleccionada && styles.materialActionBoxChipActive,
-                            ]}
-                            onPress={() => setMaterialAccionCaja(caja)}>
-                            <Text
-                              style={[
-                                styles.materialActionBoxChipText,
-                                seleccionada && styles.materialActionBoxChipTextActive,
-                              ]}>
-                              {caja}
-                            </Text>
-                          </Pressable>
-                        );
-                      })}
-                    </View>
-                  </View>
-                ) : null}
-                {cajasCerradasEdicionMaterial.length ? (
-                  <View style={styles.materialActionBoxGroup}>
-                    <View style={[styles.materialActionBoxGroupHeader, styles.materialActionBoxGroupHeaderClosed]}>
-                      <Text style={[styles.materialActionBoxGroupTitle, styles.materialActionBoxGroupTitleClosed]}>
-                        Cajas cerradas
-                      </Text>
-                    </View>
-                    <View style={styles.materialActionBoxList}>
-                      {cajasCerradasEdicionMaterial.map((caja) => {
-                        const actual = caja === (materialAccionTarget.caja || DEFAULT_PENDING_BOX);
-                        const seleccionada = caja === materialAccionCaja;
-                        const bloqueada = !actual;
-                        return (
-                          <Pressable
-                            key={`material-action-box-closed-${caja}`}
-                            style={[
-                              styles.materialActionBoxChip,
-                              seleccionada && styles.materialActionBoxChipActive,
-                              bloqueada && styles.materialActionBoxChipDisabled,
-                            ]}
-                            onPress={() => setMaterialAccionCaja(caja)}
-                            disabled={bloqueada}>
-                            <Text
-                              style={[
-                                styles.materialActionBoxChipText,
-                                seleccionada && styles.materialActionBoxChipTextActive,
-                                bloqueada && styles.materialActionBoxChipTextDisabled,
-                              ]}>
-                              {caja}
-                            </Text>
-                            <Text style={styles.materialActionBoxChipMeta}>
-                              {actual ? 'Actual cerrada' : 'Cerrada'}
-                            </Text>
-                          </Pressable>
-                        );
-                      })}
-                    </View>
-                  </View>
-                ) : null}
+          <View style={[styles.confirmBox, styles.confirmBoxScrollable]}>
+            <ScrollView
+              style={styles.confirmScroll}
+              contentContainerStyle={styles.confirmScrollContent}
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled">
+              <View
+                style={[
+                  styles.confirmIconWrap,
+                  { backgroundColor: materialAccionModo === 'incremento' ? '#dbeafe' : '#fef3c7' },
+                ]}>
+                <Ionicons
+                  name={materialAccionModo === 'incremento' ? 'add-circle-outline' : 'create-outline'}
+                  size={20}
+                  color={materialAccionModo === 'incremento' ? '#1d4ed8' : '#d97706'}
+                />
               </View>
-            ) : null}
-            {materialAccionModo === 'incremento' && materialAccionTarget ? (
-              <Text style={[styles.confirmText, { marginTop: 10 }]}>
-                Total final: {Number(materialAccionTarget.cantidad || 0) + (Number(materialAccionCantidad || 0) || 0)}
+              <Text style={styles.confirmTitle}>
+                {materialAccionModo === 'incremento' ? 'Agregar mas material' : 'Editar cantidad'}
               </Text>
-            ) : null}
-            <View style={styles.confirmActions}>
-              <Pressable
-                style={styles.confirmCancelBtn}
-                onPress={() => {
-                  if (guardandoAccionMaterial) return;
-                  setModalAccionMaterialVisible(false);
-                  setMaterialAccionTarget(null);
-                  setMaterialAccionCantidad('');
-                  setMaterialAccionCaja(DEFAULT_PENDING_BOX);
-                }}>
-                <Text style={styles.confirmCancelText}>Cancelar</Text>
-              </Pressable>
-              <Pressable
-                style={styles.confirmSaveBtn}
-                disabled={guardandoAccionMaterial}
-                onPress={confirmarAccionMaterial}>
-                <Text style={styles.confirmSaveText}>
-                  {guardandoAccionMaterial ? 'Guardando...' : materialAccionModo === 'incremento' ? 'Agregar' : 'Guardar cambio'}
+              <Text style={styles.confirmText}>
+                {materialAccionTarget?.nombre || 'Material'}
+              </Text>
+              <Text style={[styles.confirmText, { marginTop: -4, marginBottom: 12 }]}>
+                Cantidad actual: {Number(materialAccionTarget?.cantidad || 0)}
+              </Text>
+              <TextInput
+                style={styles.materialActionInput}
+                placeholder={materialAccionModo === 'incremento' ? 'Cantidad a sumar' : 'Nueva cantidad total'}
+                keyboardType="numeric"
+                value={materialAccionCantidad}
+                onChangeText={setMaterialAccionCantidad}
+              />
+              {materialAccionModo === 'ajuste' && materialAccionTarget ? (
+                <View style={styles.materialActionBoxSection}>
+                  <Text style={styles.materialActionBoxLabel}>Caja destino</Text>
+                  {cajasAbiertasEdicionMaterial.length ? (
+                    <View style={styles.materialActionBoxGroup}>
+                      <View style={[styles.materialActionBoxGroupHeader, styles.materialActionBoxGroupHeaderOpen]}>
+                        <Text style={[styles.materialActionBoxGroupTitle, styles.materialActionBoxGroupTitleOpen]}>
+                          Cajas abiertas
+                        </Text>
+                      </View>
+                      <View style={styles.materialActionBoxList}>
+                        {cajasAbiertasEdicionMaterial.map((caja) => {
+                          const seleccionada = caja === materialAccionCaja;
+                          return (
+                            <Pressable
+                              key={`material-action-box-open-${caja}`}
+                              style={[
+                                styles.materialActionBoxChip,
+                                seleccionada && styles.materialActionBoxChipActive,
+                              ]}
+                              onPress={() => setMaterialAccionCaja(caja)}>
+                              <Text
+                                style={[
+                                  styles.materialActionBoxChipText,
+                                  seleccionada && styles.materialActionBoxChipTextActive,
+                                ]}>
+                                {caja}
+                              </Text>
+                            </Pressable>
+                          );
+                        })}
+                      </View>
+                    </View>
+                  ) : null}
+                  {cajasCerradasEdicionMaterial.length ? (
+                    <View style={styles.materialActionBoxGroup}>
+                      <View style={[styles.materialActionBoxGroupHeader, styles.materialActionBoxGroupHeaderClosed]}>
+                        <Text style={[styles.materialActionBoxGroupTitle, styles.materialActionBoxGroupTitleClosed]}>
+                          Cajas cerradas
+                        </Text>
+                      </View>
+                      <View style={styles.materialActionBoxList}>
+                        {cajasCerradasEdicionMaterial.map((caja) => {
+                          const actual = caja === (materialAccionTarget.caja || DEFAULT_PENDING_BOX);
+                          const seleccionada = caja === materialAccionCaja;
+                          const bloqueada = !actual;
+                          return (
+                            <Pressable
+                              key={`material-action-box-closed-${caja}`}
+                              style={[
+                                styles.materialActionBoxChip,
+                                seleccionada && styles.materialActionBoxChipActive,
+                                bloqueada && styles.materialActionBoxChipDisabled,
+                              ]}
+                              onPress={() => setMaterialAccionCaja(caja)}
+                              disabled={bloqueada}>
+                              <Text
+                                style={[
+                                  styles.materialActionBoxChipText,
+                                  seleccionada && styles.materialActionBoxChipTextActive,
+                                  bloqueada && styles.materialActionBoxChipTextDisabled,
+                                ]}>
+                                {caja}
+                              </Text>
+                              <Text style={styles.materialActionBoxChipMeta}>
+                                {actual ? 'Actual cerrada' : 'Cerrada'}
+                              </Text>
+                            </Pressable>
+                          );
+                        })}
+                      </View>
+                    </View>
+                  ) : null}
+                </View>
+              ) : null}
+              {materialAccionModo === 'incremento' && materialAccionTarget ? (
+                <Text style={[styles.confirmText, { marginTop: 10 }]}>
+                  Total final: {Number(materialAccionTarget.cantidad || 0) + (Number(materialAccionCantidad || 0) || 0)}
                 </Text>
-              </Pressable>
-            </View>
+              ) : null}
+              <View style={styles.confirmActions}>
+                <Pressable
+                  style={styles.confirmCancelBtn}
+                  onPress={() => {
+                    if (guardandoAccionMaterial) return;
+                    setModalAccionMaterialVisible(false);
+                    setMaterialAccionTarget(null);
+                    setMaterialAccionCantidad('');
+                    setMaterialAccionCaja(DEFAULT_PENDING_BOX);
+                  }}>
+                  <Text style={styles.confirmCancelText}>Cancelar</Text>
+                </Pressable>
+                <Pressable
+                  style={styles.confirmSaveBtn}
+                  disabled={guardandoAccionMaterial}
+                  onPress={confirmarAccionMaterial}>
+                  <Text style={styles.confirmSaveText}>
+                    {guardandoAccionMaterial ? 'Guardando...' : materialAccionModo === 'incremento' ? 'Agregar' : 'Guardar cambio'}
+                  </Text>
+                </Pressable>
+              </View>
+            </ScrollView>
           </View>
         </View>
       </Modal>
@@ -2653,6 +2771,32 @@ const styles = StyleSheet.create({
     backgroundColor: '#ffffff',
     borderWidth: 1,
     borderColor: '#dbeafe',
+  },
+  materialSearchWrap: {
+    marginTop: 12,
+    marginBottom: 4,
+  },
+  materialSearchBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 11,
+    borderRadius: 14,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+    shadowColor: '#0f172a',
+    shadowOpacity: 0.04,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 1,
+  },
+  materialSearchInput: {
+    flex: 1,
+    color: '#0f172a',
+    fontSize: 14,
+    paddingVertical: 0,
   },
   materialSavedText: {
     fontSize: 11,
@@ -3023,6 +3167,15 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.12,
     shadowRadius: 14,
     elevation: 6,
+  },
+  confirmBoxScrollable: {
+    maxHeight: '78%',
+  },
+  confirmScroll: {
+    flexGrow: 0,
+  },
+  confirmScrollContent: {
+    paddingBottom: 2,
   },
   confirmIconWrap: {
     width: 36,
