@@ -1770,12 +1770,13 @@ export default function ArmadoScreen() {
                               ]}
                               value={eq.serie ? String(eq.serie) : ''}
                               onChangeText={(t) => {
-                                const conflictoLocal = obtenerConflictoSerieLocal(t, eq.id);
+                                const serieNumerica = String(t || '').replace(/\D+/g, '');
+                                const conflictoLocal = obtenerConflictoSerieLocal(serieNumerica, eq.id);
                                 if (conflictoLocal) {
-                                  mostrarSerieDuplicadaLocal(t, conflictoLocal.nombre);
+                                  mostrarSerieDuplicadaLocal(serieNumerica, conflictoLocal.nombre);
                                   return;
                                 }
-                                actualizarEquipo(eq.id, { serie: t, codigo: t.slice(0, 5), nombre: eq.nombre });
+                                actualizarEquipo(eq.id, { serie: serieNumerica, codigo: serieNumerica.slice(0, 5), nombre: eq.nombre });
                               }}
                               keyboardType="numeric"
                               editable={!esSoloLectura}
