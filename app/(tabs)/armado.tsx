@@ -18,6 +18,8 @@ type Equipo = {
   caja: string;
   serie: string;
   codigo: string;
+  estadoRegistro?: 'normal' | 'no_aplica' | 'pendiente';
+  observacionRegistro?: string;
 };
 
 type Material = {
@@ -30,6 +32,7 @@ type Material = {
 
 type MaterialActionMode = 'ajuste' | 'incremento';
 type CajaEstado = 'abierta' | 'cerrada';
+type EquipoRegistroEstado = 'normal' | 'no_aplica' | 'pendiente';
 type BoxSelectorTarget = {
   tipo: 'equipo' | 'material';
   id: string;
@@ -216,6 +219,15 @@ const obtenerCategoriaMaterial = (nombre?: string): MaterialCategory => {
   return 'Otros';
 };
 
+const normalizarEstadoRegistroEquipo = (value?: string): EquipoRegistroEstado => {
+  const estado = String(value || '')
+    .trim()
+    .toLowerCase();
+  if (estado === 'no_aplica') return 'no_aplica';
+  if (estado === 'pendiente') return 'pendiente';
+  return 'normal';
+};
+
 const EQUIPOS_MIGRADOS_A_MATERIALES = new Set(['bandeja rack - tornillos']);
 
 const GRUPOS_EQUIPOS: { titulo: string; items: string[] }[] = [
@@ -283,7 +295,11 @@ export default function ArmadoScreen() {
   const [modalPrefinalizadoVisible, setModalPrefinalizadoVisible] = useState(false);
   const [modalAccionMaterialVisible, setModalAccionMaterialVisible] = useState(false);
   const [modalSelectorCajaVisible, setModalSelectorCajaVisible] = useState(false);
+  const [modalEstadoEquipoVisible, setModalEstadoEquipoVisible] = useState(false);
+  const [modalPendienteEquipoVisible, setModalPendienteEquipoVisible] = useState(false);
   const [selectorCajaTarget, setSelectorCajaTarget] = useState<BoxSelectorTarget | null>(null);
+  const [equipoEstadoTarget, setEquipoEstadoTarget] = useState<Equipo | null>(null);
+  const [observacionPendienteEquipo, setObservacionPendienteEquipo] = useState('');
   const [materialAccionModo, setMaterialAccionModo] = useState<MaterialActionMode>('ajuste');
   const [materialAccionTarget, setMaterialAccionTarget] = useState<Material | null>(null);
   const [materialAccionCantidad, setMaterialAccionCantidad] = useState('');
@@ -535,6 +551,8 @@ export default function ArmadoScreen() {
             caja: DEFAULT_PENDING_BOX,
             serie: '',
             codigo: '',
+            estadoRegistro: 'normal',
+            observacionRegistro: '',
           } as Equipo;
         })
         .filter(Boolean) as Equipo[];
@@ -570,14 +588,32 @@ export default function ArmadoScreen() {
           : 0),
       0
     );
-    return { total, conSerie };
+    const noAplica = gruposRender.reduce(
+      (acc, g) =>
+        acc +
+        (Array.isArray(g?.items)
+          ? g.items.filter((it) => normalizarEstadoRegistroEquipo(it?.estadoRegistro) === 'no_aplica').length
+          : 0),
+      0
+    );
+    const pendientes = gruposRender.reduce(
+      (acc, g) =>
+        acc +
+        (Array.isArray(g?.items)
+          ? g.items.filter((it) => normalizarEstadoRegistroEquipo(it?.estadoRegistro) === 'pendiente').length
+          : 0),
+      0
+    );
+    return { total, conSerie, noAplica, pendientes, resueltos: conSerie + noAplica };
   }, [gruposRender]);
 
-  const hashEquipo = useCallback((e: Pick<Equipo, 'serie' | 'codigo' | 'caja'>) => {
+  const hashEquipo = useCallback((e: Pick<Equipo, 'serie' | 'codigo' | 'caja' | 'estadoRegistro' | 'observacionRegistro'>) => {
     const serie = String(e.serie || '').trim();
     const codigo = String(e.codigo || '').trim();
     const caja = String(e.caja || DEFAULT_PENDING_BOX).trim();
-    return `${serie}|${codigo}|${caja}`;
+    const estadoRegistro = normalizarEstadoRegistroEquipo(e.estadoRegistro);
+    const observacionRegistro = String(e.observacionRegistro || '').trim();
+    return `${serie}|${codigo}|${caja}|${estadoRegistro}|${observacionRegistro}`;
   }, []);
 
   const hashMaterial = useCallback((m: Pick<Material, 'cantidad' | 'caja'>) => {
@@ -586,7 +622,18 @@ export default function ArmadoScreen() {
     return `${cantidad}|${caja}`;
   }, []);
 
-  const equipoTieneContenido = useCallback((e: Pick<Equipo, 'serie' | 'codigo'>) => {
+  const equipoTieneContenido = useCallback((e: Pick<Equipo, 'serie' | 'codigo' | 'estadoRegistro' | 'observacionRegistro'>) => {
+    return (
+      String(e.serie || '').trim().length > 0 ||
+      String(e.codigo || '').trim().length > 0 ||
+      normalizarEstadoRegistroEquipo(e.estadoRegistro) !== 'normal' ||
+      String(e.observacionRegistro || '').trim().length > 0
+    );
+  }, []);
+
+  const equipoParticipaEnCajas = useCallback((e: Pick<Equipo, 'serie' | 'codigo' | 'estadoRegistro'>) => {
+    const estadoRegistro = normalizarEstadoRegistroEquipo(e.estadoRegistro);
+    if (estadoRegistro !== 'normal') return false;
     return String(e.serie || '').trim().length > 0 || String(e.codigo || '').trim().length > 0;
   }, []);
 
@@ -620,7 +667,7 @@ export default function ArmadoScreen() {
   const cajasConContenido = useMemo(() => {
     const set = new Set<string>();
     equipos.forEach((e) => {
-      if (!equipoTieneContenido(e)) return;
+      if (!equipoParticipaEnCajas(e)) return;
       set.add(String(e.caja || DEFAULT_PENDING_BOX).trim());
     });
     materiales.forEach((m) => {
@@ -628,7 +675,7 @@ export default function ArmadoScreen() {
       set.add(String(m.caja || DEFAULT_PENDING_BOX).trim());
     });
     return set;
-  }, [equipos, materiales, equipoTieneContenido, materialTieneContenido]);
+  }, [equipos, materiales, equipoParticipaEnCajas, materialTieneContenido]);
 
   const cajasVacias = useMemo(
     () => (cajas || []).filter((c) => !esCajaPendiente(c) && !cajasConContenido.has(String(c || '').trim())),
@@ -755,6 +802,8 @@ export default function ArmadoScreen() {
           .map((e: Equipo) => ({
             ...e,
             caja: normalizarCajaEquipoInicial(e.caja, e.serie, e.codigo),
+            estadoRegistro: normalizarEstadoRegistroEquipo((e as any).estadoRegistro),
+            observacionRegistro: String((e as any).observacionRegistro || ''),
           }));
         setEquipos(equiposCache);
         const snap: Record<string, string> = {};
@@ -832,6 +881,8 @@ export default function ArmadoScreen() {
               eq.numero_serie || eq.serie || '',
               eq.codigo || (eq.numero_serie ? String(eq.numero_serie).slice(0, 5) : '')
             ),
+            estadoRegistro: normalizarEstadoRegistroEquipo(eq.estado_registro || eq.estadoRegistro),
+            observacionRegistro: String(eq.observacion_registro || eq.observacionRegistro || ''),
           }));
         setEquipos(mapped);
         const snap: Record<string, string> = {};
@@ -851,6 +902,8 @@ export default function ArmadoScreen() {
           .map((eq: Equipo) => ({
             ...eq,
             caja: normalizarCajaEquipoInicial(eq.caja, eq.serie, eq.codigo),
+            estadoRegistro: normalizarEstadoRegistroEquipo((eq as any).estadoRegistro),
+            observacionRegistro: String((eq as any).observacionRegistro || ''),
           }));
         setEquipos(equiposCache);
         const snap: Record<string, string> = {};
@@ -1024,10 +1077,97 @@ export default function ArmadoScreen() {
               caja: cambios.caja || DEFAULT_PENDING_BOX,
               serie: cambios.serie || '',
               codigo: cambios.codigo || '',
+              estadoRegistro: normalizarEstadoRegistroEquipo(cambios.estadoRegistro),
+              observacionRegistro: String(cambios.observacionRegistro || ''),
             },
           ];
     });
   };
+
+  const abrirEstadoEquipo = useCallback((equipo: Equipo) => {
+    if (esSoloLectura) return;
+    setEquipoEstadoTarget(equipo);
+    setObservacionPendienteEquipo(String(equipo.observacionRegistro || ''));
+    setModalEstadoEquipoVisible(true);
+  }, [esSoloLectura]);
+
+  const aplicarEstadoEquipo = useCallback(
+    (equipo: Equipo, estadoRegistro: EquipoRegistroEstado, observacionRegistro = '') => {
+      const cambios: Partial<Equipo> = {
+        nombre: equipo.nombre,
+        estadoRegistro,
+        observacionRegistro: estadoRegistro === 'pendiente' ? observacionRegistro.trim() : '',
+      };
+      if (estadoRegistro === 'no_aplica') {
+        cambios.serie = '';
+        cambios.codigo = '';
+        cambios.caja = DEFAULT_PENDING_BOX;
+      }
+      if (estadoRegistro === 'pendiente') {
+        cambios.caja = DEFAULT_PENDING_BOX;
+      }
+      if (estadoRegistro === 'normal') {
+        cambios.observacionRegistro = '';
+      }
+      actualizarEquipo(equipo.id, cambios);
+    },
+    [actualizarEquipo]
+  );
+
+  const marcarEquipoNoAplica = useCallback(() => {
+    if (!equipoEstadoTarget) return;
+    Alert.alert(
+      'No aplica',
+      '¿Seguro que este equipo no aplica en este armado?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Si',
+          onPress: () => {
+            aplicarEstadoEquipo(equipoEstadoTarget, 'no_aplica');
+            setModalEstadoEquipoVisible(false);
+            setEquipoEstadoTarget(null);
+          },
+        },
+      ]
+    );
+  }, [aplicarEstadoEquipo, equipoEstadoTarget]);
+
+  const abrirPendienteEquipo = useCallback(() => {
+    if (!equipoEstadoTarget) return;
+    setObservacionPendienteEquipo(String(equipoEstadoTarget.observacionRegistro || ''));
+    setModalEstadoEquipoVisible(false);
+    setModalPendienteEquipoVisible(true);
+  }, [equipoEstadoTarget]);
+
+  const guardarPendienteEquipo = useCallback(() => {
+    if (!equipoEstadoTarget) return;
+    const observacion = String(observacionPendienteEquipo || '').trim();
+    if (!observacion) {
+      Alert.alert('Observacion requerida', 'Debes escribir una observacion para dejar este equipo pendiente.');
+      return;
+    }
+    aplicarEstadoEquipo(equipoEstadoTarget, 'pendiente', observacion);
+    setModalPendienteEquipoVisible(false);
+    setEquipoEstadoTarget(null);
+    setObservacionPendienteEquipo('');
+  }, [aplicarEstadoEquipo, equipoEstadoTarget, observacionPendienteEquipo]);
+
+  const limpiarEstadoEquipo = useCallback(() => {
+    if (!equipoEstadoTarget) return;
+    aplicarEstadoEquipo(equipoEstadoTarget, 'normal');
+    setModalEstadoEquipoVisible(false);
+    setModalPendienteEquipoVisible(false);
+    setEquipoEstadoTarget(null);
+    setObservacionPendienteEquipo('');
+  }, [aplicarEstadoEquipo, equipoEstadoTarget]);
+
+  const obtenerEstadoEquipoLabel = useCallback((estadoRegistro?: string) => {
+    const estado = normalizarEstadoRegistroEquipo(estadoRegistro);
+    if (estado === 'no_aplica') return 'No aplica';
+    if (estado === 'pendiente') return 'Pendiente';
+    return 'Normal';
+  }, []);
 
   const actualizarMaterial = (id: string, cambios: Partial<Material>) => {
     if (esSoloLectura) return;
@@ -1296,7 +1436,8 @@ export default function ArmadoScreen() {
         const previoHash = equiposSnapshotRef.current[idStr];
         const esNumerico = /^\d+$/.test(String(e.id));
         const serie = String(e.serie || '').trim();
-        if (serie && !seriesAprobadas.has(serie)) {
+        const estadoRegistro = normalizarEstadoRegistroEquipo(e.estadoRegistro);
+        if (estadoRegistro === 'normal' && serie && !seriesAprobadas.has(serie)) {
           try {
             const validacion = await validarSerieEquipo(serie, {
               ...(esNumerico ? { exclude_equipo_id: e.id } : {}),
@@ -1318,6 +1459,8 @@ export default function ArmadoScreen() {
             numero_serie: e.serie,
             codigo: e.codigo,
             caja: e.caja,
+            estado_registro: estadoRegistro,
+            observacion_registro: String(e.observacionRegistro || '').trim() || null,
             caja_tecnico_id: userId || undefined,
             armado_id: armadoId ? Number(armadoId) : undefined,
           };
@@ -1337,6 +1480,8 @@ export default function ArmadoScreen() {
             numero_serie: e.serie,
             codigo: e.codigo,
             caja: e.caja,
+            estado_registro: estadoRegistro,
+            observacion_registro: String(e.observacionRegistro || '').trim() || null,
             caja_tecnico_id: userId || undefined,
             armado_id: armadoId ? Number(armadoId) : undefined,
           };
@@ -1416,7 +1561,7 @@ export default function ArmadoScreen() {
         .sort((a, b) => numeroCaja(b) - numeroCaja(a))[0] ||
       restantes[0] ||
       DEFAULT_PENDING_BOX;
-    const equiposCount = equipos.filter((e) => (e.caja || DEFAULT_PENDING_BOX) === target && equipoTieneContenido(e)).length;
+    const equiposCount = equipos.filter((e) => (e.caja || DEFAULT_PENDING_BOX) === target && equipoParticipaEnCajas(e)).length;
     const materialesCount = materiales.filter((m) => (m.caja || DEFAULT_PENDING_BOX) === target && materialTieneContenido(m)).length;
     return {
       target,
@@ -1424,7 +1569,7 @@ export default function ArmadoScreen() {
       equipos: equiposCount,
       materiales: materialesCount,
     };
-  }, [cajas, equipoTieneContenido, equipos, materialTieneContenido, materiales]);
+  }, [cajas, equipoParticipaEnCajas, equipos, materialTieneContenido, materiales]);
 
   const abrirQuitarCaja = (targetCaja?: string) => {
     if (esSoloLectura) return;
@@ -1457,7 +1602,7 @@ export default function ArmadoScreen() {
     const renombrandoCajaPrincipal = tieneCajaPrincipalReal && cajaPrincipalRenombrada !== cajaPrincipalActual;
     const equiposPersistidosRenombrados = renombrandoCajaPrincipal
       ? equipos
-          .filter((e) => (e.caja || DEFAULT_PENDING_BOX) === cajaPrincipalActual && esIdPersistido(e.id) && equipoTieneContenido(e))
+          .filter((e) => (e.caja || DEFAULT_PENDING_BOX) === cajaPrincipalActual && esIdPersistido(e.id) && equipoParticipaEnCajas(e))
           .map((e) => ({
             id: e.id,
             data: {
@@ -1552,7 +1697,7 @@ export default function ArmadoScreen() {
       return;
     }
     const equiposPersistidosMovidos = equipos
-      .filter((e) => (e.caja || DEFAULT_PENDING_BOX) === target && esIdPersistido(e.id) && equipoTieneContenido(e))
+      .filter((e) => (e.caja || DEFAULT_PENDING_BOX) === target && esIdPersistido(e.id) && equipoParticipaEnCajas(e))
       .map((e) => ({
         id: e.id,
         data: {
@@ -1904,14 +2049,20 @@ export default function ArmadoScreen() {
                 <Ionicons name="hardware-chip-outline" size={18} color="#ffffff" />
               </View>
               <View style={{ flex: 1 }}>
-                <Text style={styles.summaryNumber}>{resumenEquipos.conSerie}</Text>
-                <Text style={styles.summaryLabel}>
-                  de {resumenEquipos.total} equipos con N serie
+                <View style={styles.summaryTitleRow}>
+                  <Text style={styles.summaryNumber}>{resumenEquipos.conSerie}</Text>
+                  <Text style={styles.summaryLabel}>N serie</Text>
+                </View>
+                <Text style={styles.summarySubLabel}>
+                  {resumenEquipos.resueltos} de {resumenEquipos.total} equipos resueltos
+                </Text>
+                <Text style={styles.summarySubMeta}>
+                  No aplica {resumenEquipos.noAplica} · Pendientes {resumenEquipos.pendientes}
                 </Text>
               </View>
               <View style={styles.summaryPercentWrap}>
                 <Text style={styles.summaryPercentText}>
-                  {resumenEquipos.total ? Math.round((resumenEquipos.conSerie * 100) / resumenEquipos.total) : 0}%
+                  {resumenEquipos.total ? Math.round((resumenEquipos.resueltos * 100) / resumenEquipos.total) : 0}%
                 </Text>
               </View>
             </View>
@@ -1954,39 +2105,90 @@ export default function ArmadoScreen() {
                       </View>
                     </Pressable>
                     {!colapsado && items.map((eq) => (
+                    (() => {
+                      const estadoRegistro = normalizarEstadoRegistroEquipo(eq.estadoRegistro);
+                      const esNoAplica = estadoRegistro === 'no_aplica';
+                      const esPendienteRegistro = estadoRegistro === 'pendiente';
+                      const esBloqueadoPorEstado = esNoAplica || esPendienteRegistro;
+                      const cajaEtiqueta = esNoAplica ? 'N/A' : esPendienteRegistro ? 'Pendiente' : (eq.caja || DEFAULT_PENDING_BOX);
+                      const estadoEtiqueta = obtenerEstadoEquipoLabel(estadoRegistro);
+                      const observacionPendiente = String(eq.observacionRegistro || '').trim();
+                      return (
                     <View
                         key={eq.id}
                         style={[
                           styles.card,
-                          eq.serie?.trim()
-                            ? { borderColor: '#93c5fd', backgroundColor: '#dbeafe', borderLeftColor: '#1d4ed8' }
-                            : { borderColor: palette.tabIconDefault, backgroundColor: '#ffffff' },
+                          esNoAplica
+                            ? styles.cardNoAplica
+                            : esPendienteRegistro
+                              ? styles.cardPendienteRegistro
+                              : eq.serie?.trim()
+                                ? { borderColor: '#93c5fd', backgroundColor: '#dbeafe', borderLeftColor: '#1d4ed8' }
+                                : { borderColor: palette.tabIconDefault, backgroundColor: '#ffffff' },
                         ]}>
                         <View style={styles.cardHeader}>
                           <View style={styles.cardHeaderMainCompact}>
-                            <Ionicons name="cube-outline" size={16} color="#0b3b8c" />
+                            <Ionicons name="cube-outline" size={16} color={esNoAplica ? '#6b7280' : esPendienteRegistro ? '#b45309' : '#0b3b8c'} />
                             <Text style={[styles.cardTitle, { color: '#0f172a' }]}>{eq.nombre}</Text>
+                            {esNoAplica ? (
+                              <View
+                                style={[
+                                  styles.equipoEstadoBadge,
+                                  styles.equipoEstadoBadgeNoAplica,
+                                ]}
+                              >
+                                <Text
+                                  style={[
+                                    styles.equipoEstadoBadgeText,
+                                    styles.equipoEstadoBadgeTextNoAplica,
+                                  ]}
+                                >
+                                  {estadoEtiqueta}
+                                </Text>
+                              </View>
+                            ) : null}
                           </View>
                           <View style={styles.cardHeaderAsideCompact}>
-	                          <Pressable
-	                            style={[
-	                              styles.cardBadge,
-	                              styles.cardBadgeCompact,
-	                              esCajaPendiente(eq.caja) ? styles.pendingBoxBadge : { borderColor: '#0b3b8c' },
-	                            ]}
-	                            onPress={() => abrirSelectorCaja({
-	                              tipo: 'equipo',
-	                              id: String(eq.id),
-	                              actual: eq.caja || DEFAULT_PENDING_BOX,
-	                              nombre: eq.nombre,
-	                            })}
-	                            disabled={esSoloLectura}>
-	                            <Text style={esCajaPendiente(eq.caja) ? styles.pendingBoxBadgeTextCompact : styles.cardBadgeTextCompact}>
-	                              {eq.caja || DEFAULT_PENDING_BOX}
-	                            </Text>
-	                          </Pressable>
+                            {esBloqueadoPorEstado ? (
+                              <View
+                                style={[
+                                  styles.cardBadge,
+                                  styles.cardBadgeCompact,
+                                  esNoAplica ? styles.naBadgeCompact : styles.pendingBoxBadge,
+                                ]}
+                              >
+                                <Text style={esNoAplica ? styles.naBadgeTextCompact : styles.pendingBoxBadgeTextCompact}>
+                                  {cajaEtiqueta}
+                                </Text>
+                              </View>
+                            ) : (
+                              <Pressable
+                                style={[
+                                  styles.cardBadge,
+                                  styles.cardBadgeCompact,
+                                  esCajaPendiente(eq.caja) ? styles.pendingBoxBadge : { borderColor: '#0b3b8c' },
+                                ]}
+                                onPress={() => abrirSelectorCaja({
+                                  tipo: 'equipo',
+                                  id: String(eq.id),
+                                  actual: eq.caja || DEFAULT_PENDING_BOX,
+                                  nombre: eq.nombre,
+                                })}
+                                disabled={esSoloLectura}>
+                                <Text style={esCajaPendiente(eq.caja) ? styles.pendingBoxBadgeTextCompact : styles.cardBadgeTextCompact}>
+                                  {cajaEtiqueta}
+                                </Text>
+                              </Pressable>
+                            )}
                           </View>
                         </View>
+
+                        {esPendienteRegistro && observacionPendiente ? (
+                          <View style={styles.equipoPendienteObsBox}>
+                            <Ionicons name="alert-circle-outline" size={13} color="#b45309" />
+                            <Text style={styles.equipoPendienteObsText}>{observacionPendiente}</Text>
+                          </View>
+                        ) : null}
 
                         <View style={styles.field}>
                           <Text style={[styles.label, { color: '#475569' }]}>N serie</Text>
@@ -1997,6 +2199,7 @@ export default function ArmadoScreen() {
                               style={[
                                 styles.input,
                                 { flex: 1, color: '#0f172a', borderColor: '#d7e3f4', backgroundColor: '#f8fbff', paddingRight: 12 },
+                                esBloqueadoPorEstado && styles.inputDisabledSoft,
                               ]}
                               value={eq.serie ? String(eq.serie) : ''}
                               onChangeText={(t) => {
@@ -2010,18 +2213,28 @@ export default function ArmadoScreen() {
                                 actualizarEquipo(eq.id, { serie: serieNumerica, codigo: serieNumerica.slice(0, 5), nombre: eq.nombre });
                               }}
                               keyboardType="numeric"
-                              editable={!esSoloLectura}
+                              editable={!esSoloLectura && !esBloqueadoPorEstado}
                             />
                             <Pressable
-                              style={[styles.camBtn, esSoloLectura && styles.btnDisabled]}
+                              style={[styles.camBtn, (esSoloLectura || esBloqueadoPorEstado) && styles.btnDisabled]}
                               onPress={() => abrirCamaraSerie(eq.id, eq.nombre)}
                               hitSlop={6}
-                              disabled={esSoloLectura}>
+                              disabled={esSoloLectura || esBloqueadoPorEstado}>
                               <Ionicons name="barcode-outline" size={18} color="#ffffff" />
+                            </Pressable>
+                            <Pressable
+                              style={[styles.estadoEquipoBtn, esSoloLectura && styles.btnDisabled]}
+                              onPress={() => abrirEstadoEquipo(eq)}
+                              hitSlop={6}
+                              disabled={esSoloLectura}
+                            >
+                              <Ionicons name="document-text-outline" size={17} color="#0b3b8c" />
                             </Pressable>
                           </View>
                         </View>
                       </View>
+                      );
+                    })()
                     ))}
                   </View>
                 );
@@ -2202,7 +2415,7 @@ export default function ArmadoScreen() {
 	              {cajas.map((caja) => {
 	                const estado = estadoCaja(caja);
 	                const esPendiente = esCajaPendiente(caja);
-		                const equiposCount = equipos.filter((e) => (e.caja || DEFAULT_PENDING_BOX) === caja && equipoTieneContenido(e)).length;
+		                const equiposCount = equipos.filter((e) => (e.caja || DEFAULT_PENDING_BOX) === caja && equipoParticipaEnCajas(e)).length;
 		                const materialesCount = materiales.filter((m) => (m.caja || DEFAULT_PENDING_BOX) === caja && materialTieneContenido(m)).length;
 	                return (
 	                  <View key={`manager-caja-${caja}`} style={styles.boxManagerRow}>
@@ -2559,6 +2772,82 @@ export default function ArmadoScreen() {
         </View>
       </Modal>
 
+      <Modal visible={modalEstadoEquipoVisible} animationType="fade" transparent>
+        <View style={styles.camOverlay}>
+          <View style={styles.confirmBox}>
+            <View style={[styles.confirmIconWrap, { backgroundColor: '#e0f2fe' }]}>
+              <Ionicons name="flag-outline" size={20} color="#0b3b8c" />
+            </View>
+            <Text style={styles.confirmTitle}>Estado del equipo</Text>
+            <Text style={styles.confirmText}>{equipoEstadoTarget?.nombre || 'Equipo'}</Text>
+            <View style={styles.estadoEquipoActionList}>
+              <Pressable style={styles.estadoEquipoActionBtn} onPress={marcarEquipoNoAplica}>
+                <Ionicons name="remove-circle-outline" size={18} color="#6b7280" />
+                <Text style={styles.estadoEquipoActionText}>Marcar como No aplica</Text>
+              </Pressable>
+              <Pressable style={styles.estadoEquipoActionBtn} onPress={abrirPendienteEquipo}>
+                <Ionicons name="time-outline" size={18} color="#b45309" />
+                <Text style={styles.estadoEquipoActionText}>Marcar como Pendiente</Text>
+              </Pressable>
+              <Pressable style={styles.estadoEquipoActionBtn} onPress={limpiarEstadoEquipo}>
+                <Ionicons name="refresh-outline" size={18} color="#0b3b8c" />
+                <Text style={styles.estadoEquipoActionText}>Quitar estado</Text>
+              </Pressable>
+            </View>
+            <View style={styles.confirmActions}>
+              <Pressable
+                style={styles.confirmCancelBtn}
+                onPress={() => {
+                  setModalEstadoEquipoVisible(false);
+                  setEquipoEstadoTarget(null);
+                }}>
+                <Text style={styles.confirmCancelText}>Cerrar</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={modalPendienteEquipoVisible} animationType="fade" transparent>
+        <View style={styles.camOverlay}>
+          <View style={[styles.confirmBox, styles.confirmBoxScrollable]}>
+            <ScrollView
+              style={styles.confirmScroll}
+              contentContainerStyle={styles.confirmScrollContent}
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled">
+              <View style={[styles.confirmIconWrap, { backgroundColor: '#fef3c7' }]}>
+                <Ionicons name="time-outline" size={20} color="#b45309" />
+              </View>
+              <Text style={styles.confirmTitle}>Marcar como pendiente</Text>
+              <Text style={styles.confirmText}>{equipoEstadoTarget?.nombre || 'Equipo'}</Text>
+              <TextInput
+                style={[styles.materialActionInput, styles.pendienteObservacionInput]}
+                placeholder="Escribe la observacion"
+                placeholderTextColor="#94a3b8"
+                value={observacionPendienteEquipo}
+                onChangeText={setObservacionPendienteEquipo}
+                multiline
+                textAlignVertical="top"
+              />
+              <View style={styles.confirmActions}>
+                <Pressable
+                  style={styles.confirmCancelBtn}
+                  onPress={() => {
+                    setModalPendienteEquipoVisible(false);
+                    setObservacionPendienteEquipo('');
+                  }}>
+                  <Text style={styles.confirmCancelText}>Cancelar</Text>
+                </Pressable>
+                <Pressable style={styles.confirmSaveBtn} onPress={guardarPendienteEquipo}>
+                  <Text style={styles.confirmSaveText}>Guardar pendiente</Text>
+                </Pressable>
+              </View>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
       <Modal visible={modalPrefinalizadoVisible} animationType="fade" transparent>
         <View style={styles.camOverlay}>
           <View style={styles.confirmBox}>
@@ -2679,10 +2968,27 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     color: '#0b3b8c',
   },
+  summaryTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: 8,
+  },
   summaryLabel: {
     fontSize: 12,
     color: '#0f172a',
     fontWeight: '700',
+  },
+  summarySubLabel: {
+    marginTop: 3,
+    fontSize: 11,
+    color: '#475569',
+    fontWeight: '600',
+  },
+  summarySubMeta: {
+    marginTop: 2,
+    fontSize: 11,
+    color: '#64748b',
+    fontWeight: '600',
   },
   summaryPercentWrap: {
     minWidth: 56,
@@ -2856,6 +3162,7 @@ const styles = StyleSheet.create({
     gap: 6,
     flex: 1,
     paddingRight: 8,
+    flexWrap: 'wrap',
   },
   cardHeaderAsideCompact: {
     alignItems: 'flex-end',
@@ -2968,6 +3275,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
+  },
+  estadoEquipoBtn: {
+    paddingHorizontal: 11,
+    paddingVertical: 10,
+    borderRadius: 10,
+    backgroundColor: '#e0ecff',
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
   },
   camBtn: {
     paddingHorizontal: 12,
@@ -3357,6 +3672,31 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: '#0f172a',
     backgroundColor: '#f8fafc',
+  },
+  pendienteObservacionInput: {
+    minHeight: 110,
+    paddingTop: 12,
+  },
+  estadoEquipoActionList: {
+    width: '100%',
+    gap: 10,
+    marginBottom: 14,
+  },
+  estadoEquipoActionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 12,
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+  },
+  estadoEquipoActionText: {
+    color: '#0f172a',
+    fontSize: 14,
+    fontWeight: '700',
   },
   materialActionBoxSection: {
     marginTop: 12,
@@ -3819,6 +4159,16 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 2,
   },
+  naBadgeCompact: {
+    borderColor: '#d1d5db',
+    backgroundColor: '#f3f4f6',
+  },
+  naBadgeTextCompact: {
+    color: '#4b5563',
+    fontWeight: '800',
+    fontSize: 10.5,
+    lineHeight: 12,
+  },
   cardBadgeTextDefault: {
     color: '#0b3b8c',
     fontWeight: '700',
@@ -3843,6 +4193,58 @@ const styles = StyleSheet.create({
     fontSize: 10.5,
     lineHeight: 12,
   },
+  equipoEstadoBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 999,
+    borderWidth: 1,
+  },
+  equipoEstadoBadgeNoAplica: {
+    backgroundColor: '#f3f4f6',
+    borderColor: '#d1d5db',
+  },
+  equipoEstadoBadgePendiente: {
+    backgroundColor: '#fff7ed',
+    borderColor: '#fdba74',
+  },
+  equipoEstadoBadgeText: {
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  equipoEstadoBadgeTextNoAplica: {
+    color: '#4b5563',
+  },
+  equipoEstadoBadgeTextPendiente: {
+    color: '#b45309',
+  },
+  cardNoAplica: {
+    borderColor: '#d1d5db',
+    backgroundColor: '#f8fafc',
+    borderLeftColor: '#9ca3af',
+  },
+  cardPendienteRegistro: {
+    borderColor: '#fed7aa',
+    backgroundColor: '#fff7ed',
+    borderLeftColor: '#f59e0b',
+  },
+  equipoPendienteObsBox: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 10,
+    backgroundColor: '#fffbeb',
+    borderWidth: 1,
+    borderColor: '#fde68a',
+  },
+  equipoPendienteObsText: {
+    flex: 1,
+    color: '#92400e',
+    fontSize: 12,
+    fontWeight: '600',
+    lineHeight: 16,
+  },
   field: {
     gap: 4,
     position: 'relative',
@@ -3858,6 +4260,10 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     fontSize: 14,
     backgroundColor: '#f8fafc',
+  },
+  inputDisabledSoft: {
+    backgroundColor: '#f3f4f6',
+    color: '#6b7280',
   },
   hero: {
     backgroundColor: '#1d4ed8',
