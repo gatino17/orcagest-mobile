@@ -90,7 +90,8 @@ const MATERIALES_PREDEF: string[] = [
   'Tirafondos',
   'Prensas',
   'Cancamo',
-  'Platina o angulo (Tira)',
+  'Platina',
+  'Angulo',
   'Disco Corte',
   'PG 21',
   'PG 16',
@@ -127,7 +128,93 @@ const MATERIALES_PREDEF: string[] = [
   'Mastil',
   'Riel U',
   'Perno Pasado',
+  'Planza',
+  'Mesa rack',
+  'utp planza',
+  'conector planza a corrugado',
+  'copla planza',
 ];
+
+const MATERIAL_CATEGORY_OPTIONS = ['Todas', 'Electricidad', 'Redes', 'Montaje', 'Canalizacion', 'Otros'] as const;
+type MaterialCategory = (typeof MATERIAL_CATEGORY_OPTIONS)[number];
+
+const normalizarNombreMaterial = (value?: string) =>
+  String(value || '')
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, ' ');
+
+const obtenerCategoriaMaterial = (nombre?: string): MaterialCategory => {
+  const n = normalizarNombreMaterial(nombre);
+  if (
+    n.startsWith('cable electrico') ||
+    ['enchufes macho', 'enchufes hembra', 'automatico 16a', 'cinta aislante super 33', 'cable power', 'cable ups', 'puente bateria'].includes(n)
+  ) {
+    return 'Electricidad';
+  }
+  if (
+    n.includes('utp') ||
+    n.includes('rj45') ||
+    n.includes('patchcore') ||
+    n.includes('hdmi') ||
+    n.includes('vga') ||
+    n.includes('usb') ||
+    n.includes('microsd') ||
+    n.includes('conector hembra red')
+  ) {
+    return 'Redes';
+  }
+  if (
+    n.includes('corrugado') ||
+    n.includes('canaleta') ||
+    n === 'pg 16' ||
+    n === 'pg 21' ||
+    n.startsWith('terminales rectos') ||
+    n.startsWith('terminal curvo') ||
+    n.includes('omega') ||
+    n.includes('cadie') ||
+    n.includes('planza') ||
+    n.includes('copla planza') ||
+    n.includes('conector planza a corrugado') ||
+    n.includes('regleta') ||
+    n.includes('caja de union') ||
+    n.includes('caja de camara') ||
+    n.includes('caja interior') ||
+    n.includes('caja de panel') ||
+    n.includes('cajas (fondo + tapa)')
+  ) {
+    return 'Canalizacion';
+  }
+  if (
+    n.includes('bandeja rack') ||
+    n.includes('mesa rack') ||
+    n.includes('amarras') ||
+    n.includes('pernos') ||
+    n.includes('perno pasado') ||
+    n.includes('tornillos') ||
+    n.includes('abrazaderas') ||
+    n.includes('autoperforantes') ||
+    n.includes('tirafondos') ||
+    n.includes('prensas') ||
+    n.includes('grilletes') ||
+    n.includes('guardacabos') ||
+    n.includes('kit de soporte') ||
+    n.includes('orejas tableros') ||
+    n.includes('mastil') ||
+    n.includes('riel u') ||
+    n === 'platina' ||
+    n === 'angulo' ||
+    n.includes('brazo ubiquiti') ||
+    n.includes('soporte led') ||
+    n.includes('grampas para cable') ||
+    n.includes('cinta doble contacto')
+  ) {
+    return 'Montaje';
+  }
+  return 'Otros';
+};
 
 const EQUIPOS_MIGRADOS_A_MATERIALES = new Set(['bandeja rack - tornillos']);
 
@@ -207,6 +294,7 @@ export default function ArmadoScreen() {
   const [cajasEstado, setCajasEstado] = useState<Record<string, CajaEstado>>({});
   const [busquedaEquipo, setBusquedaEquipo] = useState('');
   const [busquedaMaterial, setBusquedaMaterial] = useState('');
+  const [categoriaMaterial, setCategoriaMaterial] = useState<MaterialCategory>('Todas');
   const [resumenQuitarCaja, setResumenQuitarCaja] = useState({
     target: '',
     destino: '',
@@ -382,9 +470,14 @@ export default function ArmadoScreen() {
 
   const materialesFiltrados = useMemo(() => {
     const termino = normalizarTextoBusqueda(busquedaMaterial);
-    if (!termino) return materiales;
-    return materiales.filter((m) => normalizarTextoBusqueda(m?.nombre).includes(termino));
-  }, [busquedaMaterial, materiales, normalizarTextoBusqueda]);
+    return materiales.filter((m) => {
+      const coincideCategoria =
+        categoriaMaterial === 'Todas' || obtenerCategoriaMaterial(m?.nombre) === categoriaMaterial;
+      if (!coincideCategoria) return false;
+      if (!termino) return true;
+      return normalizarTextoBusqueda(m?.nombre).includes(termino);
+    });
+  }, [busquedaMaterial, categoriaMaterial, materiales, normalizarTextoBusqueda]);
 
   const formatFecha = (val?: string) => {
     if (!val) return '-';
@@ -1756,6 +1849,34 @@ export default function ArmadoScreen() {
 
         {tab === 'materiales' ? (
           <View style={styles.materialSearchWrap}>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.materialCategoryRow}
+            >
+              {MATERIAL_CATEGORY_OPTIONS.map((categoria) => {
+                const activa = categoriaMaterial === categoria;
+                return (
+                  <Pressable
+                    key={categoria}
+                    onPress={() => setCategoriaMaterial(categoria)}
+                    style={[
+                      styles.materialCategoryChip,
+                      activa && styles.materialCategoryChipActive,
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.materialCategoryChipText,
+                        activa && styles.materialCategoryChipTextActive,
+                      ]}
+                    >
+                      {categoria}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
             <View style={styles.materialSearchBox}>
               <Ionicons name="search-outline" size={16} color="#64748b" />
               <TextInput
@@ -2775,6 +2896,36 @@ const styles = StyleSheet.create({
   materialSearchWrap: {
     marginTop: 12,
     marginBottom: 4,
+  },
+  materialCategoryRow: {
+    gap: 8,
+    paddingBottom: 10,
+    paddingRight: 4,
+  },
+  materialCategoryChip: {
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    borderRadius: 999,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+  },
+  materialCategoryChipActive: {
+    backgroundColor: '#0f4aa3',
+    borderColor: '#0f4aa3',
+    shadowColor: '#0f172a',
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 2,
+  },
+  materialCategoryChipText: {
+    color: '#31507a',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  materialCategoryChipTextActive: {
+    color: '#ffffff',
   },
   materialSearchBox: {
     flexDirection: 'row',
