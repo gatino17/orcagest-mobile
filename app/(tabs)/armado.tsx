@@ -28,6 +28,8 @@ type Material = {
   cantidad: number;
   caja?: string;
   usuario?: string;
+  estadoRegistro?: 'normal' | 'no_aplica' | 'pendiente';
+  observacionRegistro?: string;
 };
 
 type MaterialActionMode = 'ajuste' | 'incremento';
@@ -228,12 +230,19 @@ const normalizarEstadoRegistroEquipo = (value?: string): EquipoRegistroEstado =>
   return 'normal';
 };
 
+const normalizarEstadoRegistroMaterial = (value?: string): EquipoRegistroEstado =>
+  normalizarEstadoRegistroEquipo(value);
+
 const EQUIPOS_MIGRADOS_A_MATERIALES = new Set(['bandeja rack - tornillos']);
 
 const GRUPOS_EQUIPOS: { titulo: string; items: string[] }[] = [
   {
     titulo: 'Oficina',
     items: ['PC', 'Monitor', 'Mouse', 'Teclado', 'Router', 'Switch', 'Switch (Cisco)', 'Switch raqueable', 'Camara Interior', 'Parlantes', 'Sensor Magnetico', 'Rack 9U - tuercas - tornillos', 'Zapatilla Rack (PDU)'],
+  },
+  {
+    titulo: 'Base tierra',
+    items: ['PC cliente', 'Rack 2', 'Ubiquiti TX', 'Ubiquiti RX'],
   },
   {
     titulo: 'Tablero Alarma',
@@ -297,9 +306,13 @@ export default function ArmadoScreen() {
   const [modalSelectorCajaVisible, setModalSelectorCajaVisible] = useState(false);
   const [modalEstadoEquipoVisible, setModalEstadoEquipoVisible] = useState(false);
   const [modalPendienteEquipoVisible, setModalPendienteEquipoVisible] = useState(false);
+  const [modalEstadoMaterialVisible, setModalEstadoMaterialVisible] = useState(false);
+  const [modalPendienteMaterialVisible, setModalPendienteMaterialVisible] = useState(false);
   const [selectorCajaTarget, setSelectorCajaTarget] = useState<BoxSelectorTarget | null>(null);
   const [equipoEstadoTarget, setEquipoEstadoTarget] = useState<Equipo | null>(null);
   const [observacionPendienteEquipo, setObservacionPendienteEquipo] = useState('');
+  const [materialEstadoTarget, setMaterialEstadoTarget] = useState<Material | null>(null);
+  const [observacionPendienteMaterial, setObservacionPendienteMaterial] = useState('');
   const [materialAccionModo, setMaterialAccionModo] = useState<MaterialActionMode>('ajuste');
   const [materialAccionTarget, setMaterialAccionTarget] = useState<Material | null>(null);
   const [materialAccionCantidad, setMaterialAccionCantidad] = useState('');
@@ -616,10 +629,12 @@ export default function ArmadoScreen() {
     return `${serie}|${codigo}|${caja}|${estadoRegistro}|${observacionRegistro}`;
   }, []);
 
-  const hashMaterial = useCallback((m: Pick<Material, 'cantidad' | 'caja'>) => {
+  const hashMaterial = useCallback((m: Pick<Material, 'cantidad' | 'caja' | 'estadoRegistro' | 'observacionRegistro'>) => {
     const cantidad = Number(m.cantidad) || 0;
     const caja = String(m.caja || DEFAULT_PENDING_BOX).trim();
-    return `${cantidad}|${caja}`;
+    const estadoRegistro = normalizarEstadoRegistroMaterial(m.estadoRegistro);
+    const observacionRegistro = String(m.observacionRegistro || '').trim();
+    return `${cantidad}|${caja}|${estadoRegistro}|${observacionRegistro}`;
   }, []);
 
   const equipoTieneContenido = useCallback((e: Pick<Equipo, 'serie' | 'codigo' | 'estadoRegistro' | 'observacionRegistro'>) => {
@@ -637,7 +652,17 @@ export default function ArmadoScreen() {
     return String(e.serie || '').trim().length > 0 || String(e.codigo || '').trim().length > 0;
   }, []);
 
-  const materialTieneContenido = useCallback((m: Pick<Material, 'cantidad'>) => {
+  const materialTieneContenido = useCallback((m: Pick<Material, 'cantidad' | 'estadoRegistro' | 'observacionRegistro'>) => {
+    return (
+      Number(m.cantidad || 0) > 0 ||
+      normalizarEstadoRegistroMaterial(m.estadoRegistro) !== 'normal' ||
+      String(m.observacionRegistro || '').trim().length > 0
+    );
+  }, []);
+
+  const materialParticipaEnCajas = useCallback((m: Pick<Material, 'cantidad' | 'estadoRegistro'>) => {
+    const estadoRegistro = normalizarEstadoRegistroMaterial(m.estadoRegistro);
+    if (estadoRegistro !== 'normal') return false;
     return Number(m.cantidad || 0) > 0;
   }, []);
 
@@ -671,11 +696,11 @@ export default function ArmadoScreen() {
       set.add(String(e.caja || DEFAULT_PENDING_BOX).trim());
     });
     materiales.forEach((m) => {
-      if (!materialTieneContenido(m)) return;
+      if (!materialParticipaEnCajas(m)) return;
       set.add(String(m.caja || DEFAULT_PENDING_BOX).trim());
     });
     return set;
-  }, [equipos, materiales, equipoParticipaEnCajas, materialTieneContenido]);
+  }, [equipos, materiales, equipoParticipaEnCajas, materialParticipaEnCajas]);
 
   const cajasVacias = useMemo(
     () => (cajas || []).filter((c) => !esCajaPendiente(c) && !cajasConContenido.has(String(c || '').trim())),
@@ -775,6 +800,8 @@ export default function ArmadoScreen() {
         cantidad,
         caja: normalizarCajaMaterialInicial(found?.caja, cantidad),
         usuario: found?.caja_tecnico_nombre || (found?.caja_tecnico_id ? `ID ${found.caja_tecnico_id}` : '') || found?.usuario || '',
+        estadoRegistro: normalizarEstadoRegistroMaterial(found?.estado_registro || found?.estadoRegistro),
+        observacionRegistro: String(found?.observacion_registro || found?.observacionRegistro || ''),
       };
     });
 
@@ -786,6 +813,8 @@ export default function ArmadoScreen() {
         nombre: m.nombre || `Material ${idx + 1}`,
         caja: normalizarCajaMaterialInicial(m.caja, Number(m.cantidad) || 0),
         usuario: m.caja_tecnico_nombre || (m.caja_tecnico_id ? `ID ${m.caja_tecnico_id}` : '') || m.usuario || '',
+        estadoRegistro: normalizarEstadoRegistroMaterial(m.estado_registro || m.estadoRegistro),
+        observacionRegistro: String(m.observacion_registro || m.observacionRegistro || ''),
       }));
 
     return [...base, ...extras];
@@ -816,6 +845,8 @@ export default function ArmadoScreen() {
         const materialesCache = cached.materiales.map((m: Material) => ({
           ...m,
           caja: normalizarCajaMaterialInicial(m.caja, m.cantidad),
+          estadoRegistro: normalizarEstadoRegistroMaterial((m as any).estadoRegistro),
+          observacionRegistro: String((m as any).observacionRegistro || ''),
         }));
         setMateriales(materialesCache);
         const snap: Record<string, string> = {};
@@ -1174,6 +1205,89 @@ export default function ArmadoScreen() {
     setMateriales((prev) => prev.map((m) => (m.id === id ? { ...m, ...cambios } : m)));
   };
 
+  const abrirEstadoMaterial = useCallback((material: Material) => {
+    if (esSoloLectura) return;
+    setMaterialEstadoTarget(material);
+    setObservacionPendienteMaterial(String(material.observacionRegistro || ''));
+    setModalEstadoMaterialVisible(true);
+  }, [esSoloLectura]);
+
+  const aplicarEstadoMaterial = useCallback(
+    (material: Material, estadoRegistro: EquipoRegistroEstado, observacionRegistro = '') => {
+      const cambios: Partial<Material> = {
+        estadoRegistro,
+        observacionRegistro: estadoRegistro === 'pendiente' ? observacionRegistro.trim() : '',
+      };
+      if (estadoRegistro === 'no_aplica') {
+        cambios.cantidad = 0;
+        cambios.caja = DEFAULT_PENDING_BOX;
+      }
+      if (estadoRegistro === 'pendiente') {
+        cambios.caja = DEFAULT_PENDING_BOX;
+      }
+      if (estadoRegistro === 'normal') {
+        cambios.observacionRegistro = '';
+      }
+      actualizarMaterial(String(material.id), cambios);
+    },
+    [actualizarMaterial]
+  );
+
+  const marcarMaterialNoAplica = useCallback(() => {
+    if (!materialEstadoTarget) return;
+    Alert.alert(
+      'No aplica',
+      '¿Seguro que este material no aplica en este armado?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Si',
+          onPress: () => {
+            aplicarEstadoMaterial(materialEstadoTarget, 'no_aplica');
+            setModalEstadoMaterialVisible(false);
+            setMaterialEstadoTarget(null);
+          },
+        },
+      ]
+    );
+  }, [aplicarEstadoMaterial, materialEstadoTarget]);
+
+  const abrirPendienteMaterial = useCallback(() => {
+    if (!materialEstadoTarget) return;
+    setObservacionPendienteMaterial(String(materialEstadoTarget.observacionRegistro || ''));
+    setModalEstadoMaterialVisible(false);
+    setModalPendienteMaterialVisible(true);
+  }, [materialEstadoTarget]);
+
+  const guardarPendienteMaterial = useCallback(() => {
+    if (!materialEstadoTarget) return;
+    const observacion = String(observacionPendienteMaterial || '').trim();
+    if (!observacion) {
+      Alert.alert('Observacion requerida', 'Debes escribir una observacion para dejar este material pendiente.');
+      return;
+    }
+    aplicarEstadoMaterial(materialEstadoTarget, 'pendiente', observacion);
+    setModalPendienteMaterialVisible(false);
+    setMaterialEstadoTarget(null);
+    setObservacionPendienteMaterial('');
+  }, [aplicarEstadoMaterial, materialEstadoTarget, observacionPendienteMaterial]);
+
+  const limpiarEstadoMaterial = useCallback(() => {
+    if (!materialEstadoTarget) return;
+    aplicarEstadoMaterial(materialEstadoTarget, 'normal');
+    setModalEstadoMaterialVisible(false);
+    setModalPendienteMaterialVisible(false);
+    setMaterialEstadoTarget(null);
+    setObservacionPendienteMaterial('');
+  }, [aplicarEstadoMaterial, materialEstadoTarget]);
+
+  const obtenerEstadoMaterialLabel = useCallback((estadoRegistro?: string) => {
+    const estado = normalizarEstadoRegistroMaterial(estadoRegistro);
+    if (estado === 'no_aplica') return 'No aplica';
+    if (estado === 'pendiente') return 'Pendiente';
+    return 'Normal';
+  }, []);
+
   const abrirSelectorCaja = useCallback((target: BoxSelectorTarget) => {
     if (esSoloLectura) return;
     setSelectorCajaTarget(target);
@@ -1295,6 +1409,8 @@ export default function ArmadoScreen() {
             ? materialAccionCaja || materialAccionTarget.caja || DEFAULT_PENDING_BOX
             : materialAccionTarget.caja || DEFAULT_PENDING_BOX,
         caja_tecnico_id: userId || undefined,
+        estado_registro: normalizarEstadoRegistroMaterial(materialAccionTarget.estadoRegistro),
+        observacion_registro: String(materialAccionTarget.observacionRegistro || '').trim() || null,
         accion_material: materialAccionModo,
         ...(materialAccionModo === 'incremento'
           ? { cantidad_delta: valor }
@@ -1396,6 +1512,8 @@ export default function ArmadoScreen() {
           cantidad: m.cantidad,
           caja: m.caja || DEFAULT_PENDING_BOX,
           caja_tecnico_id: userId || undefined,
+          estado_registro: normalizarEstadoRegistroMaterial(m.estadoRegistro),
+          observacion_registro: String(m.observacionRegistro || '').trim() || null,
         }));
       if (payload.length === 0) return;
       await saveMaterialesArmado(armadoId, payload);
@@ -1562,14 +1680,14 @@ export default function ArmadoScreen() {
       restantes[0] ||
       DEFAULT_PENDING_BOX;
     const equiposCount = equipos.filter((e) => (e.caja || DEFAULT_PENDING_BOX) === target && equipoParticipaEnCajas(e)).length;
-    const materialesCount = materiales.filter((m) => (m.caja || DEFAULT_PENDING_BOX) === target && materialTieneContenido(m)).length;
+    const materialesCount = materiales.filter((m) => (m.caja || DEFAULT_PENDING_BOX) === target && materialParticipaEnCajas(m)).length;
     return {
       target,
       destino,
       equipos: equiposCount,
       materiales: materialesCount,
     };
-  }, [cajas, equipoParticipaEnCajas, equipos, materialTieneContenido, materiales]);
+  }, [cajas, equipoParticipaEnCajas, equipos, materialParticipaEnCajas, materiales]);
 
   const abrirQuitarCaja = (targetCaja?: string) => {
     if (esSoloLectura) return;
@@ -1617,7 +1735,7 @@ export default function ArmadoScreen() {
       : [];
     const materialesPersistidosRenombrados = renombrandoCajaPrincipal
       ? materiales
-          .filter((m) => (m.caja || DEFAULT_PENDING_BOX) === cajaPrincipalActual && esIdPersistido(m.id) && materialTieneContenido(m))
+          .filter((m) => (m.caja || DEFAULT_PENDING_BOX) === cajaPrincipalActual && esIdPersistido(m.id) && materialParticipaEnCajas(m))
           .map((m) => ({
             id_material: m.id,
             nombre: m.nombre,
@@ -1710,7 +1828,7 @@ export default function ArmadoScreen() {
         next: { ...e, caja: destino },
       }));
     const materialesPersistidosMovidos = materiales
-      .filter((m) => (m.caja || DEFAULT_PENDING_BOX) === target && esIdPersistido(m.id) && materialTieneContenido(m))
+      .filter((m) => (m.caja || DEFAULT_PENDING_BOX) === target && esIdPersistido(m.id) && materialParticipaEnCajas(m))
       .map((m) => ({
         id_material: m.id,
         nombre: m.nombre,
@@ -2260,81 +2378,132 @@ export default function ArmadoScreen() {
                 {materialesFiltrados.map((m) => (
                   (() => {
 	                    const materialGuardado = materialEstaGuardado(m);
+                      const estadoRegistro = normalizarEstadoRegistroMaterial(m.estadoRegistro);
+                      const esNoAplica = estadoRegistro === 'no_aplica';
+                      const esPendienteRegistro = estadoRegistro === 'pendiente';
+                      const esBloqueadoPorEstado = esNoAplica || esPendienteRegistro;
+                      const estadoEtiqueta = obtenerEstadoMaterialLabel(estadoRegistro);
+                      const observacionPendiente = String(m.observacionRegistro || '').trim();
+                      const cajaEtiqueta = esNoAplica ? 'N/A' : esPendienteRegistro ? 'Pendiente' : (m.caja || DEFAULT_PENDING_BOX);
 	                    const tieneRegistro =
 	                      (m.usuario && String(m.usuario).trim().length > 0) ||
 	                      Number(m.cantidad || 0) > 0 ||
+                          esBloqueadoPorEstado ||
 	                      String(m.caja || DEFAULT_PENDING_BOX).trim() !== DEFAULT_PENDING_BOX;
-                    return (
-	                  <View
-	                    key={m.id}
-	                    style={[
-	                      styles.card,
-                      tieneRegistro
-                        ? { borderColor: '#93c5fd', backgroundColor: '#dbeafe', borderLeftColor: '#1d4ed8' }
-                        : { borderColor: palette.tabIconDefault, backgroundColor: '#ffffff' },
-	                    ]}>
-	                    <View style={styles.cardHeader}>
-	                      <View style={styles.materialHeaderMain}>
-	                        <Ionicons name="hammer-outline" size={16} color="#0b3b8c" />
-	                        <Text style={[styles.cardTitle, { color: '#0f172a' }]}>{m.nombre}</Text>
-	                      </View>
-	                      <View style={styles.materialHeaderAside}>
-	                        <View style={styles.materialCajaWrap}>
-		                          <Pressable
-		                            style={[
-		                              styles.cardBadge,
-                              styles.materialCardBadge,
-                              styles.cardBadgeCompact,
-                              esCajaPendiente(m.caja) ? styles.pendingBoxBadge : { borderColor: '#0b3b8c' },
-                            ]}
-		                            onPress={() => abrirSelectorCaja({
-		                              tipo: 'material',
-		                              id: String(m.id),
-		                              actual: m.caja || DEFAULT_PENDING_BOX,
-		                              nombre: m.nombre,
-		                            })}
-		                            disabled={esSoloLectura || materialGuardado}>
-	                            <Text style={esCajaPendiente(m.caja) ? styles.pendingBoxBadgeTextCompact : styles.materialCardBadgeText}>
-	                              {m.caja || DEFAULT_PENDING_BOX}
-	                            </Text>
-	                          </Pressable>
-	                        </View>
-	                        {materialGuardado ? <Text style={styles.materialSavedText}>Guardado</Text> : null}
-	                      </View>
-	                    </View>
-	                    <Text style={[styles.metaText, { color: '#0f172a' }]}>Cantidad:</Text>
-	                    <TextInput
-	                      placeholder={materialGuardado ? 'Edita con el icono' : '0'}
-                      keyboardType="numeric"
-                      value={m.cantidad !== undefined && m.cantidad !== null ? String(m.cantidad) : ''}
-                      onChangeText={(t) =>
-                        actualizarMaterial(m.id, {
-                          cantidad: Number(t) || 0,
-                          usuario: name || m.usuario,
-                        })
-                      }
-                      style={[
-                        styles.input,
-                        { color: '#0f172a', borderColor: '#d7e3f4', backgroundColor: materialGuardado ? '#eef2ff' : '#f8fbff' },
-	                      ]}
-	                      editable={!esSoloLectura && !materialGuardado}
-	                    />
-	                    <View style={styles.materialFooterRow}>
+	                    return (
+		                  <View
+		                    key={m.id}
+		                    style={[
+		                      styles.card,
+	                      esNoAplica
+                            ? styles.cardNoAplica
+                            : esPendienteRegistro
+                              ? styles.cardPendienteRegistro
+	                          : tieneRegistro
+	                            ? { borderColor: '#93c5fd', backgroundColor: '#dbeafe', borderLeftColor: '#1d4ed8' }
+	                            : { borderColor: palette.tabIconDefault, backgroundColor: '#ffffff' },
+		                    ]}>
+		                    <View style={styles.cardHeader}>
+		                      <View style={styles.materialHeaderMain}>
+		                        <Ionicons name="hammer-outline" size={16} color={esNoAplica ? '#6b7280' : esPendienteRegistro ? '#b45309' : '#0b3b8c'} />
+		                        <Text style={[styles.cardTitle, { color: '#0f172a' }]}>{m.nombre}</Text>
+                                {esNoAplica ? (
+                                  <View style={[styles.equipoEstadoBadge, styles.equipoEstadoBadgeNoAplica]}>
+                                    <Text style={[styles.equipoEstadoBadgeText, styles.equipoEstadoBadgeTextNoAplica]}>
+                                      {estadoEtiqueta}
+                                    </Text>
+                                  </View>
+                                ) : null}
+		                      </View>
+		                      <View style={styles.materialHeaderAside}>
+		                        <View style={styles.materialCajaWrap}>
+                                  {esBloqueadoPorEstado ? (
+			                            <View
+			                              style={[
+			                                styles.cardBadge,
+	                                styles.materialCardBadge,
+	                                styles.cardBadgeCompact,
+	                                esNoAplica ? styles.naBadgeCompact : styles.pendingBoxBadge,
+	                              ]}
+			                            >
+		                              <Text style={esNoAplica ? styles.naBadgeTextCompact : styles.pendingBoxBadgeTextCompact}>
+		                                {cajaEtiqueta}
+		                              </Text>
+		                            </View>
+                                  ) : (
+			                            <Pressable
+			                              style={[
+			                                styles.cardBadge,
+	                                styles.materialCardBadge,
+	                                styles.cardBadgeCompact,
+	                                esCajaPendiente(m.caja) ? styles.pendingBoxBadge : { borderColor: '#0b3b8c' },
+	                              ]}
+			                              onPress={() => abrirSelectorCaja({
+			                                tipo: 'material',
+			                                id: String(m.id),
+			                                actual: m.caja || DEFAULT_PENDING_BOX,
+			                                nombre: m.nombre,
+			                              })}
+			                              disabled={esSoloLectura || materialGuardado}>
+		                              <Text style={esCajaPendiente(m.caja) ? styles.pendingBoxBadgeTextCompact : styles.materialCardBadgeText}>
+		                                {cajaEtiqueta}
+		                              </Text>
+		                            </Pressable>
+                                  )}
+		                        </View>
+		                        {materialGuardado ? <Text style={styles.materialSavedText}>Guardado</Text> : null}
+		                      </View>
+		                    </View>
+                            {esPendienteRegistro && observacionPendiente ? (
+                              <View style={styles.equipoPendienteObsBox}>
+                                <Ionicons name="alert-circle-outline" size={13} color="#b45309" />
+                                <Text style={styles.equipoPendienteObsText}>{observacionPendiente}</Text>
+                              </View>
+                            ) : null}
+		                    <Text style={[styles.metaText, { color: '#0f172a' }]}>Cantidad:</Text>
+                            <View style={styles.inputScanRow}>
+		                      <TextInput
+		                        placeholder={materialGuardado ? 'Edita con el icono' : '0'}
+	                      keyboardType="numeric"
+	                      value={m.cantidad !== undefined && m.cantidad !== null ? String(m.cantidad) : ''}
+	                      onChangeText={(t) =>
+	                        actualizarMaterial(m.id, {
+	                          cantidad: Number(t) || 0,
+	                          usuario: name || m.usuario,
+	                        })
+	                      }
+	                      style={[
+	                        styles.input,
+	                        { flex: 1, color: '#0f172a', borderColor: '#d7e3f4', backgroundColor: materialGuardado ? '#eef2ff' : '#f8fbff' },
+                                esBloqueadoPorEstado && styles.inputDisabledSoft,
+		                      ]}
+		                        editable={!esSoloLectura && !materialGuardado && !esBloqueadoPorEstado}
+		                      />
+                              <Pressable
+                                style={[styles.estadoEquipoBtn, esSoloLectura && styles.btnDisabled]}
+                                onPress={() => abrirEstadoMaterial(m)}
+                                hitSlop={6}
+                                disabled={esSoloLectura}
+                              >
+                                <Ionicons name="document-text-outline" size={17} color="#0b3b8c" />
+                              </Pressable>
+                            </View>
+		                    <View style={styles.materialFooterRow}>
 	                      {m.usuario ? <Text style={[styles.metaText, styles.materialUserText]}>Por: {m.usuario}</Text> : <View />}
-	                      {materialGuardado ? (
-	                        <View style={styles.materialActionRow}>
-	                          <Pressable
-	                            style={styles.materialActionBtn}
-	                            onPress={() => abrirAccionMaterial(m, 'ajuste')}
-	                            disabled={esSoloLectura}>
-	                            <Ionicons name="checkmark-done-circle" size={18} color="#f59e0b" />
-	                          </Pressable>
-	                          <Pressable
-	                            style={styles.materialActionBtn}
-	                            onPress={() => abrirAccionMaterial(m, 'incremento')}
-	                            disabled={esSoloLectura}>
-	                            <Ionicons name="add-circle" size={18} color="#0b3b8c" />
-	                          </Pressable>
+		                      {materialGuardado ? (
+		                        <View style={styles.materialActionRow}>
+		                          <Pressable
+		                            style={[styles.materialActionBtn, (esSoloLectura || esBloqueadoPorEstado) && styles.btnDisabled]}
+		                            onPress={() => abrirAccionMaterial(m, 'ajuste')}
+		                            disabled={esSoloLectura || esBloqueadoPorEstado}>
+		                            <Ionicons name="checkmark-done-circle" size={18} color="#f59e0b" />
+		                          </Pressable>
+		                          <Pressable
+		                            style={[styles.materialActionBtn, (esSoloLectura || esBloqueadoPorEstado) && styles.btnDisabled]}
+		                            onPress={() => abrirAccionMaterial(m, 'incremento')}
+		                            disabled={esSoloLectura || esBloqueadoPorEstado}>
+		                            <Ionicons name="add-circle" size={18} color="#0b3b8c" />
+		                          </Pressable>
 	                        </View>
 	                      ) : null}
 	                    </View>
@@ -2416,7 +2585,7 @@ export default function ArmadoScreen() {
 	                const estado = estadoCaja(caja);
 	                const esPendiente = esCajaPendiente(caja);
 		                const equiposCount = equipos.filter((e) => (e.caja || DEFAULT_PENDING_BOX) === caja && equipoParticipaEnCajas(e)).length;
-		                const materialesCount = materiales.filter((m) => (m.caja || DEFAULT_PENDING_BOX) === caja && materialTieneContenido(m)).length;
+		                const materialesCount = materiales.filter((m) => (m.caja || DEFAULT_PENDING_BOX) === caja && materialParticipaEnCajas(m)).length;
 	                return (
 	                  <View key={`manager-caja-${caja}`} style={styles.boxManagerRow}>
 	                    <View style={styles.boxManagerRowTop}>
@@ -2840,6 +3009,82 @@ export default function ArmadoScreen() {
                   <Text style={styles.confirmCancelText}>Cancelar</Text>
                 </Pressable>
                 <Pressable style={styles.confirmSaveBtn} onPress={guardarPendienteEquipo}>
+                  <Text style={styles.confirmSaveText}>Guardar pendiente</Text>
+                </Pressable>
+              </View>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={modalEstadoMaterialVisible} animationType="fade" transparent>
+        <View style={styles.camOverlay}>
+          <View style={styles.confirmBox}>
+            <View style={[styles.confirmIconWrap, { backgroundColor: '#e0f2fe' }]}>
+              <Ionicons name="flag-outline" size={20} color="#0b3b8c" />
+            </View>
+            <Text style={styles.confirmTitle}>Estado del material</Text>
+            <Text style={styles.confirmText}>{materialEstadoTarget?.nombre || 'Material'}</Text>
+            <View style={styles.estadoEquipoActionList}>
+              <Pressable style={styles.estadoEquipoActionBtn} onPress={marcarMaterialNoAplica}>
+                <Ionicons name="remove-circle-outline" size={18} color="#6b7280" />
+                <Text style={styles.estadoEquipoActionText}>Marcar como No aplica</Text>
+              </Pressable>
+              <Pressable style={styles.estadoEquipoActionBtn} onPress={abrirPendienteMaterial}>
+                <Ionicons name="time-outline" size={18} color="#b45309" />
+                <Text style={styles.estadoEquipoActionText}>Marcar como Pendiente</Text>
+              </Pressable>
+              <Pressable style={styles.estadoEquipoActionBtn} onPress={limpiarEstadoMaterial}>
+                <Ionicons name="refresh-outline" size={18} color="#0b3b8c" />
+                <Text style={styles.estadoEquipoActionText}>Quitar estado</Text>
+              </Pressable>
+            </View>
+            <View style={styles.confirmActions}>
+              <Pressable
+                style={styles.confirmCancelBtn}
+                onPress={() => {
+                  setModalEstadoMaterialVisible(false);
+                  setMaterialEstadoTarget(null);
+                }}>
+                <Text style={styles.confirmCancelText}>Cerrar</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={modalPendienteMaterialVisible} animationType="fade" transparent>
+        <View style={styles.camOverlay}>
+          <View style={[styles.confirmBox, styles.confirmBoxScrollable]}>
+            <ScrollView
+              style={styles.confirmScroll}
+              contentContainerStyle={styles.confirmScrollContent}
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled">
+              <View style={[styles.confirmIconWrap, { backgroundColor: '#fef3c7' }]}>
+                <Ionicons name="time-outline" size={20} color="#b45309" />
+              </View>
+              <Text style={styles.confirmTitle}>Marcar como pendiente</Text>
+              <Text style={styles.confirmText}>{materialEstadoTarget?.nombre || 'Material'}</Text>
+              <TextInput
+                style={[styles.materialActionInput, styles.pendienteObservacionInput]}
+                placeholder="Escribe la observacion"
+                placeholderTextColor="#94a3b8"
+                value={observacionPendienteMaterial}
+                onChangeText={setObservacionPendienteMaterial}
+                multiline
+                textAlignVertical="top"
+              />
+              <View style={styles.confirmActions}>
+                <Pressable
+                  style={styles.confirmCancelBtn}
+                  onPress={() => {
+                    setModalPendienteMaterialVisible(false);
+                    setObservacionPendienteMaterial('');
+                  }}>
+                  <Text style={styles.confirmCancelText}>Cancelar</Text>
+                </Pressable>
+                <Pressable style={styles.confirmSaveBtn} onPress={guardarPendienteMaterial}>
                   <Text style={styles.confirmSaveText}>Guardar pendiente</Text>
                 </Pressable>
               </View>
