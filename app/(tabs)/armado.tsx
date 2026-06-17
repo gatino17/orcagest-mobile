@@ -134,7 +134,7 @@ const MATERIALES_PREDEF: string[] = [
   'Riel U',
   'Perno Pasado',
   'Planza',
-  'Mesa rack',
+  'Mesa respaldo',
   'utp planza',
   'conector planza a corrugado',
   'copla planza',
@@ -149,7 +149,14 @@ const normalizarNombreMaterial = (value?: string) =>
     .toLowerCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
-    .replace(/\s+/g, ' ');
+    .replace(/\s+/g, ' ')
+    .replace(/\bmesa rack\b/g, 'mesa respaldo');
+
+const canonizarNombreMaterial = (value?: string) => {
+  const texto = String(value || '').trim();
+  if (!texto) return '';
+  return normalizarNombreMaterial(texto) === 'mesa respaldo' ? 'Mesa respaldo' : texto;
+};
 
 const obtenerCategoriaMaterial = (nombre?: string): MaterialCategory => {
   const n = normalizarNombreMaterial(nombre);
@@ -194,7 +201,7 @@ const obtenerCategoriaMaterial = (nombre?: string): MaterialCategory => {
   }
   if (
     n.includes('bandeja rack') ||
-    n.includes('mesa rack') ||
+    n.includes('mesa respaldo') ||
     n.includes('amarras') ||
     n.includes('pernos') ||
     n.includes('perno pasado') ||
@@ -242,7 +249,7 @@ const GRUPOS_EQUIPOS: { titulo: string; items: string[] }[] = [
   },
   {
     titulo: 'Base tierra',
-    items: ['PC cliente', 'Rack 2', 'Ubiquiti TX', 'Ubiquiti RX'],
+    items: ['PC cliente', 'Rack 2', 'Ubiquiti TX', 'Ubiquiti RX', 'Pantalla'],
   },
   {
     titulo: 'Tablero Alarma',
@@ -293,6 +300,7 @@ export default function ArmadoScreen() {
   const [camPerm, requestCamPerm] = useCameraPermissions();
   const scannedOnce = useRef(false);
   const seriesConfirmadasRef = useRef<Set<string>>(new Set());
+  const equiposCreacionPendienteRef = useRef<Set<string>>(new Set());
   const ignoreNextRealtimeRefreshRef = useRef(false);
   const suppressRealtimeRefreshRef = useRef(false);
   const equiposSnapshotRef = useRef<Record<string, string>>({});
@@ -779,12 +787,7 @@ export default function ArmadoScreen() {
   );
 
   const mergeMateriales = useCallback((listaBackend: any[] = []): Material[] => {
-    const normalizar = (v: any) =>
-      String(v || '')
-        .trim()
-        .toLowerCase()
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '');
+    const normalizar = (v: any) => normalizarNombreMaterial(v);
     const mapa = new Map<string, any>();
     (listaBackend || []).forEach((m, idx) => {
       const key = normalizar(m.nombre || `mat-${idx}`);
@@ -796,7 +799,7 @@ export default function ArmadoScreen() {
       const cantidad = Number(found?.cantidad) || 0;
       return {
         id: String(found?.id_material || found?.id || `base-${idx}`),
-        nombre,
+        nombre: canonizarNombreMaterial(nombre),
         cantidad,
         caja: normalizarCajaMaterialInicial(found?.caja, cantidad),
         usuario: found?.caja_tecnico_nombre || (found?.caja_tecnico_id ? `ID ${found.caja_tecnico_id}` : '') || found?.usuario || '',
@@ -810,7 +813,7 @@ export default function ArmadoScreen() {
       .map((m: any, idx: number) => ({
         cantidad: Number(m.cantidad) || 0,
         id: String(m.id_material || m.id || `extra-${idx}`),
-        nombre: m.nombre || `Material ${idx + 1}`,
+        nombre: canonizarNombreMaterial(m.nombre || `Material ${idx + 1}`),
         caja: normalizarCajaMaterialInicial(m.caja, Number(m.cantidad) || 0),
         usuario: m.caja_tecnico_nombre || (m.caja_tecnico_id ? `ID ${m.caja_tecnico_id}` : '') || m.usuario || '',
         estadoRegistro: normalizarEstadoRegistroMaterial(m.estado_registro || m.estadoRegistro),
@@ -1389,6 +1392,34 @@ export default function ArmadoScreen() {
     [esSoloLectura, materialEstaGuardado]
   );
 
+  const persistirMaterialesEnSegundoPlano = useCallback(
+    (
+      payload: any[],
+      options?: {
+        recargarAlFinal?: boolean;
+        onSettled?: () => void;
+      }
+    ) => {
+      if (!armadoId || !payload.length) {
+        options?.onSettled?.();
+        return;
+      }
+      void (async () => {
+        try {
+          await saveMaterialesArmado(armadoId, payload);
+          if (options?.recargarAlFinal) {
+            await cargarMat({ silent: true });
+          }
+        } catch (_e) {
+          await enqueueOfflineOp('save_materiales', { armadoId, materiales: payload });
+        } finally {
+          options?.onSettled?.();
+        }
+      })();
+    },
+    [armadoId, cargarMat]
+  );
+
   const confirmarAccionMaterial = useCallback(async () => {
     if (!armadoId || !materialAccionTarget) return;
     const valor = Number(materialAccionCantidad || 0);
@@ -1419,23 +1450,44 @@ export default function ArmadoScreen() {
     ];
     try {
       setGuardandoAccionMaterial(true);
-      await saveMaterialesArmado(armadoId, payload);
+      const nextCantidad =
+        materialAccionModo === 'incremento'
+          ? Number(materialAccionTarget.cantidad || 0) + valor
+          : valor;
+      const nextCaja =
+        materialAccionModo === 'ajuste'
+          ? materialAccionCaja || materialAccionTarget.caja || DEFAULT_PENDING_BOX
+          : materialAccionTarget.caja || DEFAULT_PENDING_BOX;
+      const nextMaterial: Material = {
+        ...materialAccionTarget,
+        cantidad: nextCantidad,
+        caja: nextCaja,
+      };
+      const nextMateriales = materiales.map((m) =>
+        String(m.id) === String(materialAccionTarget.id) ? nextMaterial : m
+      );
+      setMateriales(nextMateriales);
+      materialesSnapshotRef.current = {
+        ...materialesSnapshotRef.current,
+        [String(materialAccionTarget.id)]: hashMaterial(nextMaterial),
+      };
+      void writeCache({ materiales: nextMateriales });
       setModalAccionMaterialVisible(false);
       setMaterialAccionTarget(null);
       setMaterialAccionCantidad('');
       setMaterialAccionCaja(DEFAULT_PENDING_BOX);
-      await cargarMat();
+      persistirMaterialesEnSegundoPlano(payload, {
+        onSettled: () => setGuardandoAccionMaterial(false),
+      });
     } catch (_e) {
-      await enqueueOfflineOp('save_materiales', { armadoId, materiales: payload });
       setModalAccionMaterialVisible(false);
       setMaterialAccionTarget(null);
       setMaterialAccionCantidad('');
       setMaterialAccionCaja(DEFAULT_PENDING_BOX);
-      Alert.alert('Sin conexion', 'La accion quedo pendiente para sincronizar.');
-    } finally {
       setGuardandoAccionMaterial(false);
+      Alert.alert('No se pudo preparar el cambio', 'Intenta nuevamente.');
     }
-  }, [armadoId, cargarMat, materialAccionCaja, materialAccionCantidad, materialAccionModo, materialAccionTarget, userId]);
+  }, [armadoId, hashMaterial, materiales, materialAccionCaja, materialAccionCantidad, materialAccionModo, materialAccionTarget, persistirMaterialesEnSegundoPlano, userId, writeCache]);
 
   const abrirCamaraSerie = (equipoId: string, nombre: string) => {
     if (esSoloLectura) return;
@@ -1488,7 +1540,6 @@ export default function ArmadoScreen() {
   const guardarMaterialesApp = async () => {
     if (esSoloLectura) return;
     if (!armadoId) return;
-    let payload: any[] = [];
     try {
       setGuardandoMat(true);
       if (cajasVacias.length) {
@@ -1497,7 +1548,7 @@ export default function ArmadoScreen() {
           `Se detectaron cajas sin elementos: ${cajasVacias.join(', ')}. Solo se guardaran cajas con contenido.`
         );
       }
-      payload = materiales
+      const materialesPendientes = materiales
         .filter((m) => {
           if (!materialTieneContenido(m)) return false;
           if (materialEstaGuardado(m)) return false;
@@ -1505,7 +1556,8 @@ export default function ArmadoScreen() {
           const actualHash = hashMaterial(m);
           const previoHash = materialesSnapshotRef.current[idStr];
           return previoHash !== actualHash;
-        })
+        });
+      const payload = materialesPendientes
         .map((m) => ({
           id_material: m.id,
           nombre: m.nombre,
@@ -1515,21 +1567,83 @@ export default function ArmadoScreen() {
           estado_registro: normalizarEstadoRegistroMaterial(m.estadoRegistro),
           observacion_registro: String(m.observacionRegistro || '').trim() || null,
         }));
-      if (payload.length === 0) return;
-      await saveMaterialesArmado(armadoId, payload);
-      await cargarMat();
+      if (payload.length === 0) {
+        setGuardandoMat(false);
+        return;
+      }
+      const nextSnap = { ...materialesSnapshotRef.current };
+      materialesPendientes.forEach((m) => {
+        nextSnap[String(m.id)] = hashMaterial(m);
+      });
+      materialesSnapshotRef.current = nextSnap;
+      void writeCache({ materiales });
+      persistirMaterialesEnSegundoPlano(payload, {
+        recargarAlFinal: true,
+        onSettled: () => setGuardandoMat(false),
+      });
     } catch (_e) {
-      await enqueueOfflineOp('save_materiales', { armadoId, materiales: payload });
-    } finally {
       setGuardandoMat(false);
     }
   };
+
+  const persistirEquiposEnSegundoPlano = useCallback(
+    (
+      ops: Array<
+        | { tipo: 'update'; id: string; data: Record<string, any> }
+        | { tipo: 'create'; localId: string; data: Record<string, any> }
+      >,
+      options?: {
+        onSettled?: () => void;
+      }
+    ) => {
+      if (!ops.length) {
+        options?.onSettled?.();
+        return;
+      }
+      suppressRealtimeRefreshRef.current = true;
+      void (async () => {
+        try {
+          await Promise.allSettled(
+            ops.map(async (op) => {
+              if (op.tipo === 'update') {
+                try {
+                  await updateEquipo(op.id, op.data);
+                } catch (_err) {
+                  await enqueueOfflineOp('update_equipo', { id_equipo: op.id, data: op.data });
+                }
+                return;
+              }
+              try {
+                await createEquipo(op.data);
+              } catch (_err) {
+                await enqueueOfflineOp('create_equipo', { data: op.data });
+              }
+            })
+          );
+          await Promise.all([
+            cargarEquipos({ silent: true }),
+            cargarMat({ silent: true }),
+          ]);
+        } finally {
+          ops.forEach((op) => {
+            if (op.tipo === 'create') {
+              equiposCreacionPendienteRef.current.delete(op.localId);
+            }
+          });
+          setTimeout(() => {
+            suppressRealtimeRefreshRef.current = false;
+          }, 1200);
+          options?.onSettled?.();
+        }
+      })();
+    },
+    [cargarEquipos, cargarMat]
+  );
 
   const guardarEquiposApp = async () => {
     if (esSoloLectura) return;
     try {
       setGuardandoEq(true);
-      suppressRealtimeRefreshRef.current = true;
       const seriesLocales = new Map<string, string>();
       for (const equipo of equipos) {
         const serieNormalizada = normalizarSerieLocal(equipo.serie);
@@ -1537,6 +1651,7 @@ export default function ArmadoScreen() {
         const previo = seriesLocales.get(serieNormalizada);
         if (previo && previo !== equipo.nombre) {
           mostrarSerieDuplicadaLocal(String(equipo.serie || '').trim(), previo);
+          setGuardandoEq(false);
           return;
         }
         seriesLocales.set(serieNormalizada, equipo.nombre);
@@ -1548,6 +1663,50 @@ export default function ArmadoScreen() {
           `Se detectaron cajas sin elementos: ${cajasVacias.join(', ')}. Solo se guardaran cajas con contenido.`
         );
       }
+      const updatesPendientes: Array<{ id: string; data: Record<string, any> }> = [];
+      const createsPendientes: Array<{ localId: string; data: Record<string, any> }> = [];
+      const equiposParaValidar = equipos.filter((e) => {
+        const idStr = String(e.id);
+        const actualHash = hashEquipo(e);
+        const previoHash = equiposSnapshotRef.current[idStr];
+        const esNumerico = /^\d+$/.test(String(e.id));
+        const tieneDatos = equipoTieneContenido(e);
+        if (esNumerico) return previoHash !== actualHash;
+        if (equiposCreacionPendienteRef.current.has(idStr)) return false;
+        return tieneDatos && previoHash !== actualHash;
+      });
+      const validacionesPendientes = equiposParaValidar
+        .filter((e) => {
+          const serie = String(e.serie || '').trim();
+          const estadoRegistro = normalizarEstadoRegistroEquipo(e.estadoRegistro);
+          return estadoRegistro === 'normal' && serie && !seriesAprobadas.has(serie);
+        })
+        .map(async (e) => {
+          const serie = String(e.serie || '').trim();
+          const esNumerico = /^\d+$/.test(String(e.id));
+          try {
+            const validacion = await validarSerieEquipo(serie, {
+              ...(esNumerico ? { exclude_equipo_id: e.id } : {}),
+              ...(centroId ? { centro_id: centroId } : {}),
+            });
+            return { equipo: e, validacion, serie };
+          } catch (_err) {
+            return { equipo: e, validacion: null, serie };
+          }
+        });
+      const resultadosValidacion = await Promise.all(validacionesPendientes);
+      const conflicto = resultadosValidacion.find((item) => item.validacion?.duplicado);
+      if (conflicto) {
+        mostrarSerieDuplicada(conflicto.serie, conflicto.validacion);
+        setGuardandoEq(false);
+        return;
+      }
+      resultadosValidacion.forEach((item) => {
+        if (item.serie) {
+          seriesAprobadas.add(item.serie);
+          seriesConfirmadasRef.current.add(item.serie);
+        }
+      });
       for (const e of equipos) {
         const idStr = String(e.id);
         const actualHash = hashEquipo(e);
@@ -1555,22 +1714,6 @@ export default function ArmadoScreen() {
         const esNumerico = /^\d+$/.test(String(e.id));
         const serie = String(e.serie || '').trim();
         const estadoRegistro = normalizarEstadoRegistroEquipo(e.estadoRegistro);
-        if (estadoRegistro === 'normal' && serie && !seriesAprobadas.has(serie)) {
-          try {
-            const validacion = await validarSerieEquipo(serie, {
-              ...(esNumerico ? { exclude_equipo_id: e.id } : {}),
-              ...(centroId ? { centro_id: centroId } : {}),
-            });
-            if (validacion?.duplicado) {
-              mostrarSerieDuplicada(serie, validacion);
-              continue;
-            }
-          } catch (_err) {
-            // Si no se puede validar (ej: sin red), no bloqueamos guardado.
-          }
-          seriesAprobadas.add(serie);
-          seriesConfirmadasRef.current.add(serie);
-        }
         if (esNumerico) {
           if (previoHash === actualHash) continue;
           const data = {
@@ -1582,16 +1725,12 @@ export default function ArmadoScreen() {
             caja_tecnico_id: userId || undefined,
             armado_id: armadoId ? Number(armadoId) : undefined,
           };
-          try {
-            await updateEquipo(e.id, data);
-          } catch (_err) {
-            await enqueueOfflineOp('update_equipo', { id_equipo: e.id, data });
-          }
+          updatesPendientes.push({ id: String(e.id), data });
           continue;
         }
         if (centroId) {
           const tieneDatos = equipoTieneContenido(e);
-          if (!tieneDatos) continue;
+          if (!tieneDatos || previoHash === actualHash || equiposCreacionPendienteRef.current.has(idStr)) continue;
           const data = {
             centro_id: centroId,
             nombre: e.nombre,
@@ -1603,23 +1742,41 @@ export default function ArmadoScreen() {
             caja_tecnico_id: userId || undefined,
             armado_id: armadoId ? Number(armadoId) : undefined,
           };
-          try {
-            await createEquipo(data);
-          } catch (_err) {
-            await enqueueOfflineOp('create_equipo', { data });
-          }
+          equiposCreacionPendienteRef.current.add(idStr);
+          createsPendientes.push({ localId: idStr, data });
         }
       }
-      await Promise.all([
-        cargarEquipos({ silent: true }),
-        cargarMat({ silent: true }),
-      ]);
+      if (!updatesPendientes.length && !createsPendientes.length) {
+        setGuardandoEq(false);
+        return;
+      }
+      const nextSnap = { ...equiposSnapshotRef.current };
+      equipos.forEach((e) => {
+        const idStr = String(e.id);
+        const actualHash = hashEquipo(e);
+        const previoHash = equiposSnapshotRef.current[idStr];
+        const esNumerico = /^\d+$/.test(String(e.id));
+        const tieneDatos = equipoTieneContenido(e);
+        const debePersistir =
+          (esNumerico && previoHash !== actualHash) ||
+          (!esNumerico && tieneDatos && previoHash !== actualHash);
+        if (debePersistir) {
+          nextSnap[idStr] = actualHash;
+        }
+      });
+      equiposSnapshotRef.current = nextSnap;
+      void writeCache({ equipos });
+      persistirEquiposEnSegundoPlano(
+        [
+          ...updatesPendientes.map((item) => ({ tipo: 'update' as const, ...item })),
+          ...createsPendientes.map((item) => ({ tipo: 'create' as const, ...item })),
+        ],
+        {
+          onSettled: () => setGuardandoEq(false),
+        }
+      );
     } catch (_e) {
       // silencioso
-    } finally {
-      setTimeout(() => {
-        suppressRealtimeRefreshRef.current = false;
-      }, 1200);
       setGuardandoEq(false);
     }
   };
