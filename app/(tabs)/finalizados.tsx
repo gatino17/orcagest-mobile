@@ -165,7 +165,7 @@ export default function FinalizadosScreen() {
             <View style={styles.rowWrap}>
               <ThemedText style={styles.meta}>Asignado: {formatFecha(a.fecha_asignacion || a.created_at)}</ThemedText>
               <ThemedText style={styles.meta}>Cierre: {formatFecha(a.fecha_cierre)}</ThemedText>
-              <ThemedText style={styles.meta}>Cajas: {a.total_cajas ?? 0}</ThemedText>
+              <ThemedText style={styles.meta}>Bultos: {a.total_cajas ?? 0}</ThemedText>
             </View>
 
             <View style={styles.actions}>

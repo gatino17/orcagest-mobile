@@ -45,6 +45,15 @@ type BoxSelectorTarget = {
 const DEFAULT_PENDING_BOX = 'Pendiente de caja';
 const DEFAULT_FIRST_BOX = 'Caja 1';
 
+const etiquetaBulto = (value?: string) => {
+  const raw = String(value || '').trim();
+  if (!raw) return 'Pendiente de bulto';
+  if (raw.toLowerCase() === DEFAULT_PENDING_BOX.toLowerCase()) return 'Pendiente de bulto';
+  const match = raw.match(/^Caja(\s*\d+(?:\s*-\s*.*)?)$/i);
+  if (match) return `Bulto${match[1]}`;
+  return raw;
+};
+
 const MATERIALES_PREDEF: string[] = [
   'Cable Electrico 3 x 1,5mm',
   'Cable Electrico 3 x 0,75mm',
@@ -2092,7 +2101,7 @@ export default function ArmadoScreen() {
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.heroTitle}>Armado de equipos</Text>
-              <Text style={styles.heroSubtitle}>Completa serie y cajas para este armado</Text>
+              <Text style={styles.heroSubtitle}>Completa serie y bultos para este armado</Text>
             </View>
             <View style={styles.heroBadge}>
               <Ionicons name="checkmark-done-outline" size={14} color="#0b3b8c" />
@@ -2123,7 +2132,7 @@ export default function ArmadoScreen() {
               ) : null}
             </View>
             <View style={styles.cajasWrap}>
-              <Text style={styles.cajasLabel}>Total cajas</Text>
+              <Text style={styles.cajasLabel}>Total bultos</Text>
               <View style={styles.cajasOrbit}>
                 <View style={styles.cajasRingOuter} />
                 <View style={styles.cajasRingInner} />
@@ -2241,7 +2250,7 @@ export default function ArmadoScreen() {
             onPress={abrirGestionCajas}
             disabled={esSoloLectura}>
             <Ionicons name="file-tray-full-outline" size={16} color="#0b3b8c" />
-            <Text style={styles.addBoxText}>Cajas</Text>
+            <Text style={styles.addBoxText}>Bultos</Text>
           </Pressable>
         </View>
 
@@ -2385,7 +2394,7 @@ export default function ArmadoScreen() {
                       const esNoAplica = estadoRegistro === 'no_aplica';
                       const esPendienteRegistro = estadoRegistro === 'pendiente';
                       const esBloqueadoPorEstado = esNoAplica || esPendienteRegistro;
-                      const cajaEtiqueta = esNoAplica ? 'N/A' : esPendienteRegistro ? 'Pendiente' : (eq.caja || DEFAULT_PENDING_BOX);
+                      const cajaEtiqueta = esNoAplica ? 'N/A' : esPendienteRegistro ? 'Pendiente' : etiquetaBulto(eq.caja || DEFAULT_PENDING_BOX);
                       const estadoEtiqueta = obtenerEstadoEquipoLabel(estadoRegistro);
                       const observacionPendiente = String(eq.observacionRegistro || '').trim();
                       return (
@@ -2541,7 +2550,7 @@ export default function ArmadoScreen() {
                       const esBloqueadoPorEstado = esNoAplica || esPendienteRegistro;
                       const estadoEtiqueta = obtenerEstadoMaterialLabel(estadoRegistro);
                       const observacionPendiente = String(m.observacionRegistro || '').trim();
-                      const cajaEtiqueta = esNoAplica ? 'N/A' : esPendienteRegistro ? 'Pendiente' : (m.caja || DEFAULT_PENDING_BOX);
+                      const cajaEtiqueta = esNoAplica ? 'N/A' : esPendienteRegistro ? 'Pendiente' : etiquetaBulto(m.caja || DEFAULT_PENDING_BOX);
 	                    const tieneRegistro =
 	                      (m.usuario && String(m.usuario).trim().length > 0) ||
 	                      Number(m.cantidad || 0) > 0 ||
@@ -2724,18 +2733,18 @@ export default function ArmadoScreen() {
             <View style={styles.boxSelectorHeader}>
               <View style={styles.boxSelectorTitleWrap}>
                 <Ionicons name="file-tray-full-outline" size={18} color="#0b3b8c" />
-                <Text style={styles.boxSelectorTitle}>Cajas</Text>
+                <Text style={styles.boxSelectorTitle}>Bultos</Text>
               </View>
               <Pressable onPress={() => setModalGestionCajasVisible(false)}>
                 <Ionicons name="close-circle" size={24} color="#64748b" />
               </Pressable>
             </View>
             <Text style={styles.boxSelectorText}>
-              Administra nombres, estado y eliminacion de cajas del armado.
+              Administra nombres, estado y eliminacion de bultos del armado.
             </Text>
             <Pressable style={styles.boxManagerAddBtn} onPress={agregarCaja}>
               <Ionicons name="add-circle-outline" size={18} color="#ffffff" />
-              <Text style={styles.boxManagerAddText}>Agregar caja</Text>
+              <Text style={styles.boxManagerAddText}>Agregar bulto</Text>
             </Pressable>
             <ScrollView style={styles.boxManagerList} contentContainerStyle={styles.boxSelectorListContent}>
 	              {cajas.map((caja) => {
@@ -2750,7 +2759,7 @@ export default function ArmadoScreen() {
 	                        <View style={styles.boxManagerTitleRow}>
 	                          <View style={styles.boxSelectorOptionLeft}>
 	                            <Ionicons name="cube-outline" size={16} color="#0b3b8c" />
-	                            <Text style={styles.boxSelectorOptionText}>{caja}</Text>
+                            <Text style={styles.boxSelectorOptionText}>{etiquetaBulto(caja)}</Text>
 	                          </View>
 	                          {cajas.length > 1 && !esPendiente ? (
 	                            <Pressable
@@ -2800,7 +2809,7 @@ export default function ArmadoScreen() {
 	                              styles.boxManagerActionText,
 	                              estado === 'cerrada' ? styles.boxManagerActionTextInfo : styles.boxManagerActionTextWarn,
 	                            ]}>
-	                            {estado === 'cerrada' ? 'Reabrir caja' : 'Cerrar caja'}
+                            {estado === 'cerrada' ? 'Reabrir bulto' : 'Cerrar bulto'}
 	                          </Text>
 	                        </Pressable>
 	                      ) : null}
@@ -2816,18 +2825,18 @@ export default function ArmadoScreen() {
       <Modal visible={modalCajasVisible} animationType="fade" transparent>
         <View style={styles.camOverlay}>
 	          <View style={[styles.camBox, styles.boxNameModal]}>
-	            <Text style={styles.boxNameModalTitle}>Agregar caja</Text>
+	            <Text style={styles.boxNameModalTitle}>Agregar bulto</Text>
 	            <Text style={styles.boxNameModalText}>
 	              {tieneCajaPrincipalReal
-	                ? 'Puedes renombrar la Caja 1 actual y crear una nueva caja manteniendo el formato del sistema.'
-	                : 'Los nuevos elementos quedaran en Pendiente de caja hasta que los asignes a una caja real.'}
+	                ? 'Puedes renombrar el Bulto 1 actual y crear un nuevo bulto manteniendo el formato del sistema.'
+	                : 'Los nuevos elementos quedaran en Pendiente de bulto hasta que los asignes a un bulto real.'}
 	            </Text>
 	            {tieneCajaPrincipalReal ? (
 	              <View style={styles.boxNameSection}>
-	                <Text style={styles.boxNameSectionLabel}>Caja principal</Text>
+	                <Text style={styles.boxNameSectionLabel}>Bulto principal</Text>
 	                <View style={styles.boxNamePreview}>
 	                  <Ionicons name="cube-outline" size={16} color="#0b3b8c" />
-	                  <Text style={styles.boxNamePreviewText}>{cajaPrincipalPreview}</Text>
+	                  <Text style={styles.boxNamePreviewText}>{etiquetaBulto(cajaPrincipalPreview)}</Text>
 	                </View>
 	                <TextInput
 	                  value={descripcionCajaPrincipal}
@@ -2840,15 +2849,15 @@ export default function ArmadoScreen() {
 	              </View>
 	            ) : null}
 	            <View style={styles.boxNameSection}>
-	              <Text style={styles.boxNameSectionLabel}>{tieneCajaPrincipalReal ? 'Nueva caja' : 'Primera caja real'}</Text>
+	              <Text style={styles.boxNameSectionLabel}>{tieneCajaPrincipalReal ? 'Nuevo bulto' : 'Primer bulto real'}</Text>
 	              <Text style={styles.boxNameModalText}>
-	                Se creara <Text style={styles.boxNameModalStrong}>{siguienteCajaBase}</Text>. Si quieres, agrega una descripcion como
+	                Se creara <Text style={styles.boxNameModalStrong}>{etiquetaBulto(siguienteCajaBase)}</Text>. Si quieres, agrega una descripcion como
 	                {' '}materiales. Si lo dejas vacio, se creara con el nombre base.
 	              </Text>
 	            </View>
             <View style={styles.boxNamePreview}>
               <Ionicons name="cube-outline" size={16} color="#0b3b8c" />
-              <Text style={styles.boxNamePreviewText}>{cajaNuevaPreview}</Text>
+	              <Text style={styles.boxNamePreviewText}>{etiquetaBulto(cajaNuevaPreview)}</Text>
             </View>
             <TextInput
               value={descripcionCajaNueva}
@@ -2876,7 +2885,7 @@ export default function ArmadoScreen() {
             <View style={styles.boxSelectorHeader}>
               <View style={styles.boxSelectorTitleWrap}>
                 <Ionicons name="file-tray-full-outline" size={18} color="#0b3b8c" />
-                <Text style={styles.boxSelectorTitle}>Seleccionar caja</Text>
+                <Text style={styles.boxSelectorTitle}>Seleccionar bulto</Text>
               </View>
               <Pressable
                 onPress={() => {
@@ -2888,7 +2897,7 @@ export default function ArmadoScreen() {
             </View>
 	            <Text style={styles.boxSelectorText}>
 	              {selectorCajaTarget?.nombre || 'Elemento'} actualmente esta en{' '}
-	              <Text style={styles.boxNameModalStrong}>{selectorCajaTarget?.actual || DEFAULT_PENDING_BOX}</Text>
+	              <Text style={styles.boxNameModalStrong}>{etiquetaBulto(selectorCajaTarget?.actual || DEFAULT_PENDING_BOX)}</Text>
 	            </Text>
             <ScrollView style={styles.boxSelectorList} contentContainerStyle={styles.boxSelectorListContent}>
               {cajas.map((caja) => {
@@ -2917,7 +2926,7 @@ export default function ArmadoScreen() {
                           activa && styles.boxSelectorOptionTextActive,
                           bloqueada && styles.boxSelectorOptionTextDisabled,
                         ]}>
-                        {caja}
+	                        {etiquetaBulto(caja)}
                       </Text>
                     </View>
                     <View style={styles.boxSelectorRight}>
@@ -2994,12 +3003,12 @@ export default function ArmadoScreen() {
               />
               {materialAccionModo === 'ajuste' && materialAccionTarget ? (
                 <View style={styles.materialActionBoxSection}>
-                  <Text style={styles.materialActionBoxLabel}>Caja destino</Text>
+                  <Text style={styles.materialActionBoxLabel}>Bulto destino</Text>
                   {cajasAbiertasEdicionMaterial.length ? (
                     <View style={styles.materialActionBoxGroup}>
                       <View style={[styles.materialActionBoxGroupHeader, styles.materialActionBoxGroupHeaderOpen]}>
                         <Text style={[styles.materialActionBoxGroupTitle, styles.materialActionBoxGroupTitleOpen]}>
-                          Cajas abiertas
+                          Bultos abiertos
                         </Text>
                       </View>
                       <View style={styles.materialActionBoxList}>
@@ -3018,7 +3027,7 @@ export default function ArmadoScreen() {
                                   styles.materialActionBoxChipText,
                                   seleccionada && styles.materialActionBoxChipTextActive,
                                 ]}>
-                                {caja}
+                                {etiquetaBulto(caja)}
                               </Text>
                             </Pressable>
                           );
@@ -3030,7 +3039,7 @@ export default function ArmadoScreen() {
                     <View style={styles.materialActionBoxGroup}>
                       <View style={[styles.materialActionBoxGroupHeader, styles.materialActionBoxGroupHeaderClosed]}>
                         <Text style={[styles.materialActionBoxGroupTitle, styles.materialActionBoxGroupTitleClosed]}>
-                          Cajas cerradas
+                          Bultos cerrados
                         </Text>
                       </View>
                       <View style={styles.materialActionBoxList}>
@@ -3054,7 +3063,7 @@ export default function ArmadoScreen() {
                                   seleccionada && styles.materialActionBoxChipTextActive,
                                   bloqueada && styles.materialActionBoxChipTextDisabled,
                                 ]}>
-                                {caja}
+                                {etiquetaBulto(caja)}
                               </Text>
                               <Text style={styles.materialActionBoxChipMeta}>
                                 {actual ? 'Actual cerrada' : 'Cerrada'}
@@ -3282,11 +3291,11 @@ export default function ArmadoScreen() {
             <View style={[styles.confirmIconWrap, { backgroundColor: '#fee2e2' }]}>
               <Ionicons name="trash-outline" size={20} color="#b91c1c" />
             </View>
-            <Text style={styles.confirmTitle}>Quitar {resumenQuitarCaja.target}</Text>
+	            <Text style={styles.confirmTitle}>Quitar {etiquetaBulto(resumenQuitarCaja.target)}</Text>
             <Text style={styles.confirmText}>
-              Los elementos de esa caja se moveran a {resumenQuitarCaja.destino}.
+	              Los elementos de ese bulto se moveran a {etiquetaBulto(resumenQuitarCaja.destino)}.
             </Text>
-            <Text style={[styles.boxNameSectionLabel, { marginBottom: 8 }]}>Selecciona la caja a quitar</Text>
+	            <Text style={[styles.boxNameSectionLabel, { marginBottom: 8 }]}>Selecciona el bulto a quitar</Text>
             <ScrollView style={styles.removeBoxList} contentContainerStyle={styles.boxSelectorListContent}>
               {cajas.map((caja) => {
                 const activa = caja === resumenQuitarCaja.target;
@@ -3301,7 +3310,7 @@ export default function ArmadoScreen() {
                         size={18}
                         color={activa ? '#2563eb' : '#0b3b8c'}
                       />
-                      <Text style={[styles.boxSelectorOptionText, activa && styles.boxSelectorOptionTextActive]}>{caja}</Text>
+	                      <Text style={[styles.boxSelectorOptionText, activa && styles.boxSelectorOptionTextActive]}>{etiquetaBulto(caja)}</Text>
                     </View>
                   </Pressable>
                 );

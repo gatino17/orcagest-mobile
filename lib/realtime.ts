@@ -2,6 +2,7 @@ import { io, type Socket } from 'socket.io-client';
 import { SOCKET_TRANSPORTS, SOCKET_URL } from '@/lib/api';
 
 type ArmadoUpdatedHandler = (evt: any) => void;
+type ActividadUpdatedHandler = (evt: any) => void;
 
 let socket: Socket | null = null;
 let refs = 0;
@@ -31,3 +32,17 @@ export const subscribeArmadoUpdated = (handler: ArmadoUpdatedHandler) => {
   };
 };
 
+export const subscribeActividadUpdated = (handler: ActividadUpdatedHandler) => {
+  const s = getSocket();
+  refs += 1;
+  s.on('actividad_updated', handler);
+
+  return () => {
+    s.off('actividad_updated', handler);
+    refs = Math.max(0, refs - 1);
+    if (refs === 0) {
+      s.disconnect();
+      socket = null;
+    }
+  };
+};

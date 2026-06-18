@@ -1,4 +1,4 @@
-import React, { useContext, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -18,6 +18,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import SignatureScreen from 'react-native-signature-canvas';
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import { useFocusEffect } from '@react-navigation/native';
 import { AuthContext } from '../_layout';
 import {
   createActaEntrega,
@@ -48,6 +49,7 @@ import {
   updatePermisoTrabajo,
   updateRetiroTerreno,
 } from '@/lib/api';
+import { subscribeActividadUpdated } from '@/lib/realtime';
 
 type Cliente = { id_cliente?: number; id?: number; nombre?: string; razon_social?: string };
 type Centro = {
@@ -748,7 +750,6 @@ export default function InformesScreen() {
     });
     return Array.from(porCentro.values());
   }, [actas, permisosInstalacion, permCentros, centrosFiltro, actividadesAsignadas]);
-  const mostrarAsignadasEnProceso = moduloInforme !== 'instalacion';
   const mostrarAsignadasCompletadas = false;
   const mantencionesRecientesVisibles = useMemo(
     () => (showAllMantencionesRecientes ? permisosMantencion : permisosMantencion.slice(0, 3)),
@@ -829,7 +830,12 @@ export default function InformesScreen() {
         if (estado === 'pendiente') return true;
         // Compatibilidad operativa: si en web dejaron "En progreso" pero aun no existe acta,
         // en mobile se sigue mostrando como pendiente de iniciar.
-        if (moduloInforme !== 'levantamiento' && estado === 'en_progreso' && !actividadesConActa.has(idActividad)) return true;
+        if (
+          moduloInforme !== 'levantamiento' &&
+          moduloInforme !== 'instalacion' &&
+          estado === 'en_progreso' &&
+          !actividadesConActa.has(idActividad)
+        ) return true;
         return false;
       });
     },
@@ -848,6 +854,7 @@ export default function InformesScreen() {
         const estado = estadoActividad(a.estado);
         if (esActiva) return estado !== 'finalizado';
         if (moduloInforme === 'levantamiento') return estado === 'en_progreso';
+        if (moduloInforme === 'instalacion') return estado === 'en_progreso' && !actividadesConActa.has(idActividad);
         return estado === 'en_progreso' && actividadesConActa.has(idActividad);
       });
     },
@@ -857,6 +864,8 @@ export default function InformesScreen() {
     () => actividadesAsignadasFiltradas.filter((a) => estadoActividad(a.estado) === 'finalizado'),
     [actividadesAsignadasFiltradas]
   );
+  const mostrarAsignadasEnProceso =
+    moduloInforme !== 'instalacion' || actividadesEnProceso.length > 0;
 
   const cargarClientes = async () => {
     if (!token) return;
@@ -998,8 +1007,11 @@ export default function InformesScreen() {
       Alert.alert('Informes', backendMsg);
     }
   };
-  const cargarActividadesAsignadas = async () => {
-    if (!token) return;
+  const cargarActividadesAsignadas = useCallback(async () => {
+    if (!token) {
+      setActividadesAsignadas([]);
+      return;
+    }
     setLoadingActividadesAsignadas(true);
     try {
       const byName = String(name || '')
@@ -1046,7 +1058,7 @@ export default function InformesScreen() {
     } finally {
       setLoadingActividadesAsignadas(false);
     }
-  };
+  }, [token, name, userId]);
 
   const aplicarActividadAsignada = (actividad: ActividadAsignada) => {
     const area = String(actividad.area || '').trim().toLowerCase();
@@ -1315,7 +1327,7 @@ export default function InformesScreen() {
   useEffect(() => {
     cargarClientes();
     cargarActividadesAsignadas();
-  }, [token]);
+  }, [token, cargarActividadesAsignadas]);
 
   useEffect(() => {
     if (!token) return;
@@ -1323,7 +1335,23 @@ export default function InformesScreen() {
       cargarActividadesAsignadas();
     }, 12000);
     return () => clearInterval(timer);
-  }, [token]);
+  }, [token, cargarActividadesAsignadas]);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!token) return undefined;
+      cargarActividadesAsignadas();
+      return undefined;
+    }, [token, cargarActividadesAsignadas])
+  );
+
+  useEffect(() => {
+    if (!token) return;
+    const onActividadUpdated = () => {
+      cargarActividadesAsignadas();
+    };
+    return subscribeActividadUpdated(onActividadUpdated);
+  }, [token, cargarActividadesAsignadas]);
 
   useEffect(() => {
     cargarCentrosPorClienteFiltro(filtroClienteId);

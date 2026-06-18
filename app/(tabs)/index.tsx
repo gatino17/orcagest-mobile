@@ -652,7 +652,7 @@ export default function HomeScreen() {
                       <View style={styles.diamondFront} />
                     </View>
                     <View style={styles.cajasWrap}>
-                      <ThemedText style={styles.cajasLabel}>Total cajas</ThemedText>
+                      <ThemedText style={styles.cajasLabel}>Total bultos</ThemedText>
                       <View style={styles.cajasOrbit}>
                         <View style={styles.cajasRingOuter} />
                         <View style={styles.cajasRingInner} />
