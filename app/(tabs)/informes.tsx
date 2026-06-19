@@ -1453,6 +1453,7 @@ export default function InformesScreen() {
     if (!compatible) {
       setActividadAsignadaActiva(null);
       setTecnicosAsignadosExtra([]);
+      setMostrarInstalacionForm(false);
     }
   }, [moduloInforme, actividadAsignadaActiva]);
 
@@ -1959,6 +1960,7 @@ export default function InformesScreen() {
   const nuevaActaDesdeInstalacion = () => {
     const clienteSeleccionado = permClienteId;
     const centroSeleccionado = permCentroId;
+    const centroAsignado = actividadAsignadaActiva?.centro || permCentroSel || null;
     const asignados = Array.isArray(actividadAsignadaActiva?.tecnicos_asignados)
       ? actividadAsignadaActiva?.tecnicos_asignados || []
       : [];
@@ -1981,6 +1983,16 @@ export default function InformesScreen() {
     setClienteIdForm(clienteSeleccionado || null);
     setCentroIdForm(centroSeleccionado || null);
     setFechaRegistro(todayInputDate());
+    setCodigoPontonActa(String(centroAsignado?.nombre_ponton || ''));
+    setRegion(String(centroAsignado?.area || centroAsignado?.region || ''));
+    setLocalidad(
+      String(
+        centroAsignado?.ubicacion ||
+          centroAsignado?.localidad ||
+          centroAsignado?.direccion ||
+          ''
+      )
+    );
     setTecnicosAsignadosExtra(extras);
     setFirmasTecnicosExtra(extras.map((nombre) => ({ nombre, firma: '' })));
     if (tecnicoPrincipal) setTecnico1(tecnicoPrincipal);
