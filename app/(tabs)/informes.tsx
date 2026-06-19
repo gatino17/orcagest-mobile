@@ -748,8 +748,56 @@ export default function InformesScreen() {
       if (!key) return;
       if (!porCentro.has(key)) porCentro.set(key, item);
     });
+
+    const areaActiva = String(actividadAsignadaActiva?.area || '').trim().toLowerCase();
+    const esInstalacionActiva = areaActiva.startsWith('instal') || areaActiva.startsWith('reap');
+    if (moduloInforme === 'instalacion' && esInstalacionActiva) {
+      const centroIdActivo =
+        Number(
+          actividadAsignadaActiva?.centro_id ||
+            actividadAsignadaActiva?.centro?.id_centro ||
+            actividadAsignadaActiva?.centro?.id ||
+            0
+        ) || null;
+      const yaTienePermiso = !!(
+        centroIdActivo &&
+        permisosInstalacion.some((p) => Number(p.centro_id || 0) === Number(centroIdActivo))
+      );
+      if (centroIdActivo && !yaTienePermiso && !porCentro.has(centroIdActivo)) {
+        porCentro.set(centroIdActivo, {
+          centroId: centroIdActivo,
+          actaId: Number(actaCentroSeleccionado?.id_acta_entrega || 0) || null,
+          armadoId: Number(actaCentroSeleccionado?.armado_id || armadoSeleccionadoId || 0) || null,
+          hasArmadoVinculado: Number(actaCentroSeleccionado?.armado_id || armadoSeleccionadoId || 0) > 0,
+          centro:
+            actividadAsignadaActiva?.centro?.nombre ||
+            permCentros.find((c) => Number(c.id_centro ?? c.id ?? 0) === Number(centroIdActivo))?.nombre ||
+            centrosFiltro.find((c) => Number(c.id_centro ?? c.id ?? 0) === Number(centroIdActivo))?.nombre ||
+            `Centro ${centroIdActivo}`,
+          cliente:
+            actividadAsignadaActiva?.centro?.cliente ||
+            clientes.find((c) => Number(c.id_cliente ?? c.id ?? 0) === Number(permClienteId ?? 0))?.nombre ||
+            '-',
+          tipoInstalacion: areaActiva.startsWith('reap') ? 'reapuntamiento' : 'instalacion',
+          fechaActa: actaCentroSeleccionado?.fecha_registro || '',
+        });
+      }
+    }
+
     return Array.from(porCentro.values());
-  }, [actas, permisosInstalacion, permCentros, centrosFiltro, actividadesAsignadas]);
+  }, [
+    actas,
+    permisosInstalacion,
+    permCentros,
+    centrosFiltro,
+    actividadesAsignadas,
+    actividadAsignadaActiva,
+    moduloInforme,
+    actaCentroSeleccionado,
+    armadoSeleccionadoId,
+    clientes,
+    permClienteId,
+  ]);
   const mostrarAsignadasCompletadas = false;
   const mantencionesRecientesVisibles = useMemo(
     () => (showAllMantencionesRecientes ? permisosMantencion : permisosMantencion.slice(0, 3)),
@@ -852,7 +900,10 @@ export default function InformesScreen() {
         const idActividad = Number(a.id_actividad || 0);
         const esActiva = Number(actividadAsignadaActiva?.id_actividad || 0) === idActividad;
         const estado = estadoActividad(a.estado);
-        if (esActiva) return estado !== 'finalizado';
+        if (esActiva) {
+          if (moduloInforme === 'instalacion') return false;
+          return estado !== 'finalizado';
+        }
         if (moduloInforme === 'levantamiento') return estado === 'en_progreso';
         if (moduloInforme === 'instalacion') return estado === 'en_progreso' && !actividadesConActa.has(idActividad);
         return estado === 'en_progreso' && actividadesConActa.has(idActividad);
@@ -860,6 +911,14 @@ export default function InformesScreen() {
     },
     [actividadesAsignadasFiltradas, actividadAsignadaActiva, actas, moduloInforme]
   );
+  const actividadInstalacionActivaEnProceso = useMemo(() => {
+    if (moduloInforme !== 'instalacion' || !actividadAsignadaActiva) return false;
+    const area = String(actividadAsignadaActiva.area || '').trim().toLowerCase();
+    if (!area.startsWith('instal') && !area.startsWith('reap')) return false;
+    return estadoActividad(actividadAsignadaActiva.estado) !== 'finalizado';
+  }, [moduloInforme, actividadAsignadaActiva]);
+  const totalActividadesEnProcesoVisible =
+    actividadesEnProceso.length + (actividadInstalacionActivaEnProceso ? 1 : 0);
   const actividadesCompletadas = useMemo(
     () => actividadesAsignadasFiltradas.filter((a) => estadoActividad(a.estado) === 'finalizado'),
     [actividadesAsignadasFiltradas]
@@ -1025,7 +1084,12 @@ export default function InformesScreen() {
           const estado = String(item?.estado || '').trim().toLowerCase();
           return estado !== 'cancelado';
         });
-      let lista = filtrarActivas(await fetchActividadesMias());
+      let lista: any[] = [];
+      try {
+        lista = filtrarActivas(await fetchActividadesMias());
+      } catch {
+        lista = [];
+      }
       if (!lista.length) {
         const all = filtrarActivas(await fetchActividades());
         const normalize = (v: any) =>
@@ -1119,22 +1183,25 @@ export default function InformesScreen() {
       return;
     }
     if (area.startsWith('instal') || area.startsWith('reap')) {
-      // Flujo solicitado: al seleccionar trabajo programado abrir directamente modal,
-      // no la tarjeta inline bajo "Instalaciones completadas".
       resetForm();
       resetPermisoForm();
       if (tecnicoPrincipal) setTecnico1(tecnicoPrincipal);
       if (tecnicoAyudante) setTecnico2(tecnicoAyudante);
       if (tecnicoPrincipal) setPermTecnico1(tecnicoPrincipal);
       if (tecnicoAyudante) setPermTecnico2(tecnicoAyudante);
+      setModuloInforme('instalacion');
       setTipoRegistroInstalacion(area.startsWith('reap') ? 'reapuntamiento' : 'instalacion');
-      setMostrarInstalacionForm(false);
+      setMostrarInstalacionForm(true);
       setTipoInstalacion('acta_entrega');
       setEditId(null);
       setClienteIdForm(clienteId);
       setCentroIdForm(centroId);
       setFechaRegistro(fechaActividad);
-      setShowEditor(true);
+      setShowEditor(false);
+      setShowPermisoModal(false);
+      setShowLevantamientoModal(false);
+      setShowRetiroTipoModal(false);
+      setShowRetiroChecklistModal(false);
       return;
     }
     if (area.startsWith('manten')) {
@@ -1892,11 +1959,32 @@ export default function InformesScreen() {
   const nuevaActaDesdeInstalacion = () => {
     const clienteSeleccionado = permClienteId;
     const centroSeleccionado = permCentroId;
+    const asignados = Array.isArray(actividadAsignadaActiva?.tecnicos_asignados)
+      ? actividadAsignadaActiva?.tecnicos_asignados || []
+      : [];
+    const tecnicoPrincipal = String(
+      actividadAsignadaActiva?.encargado_principal?.nombre_encargado ||
+        asignados?.[0]?.nombre_encargado ||
+        ''
+    ).trim();
+    const tecnicoAyudante = String(
+      actividadAsignadaActiva?.encargado_ayudante?.nombre_encargado ||
+        asignados?.[1]?.nombre_encargado ||
+        ''
+    ).trim();
+    const extras = asignados
+      .map((t) => String(t?.nombre_encargado || '').trim())
+      .filter((name) => !!name && name !== tecnicoPrincipal && name !== tecnicoAyudante);
+
     resetForm();
     setEditId(null);
     setClienteIdForm(clienteSeleccionado || null);
     setCentroIdForm(centroSeleccionado || null);
     setFechaRegistro(todayInputDate());
+    setTecnicosAsignadosExtra(extras);
+    setFirmasTecnicosExtra(extras.map((nombre) => ({ nombre, firma: '' })));
+    if (tecnicoPrincipal) setTecnico1(tecnicoPrincipal);
+    if (tecnicoAyudante) setTecnico2(tecnicoAyudante);
     setShowEditor(true);
   };
 
@@ -2177,8 +2265,8 @@ export default function InformesScreen() {
           </View>
           <Text style={styles.rowMeta}>
             {mostrarAsignadasCompletadas
-              ? `Programados: ${actividadesProgramadas.length} | En proceso: ${actividadesEnProceso.length} | Completados: ${actividadesCompletadas.length}`
-              : `Programados: ${actividadesProgramadas.length} | En proceso: ${actividadesEnProceso.length}`}
+              ? `Programados: ${actividadesProgramadas.length} | En proceso: ${totalActividadesEnProcesoVisible} | Completados: ${actividadesCompletadas.length}`
+              : `Programados: ${actividadesProgramadas.length} | En proceso: ${totalActividadesEnProcesoVisible}`}
           </Text>
 
           {!loadingActividadesAsignadas && !actividadesAsignadasFiltradas.length ? (
@@ -2672,52 +2760,80 @@ export default function InformesScreen() {
         {moduloInforme === 'instalacion' && instalacionesEnProceso.length > 0 && (
           <View style={styles.card}>
             <Text style={styles.sectionTitle}>Instalaciones en proceso</Text>
-            {instalacionesEnProceso.map((item) => (
-              <View key={`proc-inst-${item.actaId || item.centroId}`} style={[styles.installDoneCard, styles.installInProgressCard]}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.rowTitle}>{item.centro}</Text>
-                  <Text style={styles.rowSubtitle}>{item.cliente}</Text>
-                  <View style={styles.installTypeBadgeRow}>
-                    <View
-                      style={[
-                        styles.installTypeBadge,
-                        item.tipoInstalacion === 'reapuntamiento'
-                          ? styles.installTypeBadgeReap
-                          : styles.installTypeBadgeInstalacion,
-                      ]}>
-                      <Ionicons
-                        name={item.tipoInstalacion === 'reapuntamiento' ? 'locate-outline' : 'construct-outline'}
-                        size={11}
-                        color={item.tipoInstalacion === 'reapuntamiento' ? '#7c2d12' : '#1e3a8a'}
-                      />
-                      <Text
-                        style={[
-                          styles.installTypeBadgeText,
-                          item.tipoInstalacion === 'reapuntamiento'
-                            ? styles.installTypeBadgeTextReap
-                            : styles.installTypeBadgeTextInstalacion,
-                        ]}>
-                        {item.tipoInstalacion === 'reapuntamiento' ? 'Reapuntamiento' : 'Instalacion'}
+	            {instalacionesEnProceso.map((item) => (
+	              <View key={`proc-inst-${item.actaId || item.centroId}`} style={[styles.installDoneCard, styles.installInProgressCard]}>
+	                <View
+	                  style={[
+	                    styles.installTypeBadge,
+	                    styles.installTypeBadgeCardCorner,
+	                    item.tipoInstalacion === 'reapuntamiento'
+	                      ? styles.installTypeBadgeReap
+	                      : styles.installTypeBadgeInstalacion,
+	                  ]}>
+	                  <Ionicons
+	                    name={item.tipoInstalacion === 'reapuntamiento' ? 'locate-outline' : 'construct-outline'}
+	                    size={11}
+	                    color={item.tipoInstalacion === 'reapuntamiento' ? '#7c2d12' : '#1e3a8a'}
+	                  />
+	                  <Text
+	                    style={[
+	                      styles.installTypeBadgeText,
+	                      item.tipoInstalacion === 'reapuntamiento'
+	                        ? styles.installTypeBadgeTextReap
+	                        : styles.installTypeBadgeTextInstalacion,
+	                    ]}>
+	                    {item.tipoInstalacion === 'reapuntamiento' ? 'Reapuntamiento' : 'Instalacion'}
+	                  </Text>
+	                </View>
+	                <View style={{ flex: 1 }}>
+	                  <View style={styles.installCardHeader}>
+	                    <Text style={[styles.rowTitle, styles.installCardTitle]}>{item.centro}</Text>
+	                  </View>
+	                  <Text style={styles.rowSubtitle}>{item.cliente}</Text>
+	                  <View style={{ marginTop: 4, gap: 2 }}>
+	                    <Text style={styles.rowMeta}>
+	                      Acta: <Text style={!item.fechaActa ? styles.pendingMetaValue : undefined}>{item.fechaActa ? formatDate(item.fechaActa) : 'Pendiente'}</Text>
+                    </Text>
+                    <Text style={styles.rowMeta}>
+                      Permiso: <Text style={styles.pendingMetaValue}>Pendiente</Text>
+                    </Text>
+                    <Text style={styles.rowMeta}>
+                      Armado:{' '}
+                      <Text style={!item.hasArmadoVinculado ? styles.pendingMetaValue : styles.linkedMetaValue}>
+                        {item.hasArmadoVinculado ? 'Vinculado' : 'Pendiente'}
                       </Text>
-                    </View>
+                    </Text>
                   </View>
-                  <Text style={styles.rowMeta}>
-                    Acta: {formatDate(item.fechaActa)} | Permiso: Pendiente
-                  </Text>
                 </View>
                 <View style={styles.rowActions}>
-                  {item.actaId ? (
-                    <Pressable
-                      style={styles.actionBtn}
-                      onPress={() => {
-                        setTipoRegistroInstalacion(item.tipoInstalacion === 'reapuntamiento' ? 'reapuntamiento' : 'instalacion');
-                        setTipoInstalacion('acta_entrega');
-                        const acta = actas.find((a) => Number(a.id_acta_entrega || 0) === Number(item.actaId || 0));
-                        if (acta) abrirActa(acta);
-                      }}>
-                      <Ionicons name="create-outline" size={16} color="#1d4ed8" />
-                    </Pressable>
-                  ) : null}
+                  <Pressable
+                    style={styles.actionBtn}
+                    onPress={() => {
+                      setTipoRegistroInstalacion(item.tipoInstalacion === 'reapuntamiento' ? 'reapuntamiento' : 'instalacion');
+                      setTipoInstalacion('acta_entrega');
+                      setMostrarInstalacionForm(true);
+                      const clientePorNombre = clientes.find(
+                        (c) =>
+                          String(c.nombre || c.razon_social || '').trim().toLowerCase() ===
+                          String(item.cliente || '').trim().toLowerCase()
+                      );
+                      const clienteId = Number(clientePorNombre?.id_cliente ?? clientePorNombre?.id ?? 0) || null;
+                      if (clienteId) setPermClienteId(clienteId);
+                      if (item.centroId) setPermCentroId(item.centroId);
+                      const acta = actas.find((a) => Number(a.id_acta_entrega || 0) === Number(item.actaId || 0));
+                      if (acta) {
+                        abrirActa(acta);
+                        return;
+                      }
+                      if (item.centroId && clienteId) {
+                        setClienteIdForm(clienteId);
+                        setCentroIdForm(item.centroId);
+                        setFechaRegistro(todayInputDate());
+                        nuevaActaDesdeInstalacion();
+                      }
+                    }}>
+                    <Ionicons name="create-outline" size={16} color="#1d4ed8" />
+                  </Pressable>
                   <Pressable
                     style={styles.actionBtn}
                     onPress={() => {
@@ -2891,7 +3007,7 @@ export default function InformesScreen() {
           </View>
         )}
 
-        {moduloInforme === 'instalacion' && mostrarInstalacionForm && (
+        {moduloInforme === 'instalacion' && mostrarInstalacionForm && !showEditor && !actividadAsignadaActiva && (
           <View style={styles.card}>
             <View style={styles.installHeaderRow}>
               <Text style={styles.label}>{nombreRegistroInstalacion}</Text>
@@ -5147,6 +5263,8 @@ const styles = StyleSheet.create({
   installStateValue: { fontWeight: '800' },
   installStateOk: { color: '#166534' },
   installStateWarn: { color: '#b45309' },
+  pendingMetaValue: { color: '#dc2626', fontWeight: '800' },
+  linkedMetaValue: { color: '#166534', fontWeight: '800' },
   linkArmadoBtn: {
     marginTop: 6,
     alignSelf: 'flex-start',
@@ -5249,6 +5367,7 @@ const styles = StyleSheet.create({
   installDoneCard: {
     flexDirection: 'row',
     alignItems: 'center',
+    position: 'relative',
     gap: 8,
     borderWidth: 1,
     borderColor: '#bbf7d0',
@@ -5262,10 +5381,27 @@ const styles = StyleSheet.create({
     borderColor: '#fcd34d',
     backgroundColor: '#fffbeb',
   },
+  installCardHeader: {
+    minHeight: 22,
+    justifyContent: 'flex-start',
+  },
+  installCardTitle: {
+    paddingRight: 120,
+  },
   installTypeBadgeRow: {
     marginTop: 6,
     marginBottom: 2,
     alignItems: 'flex-start',
+  },
+  installTypeBadgeCorner: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+  },
+  installTypeBadgeCardCorner: {
+    position: 'absolute',
+    top: 8,
+    right: 10,
   },
   installTypeBadge: {
     borderWidth: 1,
@@ -5476,7 +5612,7 @@ const styles = StyleSheet.create({
   rowTitle: { color: '#0f172a', fontWeight: '800' },
   rowSubtitle: { color: '#334155', fontWeight: '700', marginTop: 2 },
   rowMeta: { color: '#64748b', fontSize: 12, marginTop: 1 },
-  rowActions: { flexDirection: 'row', gap: 6 },
+  rowActions: { flexDirection: 'row', gap: 6, marginTop: 14, alignSelf: 'flex-end' },
   actionBtn: { width: 32, height: 32, borderRadius: 8, borderWidth: 1, borderColor: '#bfdbfe', backgroundColor: '#eff6ff', alignItems: 'center', justifyContent: 'center' },
   actionBtnWarn: { borderColor: '#dc2626', backgroundColor: '#ef4444' },
   actionBtnDelete: {

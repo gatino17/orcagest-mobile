@@ -448,7 +448,10 @@ export default function RendicionesScreen() {
   }, []);
 
   const cargarRendiciones = useCallback(async () => {
-    if (!userId) return;
+    if (!userId) {
+      setRendiciones([]);
+      return;
+    }
     setLoading(true);
     try {
       const data = await fetchRendiciones({ tecnico_user_id: userId, top: 150 });
@@ -461,32 +464,34 @@ export default function RendicionesScreen() {
   }, [userId]);
 
   const cargarSaldos = useCallback(async () => {
-    if (!userId && !name) return;
+    if (!userId && !name) {
+      setSaldosTecnicos([]);
+      return;
+    }
     try {
-      const data = await fetchSaldosRendicion({ top: 1000 });
-      const all = Array.isArray(data) ? data : [];
-      const filtrados = all.filter((s: any) => {
-        const idMatch = Number(s?.tecnico_user_id || 0) > 0 && Number(s?.tecnico_user_id || 0) === Number(userId || 0);
-        const nombreMatch = matchTecnicoNombre(s?.tecnico_nombre, name);
-        return idMatch || nombreMatch;
-      });
-      setSaldosTecnicos(filtrados.length ? filtrados : all);
+      const params =
+        Number(userId || 0) > 0
+          ? { tecnico_user_id: userId, top: 1000 }
+          : { tecnico_nombre: name, top: 1000 };
+      const data = await fetchSaldosRendicion(params);
+      setSaldosTecnicos(Array.isArray(data) ? data : []);
     } catch {
       setSaldosTecnicos([]);
     }
   }, [userId, name]);
 
   const cargarAbonos = useCallback(async () => {
-    if (!userId && !name) return;
+    if (!userId && !name) {
+      setAbonosTecnico([]);
+      return;
+    }
     try {
-      const data = await fetchAbonosRendicion({ top: 1000 });
-      const all = Array.isArray(data) ? data : [];
-      const filtrados = all.filter((a: any) => {
-        const idMatch = Number(a?.tecnico_user_id || 0) > 0 && Number(a?.tecnico_user_id || 0) === Number(userId || 0);
-        const nombreMatch = matchTecnicoNombre(a?.tecnico_nombre, name);
-        return idMatch || nombreMatch;
-      });
-      setAbonosTecnico(filtrados);
+      const params =
+        Number(userId || 0) > 0
+          ? { tecnico_user_id: userId, top: 1000 }
+          : { tecnico_nombre: name, top: 1000 };
+      const data = await fetchAbonosRendicion(params);
+      setAbonosTecnico(Array.isArray(data) ? data : []);
     } catch {
       setAbonosTecnico([]);
     }
