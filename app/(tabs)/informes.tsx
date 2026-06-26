@@ -92,10 +92,23 @@ type Acta = {
   recepciona_nombre?: string;
   firma_recepciona?: string;
   equipos_considerados?: string;
+  armado_equipos?: ActaArmadoEquipo[] | string;
   centro_origen_traslado?: string;
   tipo_instalacion?: 'instalacion' | 'reapuntamiento' | string;
+  created_at?: string;
+  updated_at?: string;
 };
 type FirmaTecnicoExtra = { nombre: string; firma: string };
+type ActaArmadoEquipo = {
+  equipo_id?: number | null;
+  nombre?: string | null;
+  codigo?: string | null;
+  numero_serie?: string | null;
+  caja?: string | null;
+  estado_uso?: 'instalado' | 'devuelto_bodega' | string;
+  estado_logistico?: 'sin_movimiento' | 'en_transito_bodega' | 'recepcionado_bodega' | string;
+  observacion?: string | null;
+};
 type ArmadoResumen = {
   id_armado?: number;
   centro_id?: number;
@@ -407,6 +420,49 @@ const parseFirmasTecnicosAdicionales = (
   }
 };
 
+const buildActaArmadoEquipoKey = (item: Partial<ActaArmadoEquipo>) => {
+  const equipoId = Number(item?.equipo_id || 0) || 0;
+  if (equipoId > 0) return `id:${equipoId}`;
+  const serie = String(item?.numero_serie || '').trim().toUpperCase();
+  if (serie) return `serie:${serie}`;
+  const codigo = String(item?.codigo || '').trim().toUpperCase();
+  if (codigo) return `codigo:${codigo}`;
+  const nombre = String(item?.nombre || '').trim().toUpperCase();
+  const caja = String(item?.caja || '').trim().toUpperCase();
+  return `fallback:${nombre}:${caja}`;
+};
+
+const parseActaArmadoEquipos = (value?: ActaArmadoEquipo[] | string): ActaArmadoEquipo[] => {
+  if (!value) return [];
+  try {
+    const raw = Array.isArray(value) ? value : JSON.parse(String(value));
+    if (!Array.isArray(raw)) return [];
+    return raw
+      .map((row: any) => {
+        const estadoUso = String(row?.estado_uso || 'instalado').trim().toLowerCase();
+        const estadoLogistico = String(row?.estado_logistico || 'sin_movimiento').trim().toLowerCase();
+        return {
+          equipo_id: Number(row?.equipo_id || 0) || null,
+          nombre: String(row?.nombre || '').trim() || null,
+          codigo: String(row?.codigo || '').trim() || null,
+          numero_serie: String(row?.numero_serie || '').trim() || null,
+          caja: String(row?.caja || '').trim() || null,
+          estado_uso: estadoUso === 'devuelto_bodega' ? 'devuelto_bodega' : 'instalado',
+          estado_logistico:
+            estadoLogistico === 'en_transito_bodega' ||
+            estadoLogistico === 'recepcionado_bodega' ||
+            estadoLogistico === 'sin_movimiento'
+              ? estadoLogistico
+              : 'sin_movimiento',
+          observacion: String(row?.observacion || '').trim() || null,
+        } as ActaArmadoEquipo;
+      })
+      .filter((row) => row.equipo_id || row.nombre || row.codigo || row.numero_serie);
+  } catch {
+    return [];
+  }
+};
+
 const parseRetiroEquipos = (value?: RetiroEquipoChecklist[] | string): RetiroEquipoChecklist[] => {
   if (!value) return [];
   try {
@@ -454,6 +510,9 @@ export default function InformesScreen() {
   const [showEditor, setShowEditor] = useState(false);
   const [showPermisoModal, setShowPermisoModal] = useState(false);
   const [permisoContexto, setPermisoContexto] = useState<PermisoContexto>('instalacion');
+  const [actaSoloLectura, setActaSoloLectura] = useState(false);
+  const [permisoSoloLectura, setPermisoSoloLectura] = useState(false);
+  const [vinculoSoloLectura, setVinculoSoloLectura] = useState(false);
   const [firmaModalVisible, setFirmaModalVisible] = useState(false);
   const [firmaTarget, setFirmaTarget] = useState<FirmaTarget>(null);
 
@@ -524,6 +583,12 @@ export default function InformesScreen() {
   const [armadoSeleccionadoId, setArmadoSeleccionadoId] = useState<number | null>(null);
   const [showArmadosModal, setShowArmadosModal] = useState(false);
   const [vinculoActaId, setVinculoActaId] = useState<number | null>(null);
+  const [showArmadoEquiposModal, setShowArmadoEquiposModal] = useState(false);
+  const [loadingArmadoEquipos, setLoadingArmadoEquipos] = useState(false);
+  const [savingArmadoEquipos, setSavingArmadoEquipos] = useState(false);
+  const [armadoEquiposActa, setArmadoEquiposActa] = useState<ActaArmadoEquipo[]>([]);
+  const [armadoEquiposSoloLectura, setArmadoEquiposSoloLectura] = useState(false);
+  const [armadoEquiposGuardadoActas, setArmadoEquiposGuardadoActas] = useState<number[]>([]);
   const [mantencionEditandoId, setMantencionEditandoId] = useState<number | null>(null);
   const [retiroEditandoId, setRetiroEditandoId] = useState<number | null>(null);
   const [showAllMantencionesRecientes, setShowAllMantencionesRecientes] = useState(false);
@@ -598,12 +663,20 @@ export default function InformesScreen() {
         return tipoObjetivo === 'reapuntamiento' ? tipo === 'reapuntamiento' : tipo !== 'reapuntamiento';
       })
       .sort((a, b) => {
-        const ta = new Date(a.fecha_registro || 0).getTime();
-        const tb = new Date(b.fecha_registro || 0).getTime();
-        return tb - ta;
+        const ta = new Date(a.updated_at || a.created_at || a.fecha_registro || 0).getTime();
+        const tb = new Date(b.updated_at || b.created_at || b.fecha_registro || 0).getTime();
+        if (tb !== ta) return tb - ta;
+        return Number(b.id_acta_entrega || 0) - Number(a.id_acta_entrega || 0);
       });
     return porCentro[0] || null;
   }, [actas, permCentroId, tipoRegistroInstalacion]);
+  const actaObjetivoSeleccionada = useMemo(() => {
+    const objetivoId = Number(vinculoActaId || 0) || null;
+    if (objetivoId) {
+      return actas.find((a) => Number(a.id_acta_entrega || 0) === objetivoId) || actaCentroSeleccionado;
+    }
+    return actaCentroSeleccionado;
+  }, [actas, vinculoActaId, actaCentroSeleccionado]);
   const actaCompletada = !!actaCentroSeleccionado;
   const permisosInstalacion = useMemo(
     () => permisos.filter((p) => Number(p.acta_entrega_id || 0) > 0),
@@ -652,8 +725,28 @@ export default function InformesScreen() {
       equiposCentro.find((e) => Number(e.id_equipo || 0) === Number(equipoCambioId || 0)) || null,
     [equiposCentro, equipoCambioId]
   );
-  const armadoVinculadoId = Number(actaCentroSeleccionado?.armado_id || armadoSeleccionadoId || 0) || null;
+  const armadoVinculadoId = Number(actaObjetivoSeleccionada?.armado_id || armadoSeleccionadoId || 0) || null;
+  const actaCentroSeleccionadoId = Number(actaObjetivoSeleccionada?.id_acta_entrega || 0) || null;
   const armadoVinculado = armadosFinalizadosCentro.find((a) => Number(a.id_armado || 0) === Number(armadoVinculadoId || 0)) || null;
+  const armadoEquiposGuardados = useMemo(
+    () => parseActaArmadoEquipos(actaObjetivoSeleccionada?.armado_equipos),
+    [actaObjetivoSeleccionada]
+  );
+  const armadoEquiposYaGuardados =
+    armadoEquiposGuardados.length > 0 ||
+    (actaCentroSeleccionadoId ? armadoEquiposGuardadoActas.includes(actaCentroSeleccionadoId) : false);
+  const resumenArmadoEquipos = useMemo(() => {
+    return armadoEquiposGuardados.reduce(
+      (acc, item) => {
+        const estado = String(item.estado_uso || 'instalado').trim().toLowerCase();
+        acc.total += 1;
+        if (estado === 'instalado') acc.instalados += 1;
+        else acc.devueltos += 1;
+        return acc;
+      },
+      { total: 0, instalados: 0, devueltos: 0 }
+    );
+  }, [armadoEquiposGuardados]);
   const instalacionSeleccionada = !!(permClienteId && permCentroId);
   const instalacionesCompletadas = useMemo(() => {
     const ids = permisosInstalacion
@@ -661,15 +754,19 @@ export default function InformesScreen() {
       .filter(Boolean)
       .filter((v, i, arr) => arr.indexOf(v) === i);
     return ids.map((centroId) => {
-      const actasCentro = actas.filter((a) => Number(a.centro_id || 0) === centroId);
-      const acta = actasCentro
+      const actasCentro = actas
+        .filter((a) => Number(a.centro_id || 0) === centroId)
         .sort((a, b) => {
-          const ta = new Date(a.fecha_registro || 0).getTime();
-          const tb = new Date(b.fecha_registro || 0).getTime();
-          return tb - ta;
-        })[0];
+          const ta = new Date(a.updated_at || a.created_at || a.fecha_registro || 0).getTime();
+          const tb = new Date(b.updated_at || b.created_at || b.fecha_registro || 0).getTime();
+          if (tb !== ta) return tb - ta;
+          return Number(b.id_acta_entrega || 0) - Number(a.id_acta_entrega || 0);
+        });
+      const acta = actasCentro[0];
       const actaConArmado = actasCentro.find((a) => Number(a.armado_id || 0) > 0);
       const hasArmadoVinculado = !!actaConArmado;
+      const hasArmadoEquiposGuardados =
+        parseActaArmadoEquipos(actaConArmado?.armado_equipos || acta?.armado_equipos).length > 0;
       const centro =
         acta?.centro ||
         permCentros.find((c) => Number(c.id_centro ?? c.id ?? 0) === centroId)?.nombre ||
@@ -686,6 +783,7 @@ export default function InformesScreen() {
         permisoId: Number(permisosInstalacion.find((p) => Number(p.centro_id || 0) === centroId)?.id_permiso_trabajo || 0) || null,
         armadoId: Number((actaConArmado?.armado_id || acta?.armado_id || 0)) || null,
         hasArmadoVinculado,
+        hasArmadoEquiposGuardados: hasArmadoEquiposGuardados || (Number(acta?.id_acta_entrega || 0) > 0 && armadoEquiposGuardadoActas.includes(Number(acta?.id_acta_entrega || 0))),
         centro,
         cliente,
         tipoInstalacion: tipoInstalacionItem,
@@ -693,7 +791,7 @@ export default function InformesScreen() {
         fechaPermiso: permisosInstalacion.find((p) => Number(p.centro_id || 0) === centroId)?.fecha_ingreso || '',
       };
     });
-  }, [permisosInstalacion, actas, permCentros, centrosFiltro]);
+  }, [permisosInstalacion, actas, permCentros, centrosFiltro, armadoEquiposGuardadoActas]);
   const instalacionesEnProceso = useMemo(() => {
     const actividadesVigentes = new Set(
       actividadesAsignadas
@@ -834,6 +932,8 @@ export default function InformesScreen() {
   const canEliminarRetiroReciente = roleNorm === 'admin' || roleNorm === 'operaciones' || roleNorm === 'superadmin';
   const nombresBloqueadosPorProgramacion = !!actividadAsignadaActiva;
   const bloquearClienteCentroActa = !!actividadAsignadaActiva || !!editId;
+  const permisoInstalacionSoloLectura = permisoContexto === 'instalacion' && permisoSoloLectura;
+  const permisoEditable = !permisoInstalacionSoloLectura;
   const clienteCentroSoloLectura =
     permisoContexto === 'mantencion' || !!actividadAsignadaActiva;
   const estadoActividad = (value?: string) => {
@@ -1206,6 +1306,7 @@ export default function InformesScreen() {
     }
     if (area.startsWith('manten')) {
       resetPermisoForm();
+      setPermisoSoloLectura(false);
       if (tecnicoPrincipal) setPermTecnico1(tecnicoPrincipal);
       if (tecnicoAyudante) setPermTecnico2(tecnicoAyudante);
       setPermisoContexto('mantencion');
@@ -1216,6 +1317,7 @@ export default function InformesScreen() {
     }
     if (area.startsWith('retir')) {
       resetPermisoForm();
+      setPermisoSoloLectura(false);
       if (tecnicoPrincipal) setPermTecnico1(tecnicoPrincipal);
       if (tecnicoAyudante) setPermTecnico2(tecnicoAyudante);
       setPermisoContexto('retiro');
@@ -1849,6 +1951,7 @@ export default function InformesScreen() {
   }, [equiposCentro, permisoContexto, mantencionChecklistEnabled]);
 
   const resetForm = () => {
+    setActaSoloLectura(false);
     setEditId(null);
     setClienteIdForm(null);
     setCentroIdForm(null);
@@ -1870,6 +1973,7 @@ export default function InformesScreen() {
   };
 
   const resetPermisoForm = () => {
+    setPermisoSoloLectura(false);
     setPermFecha(todayInputDate());
     setPermFechaSalida('');
     setShowPermFechaPicker(false);
@@ -1947,6 +2051,7 @@ export default function InformesScreen() {
     setTecnicosAsignadosExtra([]);
     resetForm();
     resetPermisoForm();
+    setActaSoloLectura(false);
     setEditId(null);
     setPermClienteId(null);
     setPermCentroId(null);
@@ -1979,6 +2084,7 @@ export default function InformesScreen() {
       .filter((name) => !!name && name !== tecnicoPrincipal && name !== tecnicoAyudante);
 
     resetForm();
+    setActaSoloLectura(false);
     setEditId(null);
     setClienteIdForm(clienteSeleccionado || null);
     setCentroIdForm(centroSeleccionado || null);
@@ -2012,7 +2118,8 @@ export default function InformesScreen() {
     setShowRetiroTipoModal(true);
   };
 
-  const abrirActa = (acta: Acta) => {
+  const abrirActa = (acta: Acta, soloLectura = true) => {
+    setActaSoloLectura(soloLectura);
     setEditId(Number(acta.id_acta_entrega || 0) || null);
     const centroId = Number(acta.centro_id || 0) || null;
     setCentroIdForm(centroId);
@@ -2134,7 +2241,7 @@ export default function InformesScreen() {
       await cargarActas();
       setArmadoSeleccionadoId(armadoId);
       setShowArmadosModal(false);
-      setVinculoActaId(null);
+      setVinculoActaId(targetActaId);
       if (permisoCompletado) {
         await marcarActividadFinalizadaSiCorresponde();
       }
@@ -2151,6 +2258,136 @@ export default function InformesScreen() {
     }
   };
 
+  const abrirArmadoEquipos = async (soloLectura = false) => {
+    const targetActa = actaObjetivoSeleccionada;
+    const targetActaId = Number(vinculoActaId || targetActa?.id_acta_entrega || 0) || null;
+    const targetCentroId = Number(targetActa?.centro_id || permCentroId || 0) || null;
+    if (!targetActaId || !targetCentroId) {
+      Alert.alert('Instalacion', 'Primero debes tener un acta vinculada al centro.');
+      return;
+    }
+
+    setLoadingArmadoEquipos(true);
+    try {
+      const equipos = await getEquipos(targetCentroId);
+      const lista = Array.isArray(equipos) ? equipos : [];
+      const base = lista
+        .filter((eq) => String(eq?.estado_registro || 'normal').trim().toLowerCase() !== 'no_aplica')
+        .map((eq) => ({
+          equipo_id: Number(eq?.id_equipo || 0) || null,
+          nombre: String(eq?.nombre || '').trim() || null,
+          codigo: String(eq?.codigo || '').trim() || null,
+          numero_serie: String(eq?.numero_serie || '').trim() || null,
+          caja: String(eq?.caja || '').trim() || null,
+        }));
+
+      const existentes = parseActaArmadoEquipos(targetActa?.armado_equipos);
+      const existentesMap = new Map(existentes.map((item) => [buildActaArmadoEquipoKey(item), item]));
+
+      const merged = base.map((item) => {
+        const key = buildActaArmadoEquipoKey(item);
+        const previo = existentesMap.get(key);
+        const estadoUso = String(previo?.estado_uso || 'instalado').trim().toLowerCase();
+        return {
+          ...item,
+          estado_uso: estadoUso === 'devuelto_bodega' ? 'devuelto_bodega' : 'instalado',
+          estado_logistico:
+            estadoUso === 'devuelto_bodega'
+              ? String(previo?.estado_logistico || 'en_transito_bodega').trim().toLowerCase()
+              : 'sin_movimiento',
+          observacion: String(previo?.observacion || '').trim() || null,
+        } as ActaArmadoEquipo;
+      });
+
+      const mergedKeys = new Set(merged.map((item) => buildActaArmadoEquipoKey(item)));
+      const extras = existentes.filter((item) => !mergedKeys.has(buildActaArmadoEquipoKey(item)));
+      const finalList = [...merged, ...extras].sort((a, b) => {
+        const cajaA = String(a.caja || '').toLowerCase();
+        const cajaB = String(b.caja || '').toLowerCase();
+        if (cajaA !== cajaB) return cajaA.localeCompare(cajaB);
+        return String(a.nombre || '').localeCompare(String(b.nombre || ''));
+      });
+
+      setArmadoEquiposActa(finalList);
+      setArmadoEquiposSoloLectura(soloLectura);
+      setShowArmadoEquiposModal(true);
+    } catch (error: any) {
+      const backendMsg =
+        error?.response?.data?.error ||
+        error?.response?.data?.message ||
+        error?.message ||
+        'No se pudieron cargar los equipos del armado.';
+      Alert.alert('Instalacion', backendMsg);
+    } finally {
+      setLoadingArmadoEquipos(false);
+    }
+  };
+
+  const actualizarEstadoArmadoEquipo = (
+    index: number,
+    estadoUso: 'instalado' | 'devuelto_bodega'
+  ) => {
+    setArmadoEquiposActa((prev) =>
+      prev.map((item, idx) =>
+        idx === index
+          ? {
+              ...item,
+              estado_uso: estadoUso,
+              estado_logistico: estadoUso === 'devuelto_bodega' ? 'en_transito_bodega' : 'sin_movimiento',
+            }
+          : item
+      )
+    );
+  };
+
+  const guardarArmadoEquiposActa = async () => {
+    const targetActaId = Number(vinculoActaId || actaObjetivoSeleccionada?.id_acta_entrega || 0) || null;
+    if (!targetActaId) {
+      Alert.alert('Instalacion', 'No se encontro el acta para guardar el detalle del armado.');
+      return;
+    }
+    setSavingArmadoEquipos(true);
+    try {
+      const resp = await updateActaEntrega(targetActaId, {
+        armado_equipos: armadoEquiposActa,
+        movimiento_tecnico_id: userId || undefined,
+      });
+      const actaActualizada = resp?.acta || null;
+      if (actaActualizada && Number(actaActualizada.id_acta_entrega || 0) === Number(targetActaId)) {
+        setActas((prev) =>
+          prev.map((item) =>
+            Number(item.id_acta_entrega || 0) === Number(targetActaId)
+              ? { ...item, ...actaActualizada }
+              : item
+          )
+        );
+      }
+      setArmadoEquiposGuardadoActas((prev) =>
+        prev.includes(Number(targetActaId)) ? prev : [...prev, Number(targetActaId)]
+      );
+      await cargarActas();
+      setVinculoSoloLectura(true);
+      setArmadoEquiposSoloLectura(true);
+      setShowArmadoEquiposModal(false);
+      const devueltos = armadoEquiposActa.filter((item) => String(item.estado_uso || '') === 'devuelto_bodega').length;
+      Alert.alert(
+        'Instalacion',
+        devueltos > 0
+          ? `Detalle guardado. ${devueltos} equipo(s) quedaron en transito hacia bodega.`
+          : 'Detalle del armado guardado.'
+      );
+    } catch (error: any) {
+      const backendMsg =
+        error?.response?.data?.error ||
+        error?.response?.data?.message ||
+        error?.message ||
+        'No se pudo guardar el detalle del armado.';
+      Alert.alert('Instalacion', backendMsg);
+    } finally {
+      setSavingArmadoEquipos(false);
+    }
+  };
+
   const actasFiltradas = useMemo(() => {
     if (!filtroClienteId) return actas;
     const cliente = clientes.find((c) => Number(c.id_cliente ?? c.id ?? 0) === Number(filtroClienteId || 0));
@@ -2160,6 +2397,21 @@ export default function InformesScreen() {
 
   const abrirFirma = (target: FirmaTarget) => {
     if (!target) return;
+    if (
+      actaSoloLectura &&
+      (target === 'tecnico1' ||
+        target === 'tecnico2' ||
+        target === 'tecnico_extra' ||
+        target === 'recepciona')
+    ) {
+      return;
+    }
+    if (
+      permisoInstalacionSoloLectura &&
+      (target === 'perm_recepciona' || target === 'perm_tecnico1' || target === 'perm_tecnico2')
+    ) {
+      return;
+    }
     setFirmaTarget(target);
     setFirmaModalVisible(true);
   };
@@ -2192,6 +2444,21 @@ export default function InformesScreen() {
       | 'perm_tecnico2',
     extraIndex?: number
   ) => {
+    if (
+      actaSoloLectura &&
+      (target === 'tecnico1' ||
+        target === 'tecnico2' ||
+        target === 'tecnico_extra' ||
+        target === 'recepciona')
+    ) {
+      return;
+    }
+    if (
+      permisoInstalacionSoloLectura &&
+      (target === 'perm_recepciona' || target === 'perm_tecnico1' || target === 'perm_tecnico2')
+    ) {
+      return;
+    }
     if (target === 'tecnico1') setFirmaTecnico1('');
     if (target === 'tecnico2') setFirmaTecnico2('');
     if (target === 'tecnico_extra' && typeof extraIndex === 'number') {
@@ -2860,6 +3127,7 @@ export default function InformesScreen() {
                       setTipoInstalacion('informe_intervencion');
                       setPermisoContexto('instalacion');
                       setMantencionEditandoId(null);
+                      setPermisoSoloLectura(false);
                       setShowPermisoModal(true);
                     }}>
                     <Ionicons name="clipboard-outline" size={16} color="#1d4ed8" />
@@ -2880,6 +3148,7 @@ export default function InformesScreen() {
                       setTipoInstalacion('acta_entrega');
                       setArmadoSeleccionadoId(item.armadoId || null);
                       setVinculoActaId(item.actaId || null);
+                      setVinculoSoloLectura(!!item.hasArmadoVinculado);
                       try {
                         const lista = await getArmados({ estado: 'finalizado', centro_id: item.centroId });
                         const arr = Array.isArray(lista) ? lista : [];
@@ -2946,19 +3215,19 @@ export default function InformesScreen() {
                 <View style={styles.rowActions}>
                   {item.actaId ? (
                     <Pressable
-                      style={styles.actionBtn}
+                      style={[styles.actionBtn, styles.actionBtnSuccess]}
                       onPress={() => {
                         setTipoRegistroInstalacion(item.tipoInstalacion === 'reapuntamiento' ? 'reapuntamiento' : 'instalacion');
                         setTipoInstalacion('acta_entrega');
                         const acta = actas.find((a) => Number(a.id_acta_entrega || 0) === Number(item.actaId || 0));
                         if (acta) abrirActa(acta);
                       }}>
-                      <Ionicons name="create-outline" size={16} color="#1d4ed8" />
+                      <Ionicons name="create-outline" size={16} color="#166534" />
                     </Pressable>
                   ) : null}
                   {item.permisoId ? (
                     <Pressable
-                      style={styles.actionBtn}
+                      style={[styles.actionBtn, styles.actionBtnSuccess]}
                       onPress={() => {
                         const clientePorNombre = clientes.find(
                           (c) =>
@@ -2971,13 +3240,19 @@ export default function InformesScreen() {
 	                      setTipoInstalacion('informe_intervencion');
 	                      setPermisoContexto('instalacion');
 	                      setMantencionEditandoId(null);
+	                      setPermisoSoloLectura(true);
 	                      setShowPermisoModal(true);
 	                    }}>
-                      <Ionicons name="clipboard-outline" size={16} color="#1d4ed8" />
+                      <Ionicons name="clipboard-outline" size={16} color="#166534" />
                     </Pressable>
                   ) : null}
                   <Pressable
-                    style={[styles.actionBtn, !item.hasArmadoVinculado && styles.actionBtnWarn]}
+                    style={[
+                      styles.actionBtn,
+                      item.hasArmadoVinculado && item.hasArmadoEquiposGuardados
+                        ? styles.actionBtnSuccess
+                        : styles.actionBtnWarn,
+                    ]}
                     onPress={async () => {
                       setTipoRegistroInstalacion(item.tipoInstalacion === 'reapuntamiento' ? 'reapuntamiento' : 'instalacion');
                       const clientePorNombre = clientes.find(
@@ -2988,11 +3263,12 @@ export default function InformesScreen() {
                       const clienteId = Number(clientePorNombre?.id_cliente ?? clientePorNombre?.id ?? 0) || null;
                       if (clienteId) setPermClienteId(clienteId);
                       setPermCentroId(item.centroId);
-                      setMostrarInstalacionForm(true);
-                      setTipoInstalacion('acta_entrega');
-                      setArmadoSeleccionadoId(item.armadoId || null);
-                      setVinculoActaId(item.actaId || null);
-                      try {
+	                      setMostrarInstalacionForm(true);
+	                      setTipoInstalacion('acta_entrega');
+	                      setArmadoSeleccionadoId(item.armadoId || null);
+	                      setVinculoActaId(item.actaId || null);
+	                      setVinculoSoloLectura(!!item.hasArmadoVinculado);
+	                      try {
                         const lista = await getArmados({ estado: 'finalizado', centro_id: item.centroId });
                         const arr = Array.isArray(lista) ? lista : [];
                         const finalizados = arr.filter(
@@ -3010,7 +3286,11 @@ export default function InformesScreen() {
                         Alert.alert('Instalacion', 'No se pudieron cargar los armados finalizados.');
                       }
                     }}>
-                    <Ionicons name="link-outline" size={16} color={!item.hasArmadoVinculado ? '#ffffff' : '#1d4ed8'} />
+                    <Ionicons
+                      name="link-outline"
+                      size={16}
+                      color={item.hasArmadoVinculado && item.hasArmadoEquiposGuardados ? '#166534' : '#ffffff'}
+                    />
                   </Pressable>
                   <Ionicons name="checkmark-circle" size={18} color="#16a34a" />
                 </View>
@@ -3104,18 +3384,34 @@ export default function InformesScreen() {
                     styles.installStateValue,
                     armadoVinculado ? styles.installStateOk : styles.installStateWarn,
                   ]}>
-                  {armadoVinculado
-                    ? `${armadoVinculado.centro?.nombre || permCentroSel?.nombre || 'Centro'} (${formatDate(
-                        armadoVinculado.fecha_cierre
-                      )})`
+	                  {armadoVinculado
+	                    ? `${armadoVinculado.centro?.nombre || permCentroSel?.nombre || 'Centro'} (${formatDate(
+	                        armadoVinculado.fecha_cierre
+	                      )})`
                     : armadosFinalizadosCentro.length
-                    ? 'Pendiente de vinculacion'
-                    : 'Sin armados finalizados'}
-                </Text>
-              </View>
-              <Pressable
-                style={[
-                  styles.linkArmadoBtn,
+	                    ? 'Pendiente de vinculacion'
+	                    : 'Sin armados finalizados'}
+	                </Text>
+	              </View>
+                  {armadoVinculado ? (
+                    <View style={styles.installStateRow}>
+                      <Text style={styles.installStateLabel}>Uso:</Text>
+                      <Text
+                        style={[
+                          styles.installStateValue,
+                          resumenArmadoEquipos.devueltos > 0
+                            ? styles.installStateWarn
+                            : styles.installStateOk,
+                        ]}>
+                        {resumenArmadoEquipos.total
+                          ? `Instalados ${resumenArmadoEquipos.instalados} | Devueltos ${resumenArmadoEquipos.devueltos}`
+                          : 'Sin revision de equipos'}
+                      </Text>
+                    </View>
+                  ) : null}
+	              <Pressable
+	                style={[
+	                  styles.linkArmadoBtn,
                   !instalacionSeleccionada && styles.linkArmadoBtnDisabled,
                 ]}
                 disabled={!instalacionSeleccionada}
@@ -3126,14 +3422,46 @@ export default function InformesScreen() {
                     return;
                   }
                   setVinculoActaId(Number(actaCentroSeleccionado?.id_acta_entrega || 0) || null);
+                  setVinculoSoloLectura(!!armadoVinculado);
                   setShowArmadosModal(true);
                 }}>
                 <Ionicons name="link-outline" size={14} color={instalacionSeleccionada ? '#1d4ed8' : '#94a3b8'} />
-                <Text style={[styles.linkArmadoBtnText, !instalacionSeleccionada && styles.linkArmadoBtnTextDisabled]}>
-                  Vincular armado
-                </Text>
-              </Pressable>
-            </View>
+	                <Text style={[styles.linkArmadoBtnText, !instalacionSeleccionada && styles.linkArmadoBtnTextDisabled]}>
+		                  {armadoVinculado ? 'Ver vinculacion' : 'Vincular armado'}
+		                </Text>
+	              </Pressable>
+                  {armadoVinculado ? (
+                    <View style={styles.linkArmadoActionsRow}>
+                      <Pressable
+                        style={[
+                          styles.linkArmadoBtn,
+                          styles.linkArmadoBtnFlex,
+                          armadoEquiposYaGuardados ? styles.linkArmadoBtnSuccess : styles.linkArmadoBtnDanger,
+                        ]}
+                        onPress={() => abrirArmadoEquipos(armadoEquiposYaGuardados)}>
+                        <Ionicons
+                          name="cube-outline"
+                          size={14}
+                          color={armadoEquiposYaGuardados ? '#166534' : '#b91c1c'}
+                        />
+                        <Text
+                          style={[
+                            styles.linkArmadoBtnText,
+                            armadoEquiposYaGuardados ? styles.linkArmadoBtnTextSuccess : styles.linkArmadoBtnTextDanger,
+                          ]}>
+                          {armadoEquiposYaGuardados ? 'Ver equipos del armado' : 'Equipos / vuelta a bodega'}
+                        </Text>
+                      </Pressable>
+                      {armadoEquiposYaGuardados ? (
+                        <Pressable
+                          style={[styles.linkArmadoBtn, styles.linkArmadoBtnEdit]}
+                          onPress={() => abrirArmadoEquipos(false)}>
+                          <Ionicons name="create-outline" size={14} color="#1d4ed8" />
+                        </Pressable>
+                      ) : null}
+                    </View>
+                  ) : null}
+	            </View>
 
             {!instalacionSeleccionada ? (
               <Pressable style={[styles.saveBtn, styles.ctaDisabled]} disabled>
@@ -3209,6 +3537,7 @@ export default function InformesScreen() {
 	                  setTipoInstalacion('informe_intervencion');
 	                  setPermisoContexto('instalacion');
 	                  setMantencionEditandoId(null);
+	                  setPermisoSoloLectura(permisoCompletado);
 	                  setShowPermisoModal(true);
 	                }}>
                 <Ionicons
@@ -3281,11 +3610,12 @@ export default function InformesScreen() {
                       );
                       const clienteId = Number(clientePorNombre?.id_cliente ?? clientePorNombre?.id ?? 0) || null;
                       if (clienteId) setPermClienteId(clienteId);
-                      setPermCentroId(Number(item.centro_id || 0) || null);
-                      setPermisoContexto('mantencion');
-                      setMantencionChecklistEnabled(true);
-                      setMantencionEditandoId(Number(item.id_mantencion_terreno || 0) || null);
-                      setCambioEquipoEnabled(false);
+	                      setPermCentroId(Number(item.centro_id || 0) || null);
+	                      setPermisoContexto('mantencion');
+	                      setMantencionChecklistEnabled(true);
+	                      setMantencionEditandoId(Number(item.id_mantencion_terreno || 0) || null);
+	                      setPermisoSoloLectura(false);
+	                      setCambioEquipoEnabled(false);
                       setEquipoCambioId(null);
                       setSerieNuevaCambio('');
                       setShowPermisoModal(true);
@@ -3331,11 +3661,12 @@ export default function InformesScreen() {
                             String(item.empresa || item.cliente || '').trim().toLowerCase()
                         );
                         const clienteId = Number(clientePorNombre?.id_cliente ?? clientePorNombre?.id ?? 0) || null;
-                        if (clienteId) setPermClienteId(clienteId);
-                        setPermCentroId(Number(item.centro_id || 0) || null);
-                        setPermisoContexto('retiro');
-                        setRetiroEditandoId(Number(item.id_retiro_terreno || 0) || null);
-                        setShowPermisoModal(true);
+	                        if (clienteId) setPermClienteId(clienteId);
+	                        setPermCentroId(Number(item.centro_id || 0) || null);
+	                        setPermisoContexto('retiro');
+	                        setRetiroEditandoId(Number(item.id_retiro_terreno || 0) || null);
+	                        setPermisoSoloLectura(false);
+	                        setShowPermisoModal(true);
                       }}>
                       <Ionicons name="create-outline" size={16} color="#1d4ed8" />
                     </Pressable>
@@ -3428,7 +3759,7 @@ export default function InformesScreen() {
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>{editId ? 'Editar acta' : 'Nueva acta'}</Text>
+              <Text style={styles.modalTitle}>{actaSoloLectura ? 'Ver acta' : editId ? 'Editar acta' : 'Nueva acta'}</Text>
               <Pressable onPress={() => { setShowEditor(false); resetForm(); }}><Ionicons name="close" size={20} color="#334155" /></Pressable>
             </View>
             <ScrollView showsVerticalScrollIndicator={false}>
@@ -3521,7 +3852,7 @@ export default function InformesScreen() {
                 <View style={styles.inputCol}><Text style={styles.selectLabel}>Empresa</Text><TextInput style={[styles.input, styles.inputDisabled]} editable={false} value={clienteForm?.nombre || clienteForm?.razon_social || ''} /></View>
                 <View style={styles.inputCol}>
                   <Text style={styles.selectLabel}>Codigo ponton</Text>
-                  <TextInput style={styles.input} value={codigoPontonActa} onChangeText={setCodigoPontonActa} placeholder="Codigo ponton" />
+                  <TextInput style={[styles.input, actaSoloLectura && styles.inputDisabled]} editable={!actaSoloLectura} value={codigoPontonActa} onChangeText={setCodigoPontonActa} placeholder="Codigo ponton" />
                 </View>
               </View>
               <View style={styles.row}>
@@ -3545,11 +3876,11 @@ export default function InformesScreen() {
                     <Text style={styles.nameReadonlyText}>{tecnico1 || 'Sin tecnico asignado'}</Text>
                   </View>
                 ) : (
-                  <TextInput style={styles.input} value={tecnico1} onChangeText={setTecnico1} placeholder="Nombre tecnico 1" />
+                  <TextInput style={[styles.input, actaSoloLectura && styles.inputDisabled]} editable={!actaSoloLectura} value={tecnico1} onChangeText={setTecnico1} placeholder="Nombre tecnico 1" />
                 )}
                 <View style={styles.firmaActions}>
-                  <Pressable style={styles.firmaBtn} onPress={() => abrirFirma('tecnico1')}><Text style={styles.firmaBtnText}>{firmaTecnico1 ? 'Editar firma' : 'Firmar'}</Text></Pressable>
-                  {!!firmaTecnico1 && <Pressable style={styles.firmaClearBtn} onPress={() => limpiarFirma('tecnico1')}><Ionicons name="trash-outline" size={14} color="#dc2626" /></Pressable>}
+                  <Pressable style={[styles.firmaBtn, actaSoloLectura && styles.ctaDisabled]} disabled={actaSoloLectura} onPress={() => abrirFirma('tecnico1')}><Text style={styles.firmaBtnText}>{firmaTecnico1 ? 'Editar firma' : 'Firmar'}</Text></Pressable>
+                  {!!firmaTecnico1 && <Pressable style={styles.firmaClearBtn} disabled={actaSoloLectura} onPress={() => limpiarFirma('tecnico1')}><Ionicons name="trash-outline" size={14} color="#dc2626" /></Pressable>}
                 </View>
                 {!!firmaTecnico1 && <Image source={{ uri: firmaTecnico1 }} style={styles.firmaPreview} resizeMode="contain" />}
               </View>
@@ -3561,11 +3892,11 @@ export default function InformesScreen() {
                     <Text style={styles.nameReadonlyText}>{tecnico2 || 'Sin ayudante asignado'}</Text>
                   </View>
                 ) : (
-                  <TextInput style={styles.input} value={tecnico2} onChangeText={setTecnico2} placeholder="Nombre tecnico 2" />
+                  <TextInput style={[styles.input, actaSoloLectura && styles.inputDisabled]} editable={!actaSoloLectura} value={tecnico2} onChangeText={setTecnico2} placeholder="Nombre tecnico 2" />
                 )}
                 <View style={styles.firmaActions}>
-                  <Pressable style={styles.firmaBtn} onPress={() => abrirFirma('tecnico2')}><Text style={styles.firmaBtnText}>{firmaTecnico2 ? 'Editar firma' : 'Firmar'}</Text></Pressable>
-                  {!!firmaTecnico2 && <Pressable style={styles.firmaClearBtn} onPress={() => limpiarFirma('tecnico2')}><Ionicons name="trash-outline" size={14} color="#dc2626" /></Pressable>}
+                  <Pressable style={[styles.firmaBtn, actaSoloLectura && styles.ctaDisabled]} disabled={actaSoloLectura} onPress={() => abrirFirma('tecnico2')}><Text style={styles.firmaBtnText}>{firmaTecnico2 ? 'Editar firma' : 'Firmar'}</Text></Pressable>
+                  {!!firmaTecnico2 && <Pressable style={styles.firmaClearBtn} disabled={actaSoloLectura} onPress={() => limpiarFirma('tecnico2')}><Ionicons name="trash-outline" size={14} color="#dc2626" /></Pressable>}
                 </View>
                 {!!firmaTecnico2 && <Image source={{ uri: firmaTecnico2 }} style={styles.firmaPreview} resizeMode="contain" />}
               </View>
@@ -3582,7 +3913,8 @@ export default function InformesScreen() {
                         </View>
                         <View style={styles.firmaActions}>
                           <Pressable
-                            style={styles.firmaBtn}
+                            style={[styles.firmaBtn, actaSoloLectura && styles.ctaDisabled]}
+                            disabled={actaSoloLectura}
                             onPress={() => {
                               setFirmaExtraIndex(idx);
                               abrirFirma('tecnico_extra');
@@ -3590,7 +3922,7 @@ export default function InformesScreen() {
                             <Text style={styles.firmaBtnText}>{firma ? 'Editar firma' : 'Firmar'}</Text>
                           </Pressable>
                           {!!firma && (
-                            <Pressable style={styles.firmaClearBtn} onPress={() => limpiarFirma('tecnico_extra', idx)}>
+                            <Pressable style={styles.firmaClearBtn} disabled={actaSoloLectura} onPress={() => limpiarFirma('tecnico_extra', idx)}>
                               <Ionicons name="trash-outline" size={14} color="#dc2626" />
                             </Pressable>
                           )}
@@ -3604,16 +3936,16 @@ export default function InformesScreen() {
 
               <View style={[styles.personBlock, styles.recepcionaBlock]}>
                 <Text style={styles.personTitle}>Recepciona</Text>
-                {nombresBloqueadosPorProgramacion && recepcionaNombre ? (
+                {actaSoloLectura ? (
                   <View style={[styles.input, styles.inputDisabled, styles.nameReadonlyBox]}>
-                    <Text style={styles.nameReadonlyText}>{recepcionaNombre}</Text>
+                    <Text style={styles.nameReadonlyText}>{recepcionaNombre || 'Sin nombre'}</Text>
                   </View>
                 ) : (
-                  <TextInput style={styles.input} value={recepcionaNombre} onChangeText={setRecepcionaNombre} placeholder="Nombre quien recepciona" />
+                  <TextInput style={[styles.input, actaSoloLectura && styles.inputDisabled]} editable={!actaSoloLectura} value={recepcionaNombre} onChangeText={setRecepcionaNombre} placeholder="Nombre quien recepciona" />
                 )}
                 <View style={styles.firmaActions}>
-                  <Pressable style={styles.firmaBtn} onPress={() => abrirFirma('recepciona')}><Text style={styles.firmaBtnText}>{firmaRecepciona ? 'Editar firma' : 'Firmar'}</Text></Pressable>
-                  {!!firmaRecepciona && <Pressable style={styles.firmaClearBtn} onPress={() => limpiarFirma('recepciona')}><Ionicons name="trash-outline" size={14} color="#dc2626" /></Pressable>}
+                  <Pressable style={[styles.firmaBtn, actaSoloLectura && styles.ctaDisabled]} disabled={actaSoloLectura} onPress={() => abrirFirma('recepciona')}><Text style={styles.firmaBtnText}>{firmaRecepciona ? 'Editar firma' : 'Firmar'}</Text></Pressable>
+                  {!!firmaRecepciona && <Pressable style={styles.firmaClearBtn} disabled={actaSoloLectura} onPress={() => limpiarFirma('recepciona')}><Ionicons name="trash-outline" size={14} color="#dc2626" /></Pressable>}
                 </View>
                 {!!firmaRecepciona && <Image source={{ uri: firmaRecepciona }} style={styles.firmaPreview} resizeMode="contain" />}
               </View>
@@ -3621,13 +3953,13 @@ export default function InformesScreen() {
               <View style={styles.row}>
                 <View style={styles.inputCol}>
                   <Text style={styles.selectLabel}>Fecha registro</Text>
-                  <Pressable style={styles.dateInput} onPress={() => setShowActaFechaPicker(true)}>
+                  <Pressable style={[styles.dateInput, actaSoloLectura && styles.inputDisabled]} disabled={actaSoloLectura} onPress={() => setShowActaFechaPicker(true)}>
                     <Text style={styles.dateInputText}>{fechaRegistro || 'Seleccionar fecha'}</Text>
                     <Ionicons name="calendar-outline" size={16} color="#1d4ed8" />
                   </Pressable>
                 </View>
               </View>
-              {showActaFechaPicker && (
+              {showActaFechaPicker && !actaSoloLectura && (
                 <DateTimePicker
                   value={inputDateToDate(fechaRegistro)}
                   mode="date"
@@ -3637,12 +3969,13 @@ export default function InformesScreen() {
               )}
               <View style={styles.inputBlock}>
                 <Text style={styles.selectLabel}>Los equipos considerados en este sistema, corresponden a</Text>
-                <TextInput style={[styles.input, styles.textArea]} value={equiposConsiderados} onChangeText={setEquiposConsiderados} multiline textAlignVertical="top" />
+                <TextInput style={[styles.input, styles.textArea, actaSoloLectura && styles.inputDisabled]} editable={!actaSoloLectura} value={equiposConsiderados} onChangeText={setEquiposConsiderados} multiline textAlignVertical="top" />
               </View>
               <View style={styles.inputBlock}>
                 <Text style={styles.selectLabel}>En caso de ser traslado, indicar centro de origen</Text>
                 <TextInput
-                  style={styles.input}
+                  style={[styles.input, actaSoloLectura && styles.inputDisabled]}
+                  editable={!actaSoloLectura}
                   value={centroOrigenTraslado}
                   onChangeText={setCentroOrigenTraslado}
                   placeholder="Centro de origen (solo traslados)"
@@ -3650,8 +3983,10 @@ export default function InformesScreen() {
               </View>
             </ScrollView>
             <View style={styles.modalActions}>
-              <Pressable style={styles.cancelBtn} onPress={() => { setShowEditor(false); resetForm(); }}><Text style={styles.cancelBtnText}>Cancelar</Text></Pressable>
-              <Pressable style={styles.saveBtn} onPress={guardarActa} disabled={saving}><Text style={styles.saveBtnText}>{saving ? 'Guardando...' : 'Guardar'}</Text></Pressable>
+              <Pressable style={styles.cancelBtn} onPress={() => { setShowEditor(false); resetForm(); }}><Text style={styles.cancelBtnText}>{actaSoloLectura ? 'Cerrar' : 'Cancelar'}</Text></Pressable>
+              {!actaSoloLectura ? (
+                <Pressable style={styles.saveBtn} onPress={guardarActa} disabled={saving}><Text style={styles.saveBtnText}>{saving ? 'Guardando...' : 'Guardar'}</Text></Pressable>
+              ) : null}
             </View>
           </View>
         </View>
@@ -3661,12 +3996,13 @@ export default function InformesScreen() {
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Vincular armado finalizado</Text>
+              <Text style={styles.modalTitle}>{vinculoSoloLectura ? 'Ver vinculacion de armado' : 'Vincular armado finalizado'}</Text>
               <Pressable
-                onPress={() => {
-                  setShowArmadosModal(false);
-                  setVinculoActaId(null);
-                }}>
+	                onPress={() => {
+	                  setShowArmadosModal(false);
+	                  setVinculoActaId(null);
+	                  setVinculoSoloLectura(false);
+	                }}>
                 <Ionicons name="close" size={20} color="#334155" />
               </Pressable>
             </View>
@@ -3678,7 +4014,9 @@ export default function InformesScreen() {
                   <Pressable
                     key={armadoId}
                     style={[styles.armadoOption, active && styles.armadoOptionActive]}
+                    disabled={vinculoSoloLectura}
                     onPress={() => {
+                      if (vinculoSoloLectura) return;
                       setArmadoSeleccionadoId(armadoId || null);
                     }}>
                     <Text style={[styles.armadoOptionTitle, active && styles.armadoOptionTitleActive]}>
@@ -3691,16 +4029,231 @@ export default function InformesScreen() {
                 );
               })}
             </ScrollView>
+            {Number(armadoSeleccionadoId || actaCentroSeleccionado?.armado_id || 0) > 0 ? (
+              <Pressable
+                style={[
+                  styles.linkArmadoBtn,
+                  styles.armadoEquiposInlineBtn,
+                  armadoEquiposYaGuardados ? styles.linkArmadoBtnSuccess : styles.linkArmadoBtnDanger,
+                ]}
+                onPress={() => abrirArmadoEquipos(vinculoSoloLectura && armadoEquiposYaGuardados)}>
+                <Ionicons
+                  name="cube-outline"
+                  size={14}
+                  color={armadoEquiposYaGuardados ? '#166534' : '#b91c1c'}
+                />
+                <Text
+                  style={[
+                    styles.linkArmadoBtnText,
+                    armadoEquiposYaGuardados ? styles.linkArmadoBtnTextSuccess : styles.linkArmadoBtnTextDanger,
+                  ]}>
+                  {vinculoSoloLectura && armadoEquiposYaGuardados ? 'Ver equipos del armado' : 'Equipos / vuelta a bodega'}
+                </Text>
+              </Pressable>
+            ) : null}
+            <View style={styles.modalActions}>
+	              <Pressable
+	                style={styles.cancelBtn}
+	                disabled={saving}
+	                onPress={() => {
+                  setShowArmadosModal(false);
+                  setVinculoActaId(null);
+                  setVinculoSoloLectura(false);
+                }}>
+                <Text style={styles.cancelBtnText}>{vinculoSoloLectura ? 'Cerrar' : 'Cancelar'}</Text>
+              </Pressable>
+              {!vinculoSoloLectura ? (
+                <>
+                  <Pressable
+                    style={styles.cancelBtn}
+                    disabled={saving}
+                    onPress={() => guardarVinculoArmado(null)}>
+                    <Text style={styles.cancelBtnText}>Quitar vinculo</Text>
+                  </Pressable>
+                  <Pressable style={styles.saveBtn} disabled={saving} onPress={() => guardarVinculoArmado(armadoSeleccionadoId)}>
+                    <Text style={styles.saveBtnText}>{saving ? 'Guardando...' : 'Guardar'}</Text>
+                  </Pressable>
+                </>
+              ) : null}
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={showArmadoEquiposModal} animationType="slide" transparent>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>
+                {armadoEquiposSoloLectura ? 'Ver equipos del armado' : 'Equipos del armado'}
+              </Text>
+              <Pressable
+                onPress={() => {
+                  setShowArmadoEquiposModal(false);
+                  setArmadoEquiposActa([]);
+                  setArmadoEquiposSoloLectura(false);
+                }}>
+                <Ionicons name="close" size={20} color="#334155" />
+              </Pressable>
+            </View>
+
+            {loadingArmadoEquipos ? (
+              <View style={styles.armadoEquiposLoading}>
+                <ActivityIndicator size="small" color="#1d4ed8" />
+                <Text style={styles.armadoEquiposLoadingText}>Cargando equipos del armado...</Text>
+              </View>
+            ) : (
+              <>
+                <View style={styles.armadoEquiposSummary}>
+                  <View style={[styles.armadoEquiposSummaryChip, styles.armadoEquiposSummaryChipNeutral]}>
+                    <Text style={styles.armadoEquiposSummaryLabel}>Total</Text>
+                    <Text style={styles.armadoEquiposSummaryValue}>{armadoEquiposActa.length}</Text>
+                  </View>
+                  <View style={[styles.armadoEquiposSummaryChip, styles.armadoEquiposSummaryChipOk]}>
+                    <Text style={styles.armadoEquiposSummaryLabel}>Instalados</Text>
+                    <Text style={styles.armadoEquiposSummaryValue}>
+                      {armadoEquiposActa.filter((item) => String(item.estado_uso || '') === 'instalado').length}
+                    </Text>
+                  </View>
+                  <View style={[styles.armadoEquiposSummaryChip, styles.armadoEquiposSummaryChipWarn]}>
+                    <Text style={styles.armadoEquiposSummaryLabel}>Devueltos</Text>
+                    <Text style={styles.armadoEquiposSummaryValue}>
+                      {armadoEquiposActa.filter((item) => String(item.estado_uso || '') === 'devuelto_bodega').length}
+                    </Text>
+                  </View>
+                </View>
+
+                <ScrollView style={styles.armadoEquiposList} showsVerticalScrollIndicator={false}>
+                  {armadoEquiposActa.map((item, index) => {
+                    const estadoUso = String(item.estado_uso || 'instalado');
+                    const estadoLogistico = String(item.estado_logistico || 'sin_movimiento');
+                    return (
+                      <View key={`${buildActaArmadoEquipoKey(item)}-${index}`} style={styles.armadoEquipoCard}>
+                        <View style={styles.armadoEquipoHeader}>
+                          <View style={styles.armadoEquipoTitleWrap}>
+                            <Text style={styles.armadoEquipoTitle}>{item.nombre || 'Equipo sin nombre'}</Text>
+                            <Text style={styles.armadoEquipoMeta}>
+                              {item.numero_serie
+                                ? `N Serie: ${item.numero_serie}`
+                                : item.codigo
+                                  ? `Codigo: ${item.codigo}`
+                                  : 'Sin serie'}
+                            </Text>
+                          </View>
+                          <View
+                            style={[
+                              styles.armadoEquipoBadge,
+                              estadoUso === 'instalado'
+                                ? styles.armadoEquipoBadgeOk
+                                : styles.armadoEquipoBadgeWarn,
+                            ]}>
+                            <Text
+                              style={[
+                                styles.armadoEquipoBadgeText,
+                                estadoUso === 'instalado'
+                                  ? styles.armadoEquipoBadgeTextOk
+                                  : styles.armadoEquipoBadgeTextWarn,
+                              ]}>
+                              {estadoUso === 'instalado'
+                                ? 'Instalado'
+                                : 'Vuelta a bodega'}
+                            </Text>
+                          </View>
+                        </View>
+
+                        <View style={styles.armadoEquipoInfoRow}>
+                          <Text style={styles.armadoEquipoInfoLabel}>Bulto</Text>
+                          <Text style={styles.armadoEquipoInfoValue}>{item.caja || 'Sin bulto asignado'}</Text>
+                        </View>
+                        <View style={styles.armadoEquipoInfoRow}>
+                          <Text style={styles.armadoEquipoInfoLabel}>Logistica</Text>
+                          <Text style={styles.armadoEquipoInfoValue}>
+                            {estadoLogistico === 'en_transito_bodega'
+                              ? 'En transito hacia bodega'
+                              : estadoLogistico === 'recepcionado_bodega'
+                                ? 'Recepcionado en bodega'
+                                : 'Sin movimiento'}
+                          </Text>
+                        </View>
+
+                        <View style={styles.armadoEquipoActions}>
+                          <Pressable
+                            style={[
+                              styles.armadoEquipoActionBtn,
+                              estadoUso === 'instalado' && styles.armadoEquipoActionBtnActiveOk,
+                              armadoEquiposSoloLectura && styles.armadoEquipoActionBtnDisabled,
+                            ]}
+                            disabled={armadoEquiposSoloLectura}
+                            onPress={() => actualizarEstadoArmadoEquipo(index, 'instalado')}>
+                            <Ionicons
+                              name="checkmark-circle-outline"
+                              size={14}
+                              color={estadoUso === 'instalado' ? '#166534' : '#475569'}
+                            />
+                            <Text
+                              style={[
+                                styles.armadoEquipoActionText,
+                                estadoUso === 'instalado' && styles.armadoEquipoActionTextOk,
+                              ]}>
+                              Instalado
+                            </Text>
+                          </Pressable>
+                          <Pressable
+                            style={[
+                              styles.armadoEquipoActionBtn,
+                              estadoUso === 'devuelto_bodega' && styles.armadoEquipoActionBtnActiveWarn,
+                              armadoEquiposSoloLectura && styles.armadoEquipoActionBtnDisabled,
+                            ]}
+                            disabled={armadoEquiposSoloLectura}
+                            onPress={() => actualizarEstadoArmadoEquipo(index, 'devuelto_bodega')}>
+                            <Ionicons
+                              name="return-up-back-outline"
+                              size={14}
+                              color={estadoUso === 'devuelto_bodega' ? '#b45309' : '#475569'}
+                            />
+                            <Text
+                              style={[
+                                styles.armadoEquipoActionText,
+                                estadoUso === 'devuelto_bodega' && styles.armadoEquipoActionTextWarn,
+                              ]}>
+                              Devuelto
+                            </Text>
+                          </Pressable>
+                        </View>
+                      </View>
+                    );
+                  })}
+                  {!armadoEquiposActa.length ? (
+                    <View style={styles.armadoEquiposEmpty}>
+                      <Ionicons name="cube-outline" size={18} color="#94a3b8" />
+                      <Text style={styles.armadoEquiposEmptyText}>No hay equipos para revisar en este armado.</Text>
+                    </View>
+                  ) : null}
+                </ScrollView>
+              </>
+            )}
+
             <View style={styles.modalActions}>
               <Pressable
                 style={styles.cancelBtn}
-                disabled={saving}
-                onPress={() => guardarVinculoArmado(null)}>
-                <Text style={styles.cancelBtnText}>Quitar vinculo</Text>
+                disabled={savingArmadoEquipos}
+                onPress={() => {
+                  setShowArmadoEquiposModal(false);
+                  setArmadoEquiposActa([]);
+                  setArmadoEquiposSoloLectura(false);
+                }}>
+                <Text style={styles.cancelBtnText}>Cerrar</Text>
               </Pressable>
-              <Pressable style={styles.saveBtn} disabled={saving} onPress={() => guardarVinculoArmado(armadoSeleccionadoId)}>
-                <Text style={styles.saveBtnText}>{saving ? 'Guardando...' : 'Guardar'}</Text>
-              </Pressable>
+              {!armadoEquiposSoloLectura ? (
+                <Pressable
+                  style={[styles.saveBtn, savingArmadoEquipos && styles.saveBtnDisabled]}
+                  disabled={savingArmadoEquipos}
+                  onPress={guardarArmadoEquiposActa}>
+                  <Text style={styles.saveBtnText}>
+                    {savingArmadoEquipos ? 'Guardando...' : 'Guardar'}
+                  </Text>
+                </Pressable>
+              ) : null}
             </View>
           </View>
         </View>
@@ -3718,6 +4271,7 @@ export default function InformesScreen() {
                 onPress={() => {
                   setRetiroTipo('parcial');
                   setShowRetiroTipoModal(false);
+                  setPermisoSoloLectura(false);
                   setShowPermisoModal(true);
                   setShowRetiroChecklistModal(true);
                 }}>
@@ -3732,6 +4286,7 @@ export default function InformesScreen() {
                 onPress={() => {
                   setRetiroTipo('completo');
                   setShowRetiroTipoModal(false);
+                  setPermisoSoloLectura(false);
                   setShowPermisoModal(true);
                   setShowRetiroChecklistModal(true);
                 }}>
@@ -4052,18 +4607,21 @@ export default function InformesScreen() {
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>
-                {permisoContexto === 'mantencion'
-                  ? 'Informe de mantencion'
-                  : permisoContexto === 'retiro'
-                  ? 'Informe de retiro'
+	              <Text style={styles.modalTitle}>
+	                {permisoInstalacionSoloLectura
+	                  ? 'Ver permiso de trabajo'
+	                  : permisoContexto === 'mantencion'
+	                  ? 'Informe de mantencion'
+	                  : permisoContexto === 'retiro'
+	                  ? 'Informe de retiro'
                   : 'Permiso de trabajo'}
               </Text>
               <Pressable
                 onPress={() => {
-                  setShowPermisoModal(false);
-                  setShowRetiroChecklistModal(false);
-                  setPermisoContexto('instalacion');
+	                  setShowPermisoModal(false);
+	                  setShowRetiroChecklistModal(false);
+	                  setPermisoSoloLectura(false);
+	                  setPermisoContexto('instalacion');
                   setMantencionEditandoId(null);
                   setRetiroEditandoId(null);
                   setCambioEquipoEnabled(false);
@@ -4152,22 +4710,25 @@ export default function InformesScreen() {
                   <Text style={styles.selectLabel}>Base tierra</Text>
                   <View style={styles.baseChoiceRow}>
                     <Pressable
-                      style={[styles.baseChoiceBtn, permBaseTierra.toLowerCase() === 'si' && styles.baseChoiceBtnActive]}
-                      onPress={() => setPermBaseTierra('si')}>
+	                      style={[styles.baseChoiceBtn, permBaseTierra.toLowerCase() === 'si' && styles.baseChoiceBtnActive, !permisoEditable && styles.ctaDisabled]}
+	                      disabled={!permisoEditable}
+	                      onPress={() => setPermBaseTierra('si')}>
                       <Text style={[styles.baseChoiceText, permBaseTierra.toLowerCase() === 'si' && styles.baseChoiceTextActive]}>Si</Text>
                     </Pressable>
                     <Pressable
-                      style={[styles.baseChoiceBtn, permBaseTierra.toLowerCase() === 'no' && styles.baseChoiceBtnActive]}
-                      onPress={() => setPermBaseTierra('no')}>
+	                      style={[styles.baseChoiceBtn, permBaseTierra.toLowerCase() === 'no' && styles.baseChoiceBtnActive, !permisoEditable && styles.ctaDisabled]}
+	                      disabled={!permisoEditable}
+	                      onPress={() => setPermBaseTierra('no')}>
                       <Text style={[styles.baseChoiceText, permBaseTierra.toLowerCase() === 'no' && styles.baseChoiceTextActive]}>No</Text>
                     </Pressable>
                   </View>
                 </View>
                 <View style={styles.inputCol}>
                   <Text style={styles.selectLabel}>Cantidad de radares</Text>
-                  <TextInput
-                    style={styles.input}
-                    value={permCantidadRadares}
+	                  <TextInput
+	                    style={[styles.input, !permisoEditable && styles.inputDisabled]}
+	                    editable={permisoEditable}
+	                    value={permCantidadRadares}
                     onChangeText={(v) => setPermCantidadRadares(v.replace(/\D/g, ''))}
                     placeholder="Ej: 2"
                     keyboardType="numeric"
@@ -4178,14 +4739,16 @@ export default function InformesScreen() {
               <View style={[styles.inputBlock, styles.rowTopGap]}>
                 <Text style={styles.selectLabel}>Responsabilidad</Text>
                 <View style={styles.baseChoiceRow}>
-                  <Pressable
-                    style={[styles.baseChoiceBtn, permResponsabilidad.toLowerCase() === 'orca' && styles.baseChoiceBtnActive]}
-                    onPress={() => setPermResponsabilidad('orca')}>
+	                  <Pressable
+	                    style={[styles.baseChoiceBtn, permResponsabilidad.toLowerCase() === 'orca' && styles.baseChoiceBtnActive, !permisoEditable && styles.ctaDisabled]}
+	                    disabled={!permisoEditable}
+	                    onPress={() => setPermResponsabilidad('orca')}>
                     <Text style={[styles.baseChoiceText, permResponsabilidad.toLowerCase() === 'orca' && styles.baseChoiceTextActive]}>Orca</Text>
                   </Pressable>
-                  <Pressable
-                    style={[styles.baseChoiceBtn, permResponsabilidad.toLowerCase() === 'cliente' && styles.baseChoiceBtnActive]}
-                    onPress={() => setPermResponsabilidad('cliente')}>
+	                  <Pressable
+	                    style={[styles.baseChoiceBtn, permResponsabilidad.toLowerCase() === 'cliente' && styles.baseChoiceBtnActive, !permisoEditable && styles.ctaDisabled]}
+	                    disabled={!permisoEditable}
+	                    onPress={() => setPermResponsabilidad('cliente')}>
                     <Text style={[styles.baseChoiceText, permResponsabilidad.toLowerCase() === 'cliente' && styles.baseChoiceTextActive]}>Cliente</Text>
                   </Pressable>
                 </View>
@@ -4193,20 +4756,20 @@ export default function InformesScreen() {
               <View style={[styles.row, styles.rowTopGap]}>
                 <View style={styles.inputCol}>
                   <Text style={styles.selectLabel}>Fecha ingreso</Text>
-                  <Pressable style={styles.dateInput} onPress={() => setShowPermFechaPicker(true)}>
+	                  <Pressable style={[styles.dateInput, !permisoEditable && styles.inputDisabled]} disabled={!permisoEditable} onPress={() => setShowPermFechaPicker(true)}>
                     <Text style={styles.dateInputText}>{permFecha || 'Seleccionar fecha'}</Text>
                     <Ionicons name="calendar-outline" size={16} color="#1d4ed8" />
                   </Pressable>
                 </View>
                 <View style={styles.inputCol}>
                   <Text style={styles.selectLabel}>Fecha salida</Text>
-                  <Pressable style={styles.dateInput} onPress={() => setShowPermFechaSalidaPicker(true)}>
+	                  <Pressable style={[styles.dateInput, !permisoEditable && styles.inputDisabled]} disabled={!permisoEditable} onPress={() => setShowPermFechaSalidaPicker(true)}>
                     <Text style={styles.dateInputText}>{permFechaSalida || 'Seleccionar fecha'}</Text>
                     <Ionicons name="calendar-outline" size={16} color="#1d4ed8" />
                   </Pressable>
                 </View>
               </View>
-              {showPermFechaPicker && (
+	              {showPermFechaPicker && permisoEditable && (
                 <DateTimePicker
                   value={inputDateToDate(permFecha)}
                   mode="date"
@@ -4214,7 +4777,7 @@ export default function InformesScreen() {
                   onChange={handlePermFechaChange}
                 />
               )}
-              {showPermFechaSalidaPicker && (
+	              {showPermFechaSalidaPicker && permisoEditable && (
                 <DateTimePicker
                   value={inputDateToDate(permFechaSalida || permFecha)}
                   mode="date"
@@ -4231,9 +4794,10 @@ export default function InformesScreen() {
                 {permPuntosGpsList.map((pt, idx) => (
                   <View key={`gps-${idx}`} style={styles.row}>
                     <View style={styles.inputCol}>
-                      <TextInput
-                        style={styles.input}
-                        value={pt.lat}
+	                      <TextInput
+	                        style={[styles.input, !permisoEditable && styles.inputDisabled]}
+	                        editable={permisoEditable}
+	                        value={pt.lat}
                         onChangeText={(val) =>
                           setPermPuntosGpsList((prev) =>
                             prev.map((p, i) => (i === idx ? { ...p, lat: normalizeGpsPointInput(val) } : p))
@@ -4244,9 +4808,10 @@ export default function InformesScreen() {
                       />
                     </View>
                     <View style={styles.inputCol}>
-                      <TextInput
-                        style={styles.input}
-                        value={pt.lng}
+	                      <TextInput
+	                        style={[styles.input, !permisoEditable && styles.inputDisabled]}
+	                        editable={permisoEditable}
+	                        value={pt.lng}
                         onChangeText={(val) =>
                           setPermPuntosGpsList((prev) =>
                             prev.map((p, i) => (i === idx ? { ...p, lng: normalizeGpsPointInput(val) } : p))
@@ -4257,17 +4822,19 @@ export default function InformesScreen() {
                       />
                     </View>
                     {permPuntosGpsList.length > 1 ? (
-                      <Pressable
-                        style={styles.actionBtnDelete}
-                        onPress={() => setPermPuntosGpsList((prev) => prev.filter((_, i) => i !== idx))}>
+	                      <Pressable
+	                        style={styles.actionBtnDelete}
+	                        disabled={!permisoEditable}
+	                        onPress={() => setPermPuntosGpsList((prev) => prev.filter((_, i) => i !== idx))}>
                         <Ionicons name="close" size={16} color="#dc2626" />
                       </Pressable>
                     ) : null}
                   </View>
                 ))}
-                <Pressable
-                  style={styles.firmaBtn}
-                  onPress={() => setPermPuntosGpsList((prev) => [...prev, { lat: '', lng: '' }])}>
+	                <Pressable
+	                  style={[styles.firmaBtn, !permisoEditable && styles.ctaDisabled]}
+	                  disabled={!permisoEditable}
+	                  onPress={() => setPermPuntosGpsList((prev) => [...prev, { lat: '', lng: '' }])}>
                   <Text style={styles.firmaBtnText}>+ Agregar punto GPS</Text>
                 </Pressable>
               </View>
@@ -4279,9 +4846,10 @@ export default function InformesScreen() {
               <View style={styles.row}>
                 <View style={styles.inputCol}>
                   <Text style={styles.selectLabel}>Medicion fase/neutro</Text>
-                  <TextInput
-                    style={styles.input}
-                    value={permMedicionFaseNeutro}
+	                  <TextInput
+	                    style={[styles.input, !permisoEditable && styles.inputDisabled]}
+	                    editable={permisoEditable}
+	                    value={permMedicionFaseNeutro}
                     onChangeText={(v) => setPermMedicionFaseNeutro(normalizeMeasureInput(v))}
                     placeholder="Ej: 220.5"
                     keyboardType="decimal-pad"
@@ -4289,9 +4857,10 @@ export default function InformesScreen() {
                 </View>
                 <View style={styles.inputCol}>
                   <Text style={styles.selectLabel}>Medicion neutro/tierra</Text>
-                  <TextInput
-                    style={styles.input}
-                    value={permMedicionNeutroTierra}
+	                  <TextInput
+	                    style={[styles.input, !permisoEditable && styles.inputDisabled]}
+	                    editable={permisoEditable}
+	                    value={permMedicionNeutroTierra}
                     onChangeText={(v) => setPermMedicionNeutroTierra(normalizeMeasureInput(v))}
                     placeholder="Ej: 0.6"
                     keyboardType="decimal-pad"
@@ -4300,9 +4869,10 @@ export default function InformesScreen() {
               </View>
               <View style={styles.inputBlock}>
                 <Text style={styles.selectLabel}>Hertz</Text>
-                <TextInput
-                  style={styles.input}
-                  value={permHertz}
+	                <TextInput
+	                  style={[styles.input, !permisoEditable && styles.inputDisabled]}
+	                  editable={permisoEditable}
+	                  value={permHertz}
                   onChangeText={(v) => setPermHertz(normalizeMeasureInput(v))}
                   placeholder="Ej: 50.0"
                   keyboardType="decimal-pad"
@@ -4317,9 +4887,10 @@ export default function InformesScreen() {
                 {permSellosList.map((sello, idx) => (
                   <View key={`sello-${idx}`} style={styles.selloCard}>
                     <Text style={styles.miniFieldLabel}>Ubicacion</Text>
-                    <TextInput
-                      style={styles.input}
-                      value={sello.ubicacion}
+	                    <TextInput
+	                      style={[styles.input, !permisoEditable && styles.inputDisabled]}
+	                      editable={permisoEditable}
+	                      value={sello.ubicacion}
                       onChangeText={(val) =>
                         setPermSellosList((prev) =>
                           prev.map((s, i) => (i === idx ? { ...s, ubicacion: val } : s))
@@ -4330,9 +4901,10 @@ export default function InformesScreen() {
                     <View style={styles.row}>
                       <View style={styles.inputCol}>
                         <Text style={styles.miniFieldLabel}>Sello antiguo</Text>
-                        <TextInput
-                          style={styles.input}
-                          value={sello.numeroAnterior}
+	                        <TextInput
+	                          style={[styles.input, !permisoEditable && styles.inputDisabled]}
+	                          editable={permisoEditable}
+	                          value={sello.numeroAnterior}
                           onChangeText={(val) =>
                             setPermSellosList((prev) =>
                               prev.map((s, i) => (i === idx ? { ...s, numeroAnterior: normalizeSelloNumero(val) } : s))
@@ -4344,9 +4916,10 @@ export default function InformesScreen() {
                       </View>
                       <View style={styles.inputCol}>
                         <Text style={styles.miniFieldLabel}>Sello nuevo</Text>
-                        <TextInput
-                          style={styles.input}
-                          value={sello.numeroNuevo}
+	                        <TextInput
+	                          style={[styles.input, !permisoEditable && styles.inputDisabled]}
+	                          editable={permisoEditable}
+	                          value={sello.numeroNuevo}
                           onChangeText={(val) =>
                             setPermSellosList((prev) =>
                               prev.map((s, i) => (i === idx ? { ...s, numeroNuevo: normalizeSelloNumero(val) } : s))
@@ -4359,18 +4932,20 @@ export default function InformesScreen() {
                     </View>
                     {permSellosList.length > 1 ? (
                       <View style={{ alignItems: 'flex-end' }}>
-                        <Pressable
-                          style={styles.actionBtnDelete}
-                          onPress={() => setPermSellosList((prev) => prev.filter((_, i) => i !== idx))}>
+	                        <Pressable
+	                          style={styles.actionBtnDelete}
+	                          disabled={!permisoEditable}
+	                          onPress={() => setPermSellosList((prev) => prev.filter((_, i) => i !== idx))}>
                           <Ionicons name="close" size={16} color="#dc2626" />
                         </Pressable>
                       </View>
                     ) : null}
                   </View>
                 ))}
-                <Pressable
-                  style={styles.firmaBtn}
-                  onPress={() => setPermSellosList((prev) => [...prev, { ubicacion: '', numeroAnterior: '', numeroNuevo: '' }])}>
+	                <Pressable
+	                  style={[styles.firmaBtn, !permisoEditable && styles.ctaDisabled]}
+	                  disabled={!permisoEditable}
+	                  onPress={() => setPermSellosList((prev) => [...prev, { ubicacion: '', numeroAnterior: '', numeroNuevo: '' }])}>
                   <Text style={styles.firmaBtnText}>+ Agregar sello</Text>
                 </Pressable>
               </View>
@@ -4592,9 +5167,10 @@ export default function InformesScreen() {
                   <Ionicons name="document-text-outline" size={16} color="#1d4ed8" />
                   <Text style={styles.descripcionLabel}>Descripcion del trabajo</Text>
                 </View>
-                <TextInput
-                  style={[styles.input, styles.textArea]}
-                  value={permDescripcionTrabajo}
+	                <TextInput
+	                  style={[styles.input, styles.textArea, !permisoEditable && styles.inputDisabled]}
+	                  editable={permisoEditable}
+	                  value={permDescripcionTrabajo}
                   onChangeText={setPermDescripcionTrabajo}
                   placeholder="Escribe el resultado final de la mantencion..."
                   multiline
@@ -4617,18 +5193,20 @@ export default function InformesScreen() {
                 <View style={styles.row}>
                   <View style={styles.inputCol}>
                     <Text style={styles.selectLabel}>Recepciona</Text>
-                    <TextInput
-                      style={styles.input}
-                      value={permRecepciona}
+	                    <TextInput
+	                      style={[styles.input, !permisoEditable && styles.inputDisabled]}
+	                      editable={permisoEditable}
+	                      value={permRecepciona}
                       onChangeText={setPermRecepciona}
                       placeholder="Nombre recepciona"
                     />
                   </View>
                   <View style={styles.inputCol}>
                     <Text style={styles.selectLabel}>RUT recepciona</Text>
-                    <TextInput
-                      style={styles.input}
-                      value={permRecepcionaRut}
+	                    <TextInput
+	                      style={[styles.input, !permisoEditable && styles.inputDisabled]}
+	                      editable={permisoEditable}
+	                      value={permRecepcionaRut}
                       onChangeText={setPermRecepcionaRut}
                       placeholder="Ej: 12345678-9"
                       autoCapitalize="none"
@@ -4638,11 +5216,11 @@ export default function InformesScreen() {
                 <View style={styles.inputBlock}>
                   <Text style={styles.signatureFieldLabel}>Firma recepciona</Text>
                   <View style={styles.firmaActions}>
-                    <Pressable style={styles.firmaBtn} onPress={() => abrirFirma('perm_recepciona')}>
+	                    <Pressable style={[styles.firmaBtn, !permisoEditable && styles.ctaDisabled]} disabled={!permisoEditable} onPress={() => abrirFirma('perm_recepciona')}>
                       <Text style={styles.firmaBtnText}>{permFirmaRecepciona ? 'Editar firma' : 'Firmar'}</Text>
                     </Pressable>
                     {!!permFirmaRecepciona && (
-                      <Pressable style={styles.firmaClearBtn} onPress={() => limpiarFirma('perm_recepciona')}>
+	                      <Pressable style={styles.firmaClearBtn} disabled={!permisoEditable} onPress={() => limpiarFirma('perm_recepciona')}>
                         <Ionicons name="trash-outline" size={14} color="#dc2626" />
                       </Pressable>
                     )}
@@ -4760,9 +5338,10 @@ export default function InformesScreen() {
                 disabled={saving}
                 onPress={() => {
                   if (saving) return;
-                  setShowPermisoModal(false);
-                  setShowRetiroChecklistModal(false);
-                  setPermisoContexto('instalacion');
+	                  setShowPermisoModal(false);
+	                  setShowRetiroChecklistModal(false);
+	                  setPermisoSoloLectura(false);
+	                  setPermisoContexto('instalacion');
                   setMantencionEditandoId(null);
                   setRetiroEditandoId(null);
                   setCambioEquipoEnabled(false);
@@ -4770,12 +5349,13 @@ export default function InformesScreen() {
                   setSerieNuevaCambio('');
                   setTipoInstalacion('acta_entrega');
                 }}>
-                <Text style={styles.cancelBtnText}>Cancelar</Text>
-              </Pressable>
-              <Pressable
-                style={[styles.saveBtn, saving && styles.ctaDisabled]}
-                disabled={saving}
-                onPress={async () => {
+	                <Text style={styles.cancelBtnText}>{permisoInstalacionSoloLectura ? 'Cerrar' : 'Cancelar'}</Text>
+	              </Pressable>
+	              {!permisoInstalacionSoloLectura ? (
+	                <Pressable
+	                  style={[styles.saveBtn, saving && styles.ctaDisabled]}
+	                  disabled={saving}
+	                  onPress={async () => {
                   if (saving) return;
                   const titulo =
                     permisoContexto === 'mantencion'
@@ -5076,9 +5656,10 @@ export default function InformesScreen() {
                   } finally {
                     setSaving(false);
                   }
-                }}>
-                <Text style={styles.saveBtnText}>{saving ? 'Guardando...' : 'Guardar'}</Text>
-              </Pressable>
+	                  }}>
+	                  <Text style={styles.saveBtnText}>{saving ? 'Guardando...' : 'Guardar'}</Text>
+	                </Pressable>
+	              ) : null}
             </View>
           </View>
         </View>
@@ -5294,8 +5875,223 @@ const styles = StyleSheet.create({
     borderColor: '#cbd5e1',
     backgroundColor: '#f8fafc',
   },
+  linkArmadoActionsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 6,
+  },
+  linkArmadoBtnFlex: {
+    flex: 1,
+  },
   linkArmadoBtnText: { color: '#1d4ed8', fontWeight: '700', fontSize: 12.5 },
   linkArmadoBtnTextDisabled: { color: '#94a3b8' },
+  linkArmadoBtnSecondary: {
+    borderColor: '#99f6e4',
+    backgroundColor: '#f0fdfa',
+  },
+  linkArmadoBtnTextSecondary: {
+    color: '#0f766e',
+  },
+  linkArmadoBtnDanger: {
+    borderColor: '#fecaca',
+    backgroundColor: '#fef2f2',
+  },
+  linkArmadoBtnTextDanger: {
+    color: '#b91c1c',
+  },
+  linkArmadoBtnSuccess: {
+    borderColor: '#bbf7d0',
+    backgroundColor: '#f0fdf4',
+  },
+  linkArmadoBtnTextSuccess: {
+    color: '#166534',
+  },
+  linkArmadoBtnEdit: {
+    marginTop: 0,
+    paddingHorizontal: 10,
+    justifyContent: 'center',
+    borderColor: '#bfdbfe',
+    backgroundColor: '#eff6ff',
+  },
+  armadoEquiposInlineBtn: {
+    marginTop: 10,
+    alignSelf: 'stretch',
+    justifyContent: 'center',
+  },
+  armadoEquiposLoading: {
+    minHeight: 180,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+  },
+  armadoEquiposLoadingText: {
+    color: '#475569',
+    fontWeight: '700',
+  },
+  armadoEquiposSummary: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 10,
+  },
+  armadoEquiposSummaryChip: {
+    minWidth: '47%',
+    flex: 1,
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    gap: 2,
+  },
+  armadoEquiposSummaryChipNeutral: {
+    borderColor: '#cbd5e1',
+    backgroundColor: '#f8fafc',
+  },
+  armadoEquiposSummaryChipOk: {
+    borderColor: '#bbf7d0',
+    backgroundColor: '#f0fdf4',
+  },
+  armadoEquiposSummaryChipWarn: {
+    borderColor: '#fde68a',
+    backgroundColor: '#fffbeb',
+  },
+  armadoEquiposSummaryLabel: {
+    color: '#64748b',
+    fontSize: 11,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.3,
+  },
+  armadoEquiposSummaryValue: {
+    color: '#0f172a',
+    fontSize: 18,
+    fontWeight: '800',
+  },
+  armadoEquiposList: {
+    maxHeight: 420,
+  },
+  armadoEquipoCard: {
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+    backgroundColor: '#f8fbff',
+    borderRadius: 14,
+    padding: 12,
+    gap: 8,
+    marginBottom: 10,
+  },
+  armadoEquipoHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  armadoEquipoTitleWrap: {
+    flex: 1,
+    gap: 3,
+  },
+  armadoEquipoTitle: {
+    color: '#0f172a',
+    fontWeight: '800',
+    fontSize: 13.5,
+  },
+  armadoEquipoMeta: {
+    color: '#475569',
+    fontWeight: '600',
+    fontSize: 12,
+  },
+  armadoEquipoBadge: {
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderWidth: 1,
+  },
+  armadoEquipoBadgeOk: {
+    borderColor: '#86efac',
+    backgroundColor: '#f0fdf4',
+  },
+  armadoEquipoBadgeWarn: {
+    borderColor: '#fde68a',
+    backgroundColor: '#fffbeb',
+  },
+  armadoEquipoBadgeText: {
+    fontWeight: '800',
+    fontSize: 11,
+  },
+  armadoEquipoBadgeTextOk: { color: '#166534' },
+  armadoEquipoBadgeTextWarn: { color: '#b45309' },
+  armadoEquipoInfoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  armadoEquipoInfoLabel: {
+    color: '#64748b',
+    fontWeight: '700',
+    fontSize: 12,
+  },
+  armadoEquipoInfoValue: {
+    color: '#0f172a',
+    fontWeight: '700',
+    fontSize: 12,
+    flex: 1,
+    textAlign: 'right',
+  },
+  armadoEquipoActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 2,
+  },
+  armadoEquipoActionBtn: {
+    flex: 1,
+    minWidth: '30%',
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    backgroundColor: '#ffffff',
+    borderRadius: 10,
+    paddingVertical: 9,
+    paddingHorizontal: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+  },
+  armadoEquipoActionBtnDisabled: {
+    opacity: 0.6,
+  },
+  armadoEquipoActionBtnActiveOk: {
+    borderColor: '#86efac',
+    backgroundColor: '#f0fdf4',
+  },
+  armadoEquipoActionBtnActiveWarn: {
+    borderColor: '#fde68a',
+    backgroundColor: '#fffbeb',
+  },
+  armadoEquipoActionText: {
+    color: '#475569',
+    fontWeight: '700',
+    fontSize: 12,
+  },
+  armadoEquipoActionTextOk: { color: '#166534' },
+  armadoEquipoActionTextWarn: { color: '#b45309' },
+  armadoEquiposEmpty: {
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    backgroundColor: '#f8fafc',
+    borderRadius: 12,
+    padding: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginVertical: 8,
+  },
+  armadoEquiposEmptyText: {
+    color: '#64748b',
+    fontWeight: '700',
+    textAlign: 'center',
+  },
   addInstallBtn: {
     marginTop: 6,
     borderWidth: 1,
@@ -5627,6 +6423,7 @@ const styles = StyleSheet.create({
   rowActions: { flexDirection: 'row', gap: 6, marginTop: 14, alignSelf: 'flex-end' },
   actionBtn: { width: 32, height: 32, borderRadius: 8, borderWidth: 1, borderColor: '#bfdbfe', backgroundColor: '#eff6ff', alignItems: 'center', justifyContent: 'center' },
   actionBtnWarn: { borderColor: '#dc2626', backgroundColor: '#ef4444' },
+  actionBtnSuccess: { borderColor: '#86efac', backgroundColor: '#f0fdf4' },
   actionBtnDelete: {
     width: 30,
     height: 30,
