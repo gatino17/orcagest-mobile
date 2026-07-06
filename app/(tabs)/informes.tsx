@@ -1659,14 +1659,21 @@ export default function InformesScreen() {
   useEffect(() => {
     if (permisoContexto !== 'instalacion') return;
     if (!actaCentroSeleccionado) return;
+    const extrasFirmas = parseFirmasTecnicosAdicionales(actaCentroSeleccionado.firmas_tecnicos_adicionales);
     setPermFecha(toInputDate(actaCentroSeleccionado.fecha_registro) || todayInputDate());
     setPermTecnico1(actaCentroSeleccionado.tecnico_1 || '');
     setPermTecnico2(actaCentroSeleccionado.tecnico_2 || '');
     setPermRecepciona(actaCentroSeleccionado.recepciona_nombre || '');
+    setFirmasTecnicosExtra(extrasFirmas);
+    setTecnicosAsignadosExtra(extrasFirmas.map((item) => String(item.nombre || '').trim()).filter(Boolean));
   }, [actaCentroSeleccionado, permisoContexto]);
   useEffect(() => {
     if (permisoContexto !== 'instalacion') return;
     if (!permisoCentroSeleccionado) return;
+    const recepcionaActual = String(permisoCentroSeleccionado.recepciona_nombre || '').trim();
+    const extrasFirmados = parseFirmasTecnicosAdicionales(permisoCentroSeleccionado.firmas_tecnicos_adicionales);
+    const extrasActa = parseFirmasTecnicosAdicionales(actaCentroSeleccionado?.firmas_tecnicos_adicionales);
+    const extrasBase = extrasFirmados.length ? extrasFirmados : extrasActa;
     setPermFecha(toInputDate(permisoCentroSeleccionado.fecha_ingreso) || todayInputDate());
     setPermFechaSalida(toInputDate(permisoCentroSeleccionado.fecha_salida) || '');
     setPermCorreoCentro(
@@ -1693,9 +1700,16 @@ export default function InformesScreen() {
     setPermEvidenciaFotos(parseEvidencePhotos(permisoCentroSeleccionado.evidencia_foto));
     setPermFirmaTecnico1(permisoCentroSeleccionado.firma_tecnico_1 || '');
     setPermFirmaTecnico2(permisoCentroSeleccionado.firma_tecnico_2 || '');
+    setPermRecepciona(
+      recepcionaActual.length > 1
+        ? recepcionaActual
+        : String(actaCentroSeleccionado?.recepciona_nombre || recepcionaActual || '')
+    );
     setPermRecepcionaRut(permisoCentroSeleccionado.recepciona_rut || '');
     setPermFirmaRecepciona(permisoCentroSeleccionado.firma_recepciona || '');
-  }, [permisoCentroSeleccionado, permCentroSel, permisoContexto]);
+    setFirmasTecnicosExtra(extrasBase);
+    setTecnicosAsignadosExtra(extrasBase.map((item) => String(item.nombre || '').trim()).filter(Boolean));
+  }, [permisoCentroSeleccionado, permCentroSel, permisoContexto, actaCentroSeleccionado]);
   useEffect(() => {
     if (permisoContexto !== 'mantencion') return;
     const base = permCentroSel || permisoCentroSeleccionado || null;
@@ -3900,9 +3914,8 @@ export default function InformesScreen() {
                 </View>
                 {!!firmaTecnico2 && <Image source={{ uri: firmaTecnico2 }} style={styles.firmaPreview} resizeMode="contain" />}
               </View>
-              {!!tecnicosAsignadosExtra.length && (
-                <View style={styles.additionalTechWrap}>
-                  <Text style={styles.additionalTechTitle}>Tecnicos adicionales asignados</Text>
+                {!!tecnicosAsignadosExtra.length && (
+                  <View style={styles.additionalTechWrap}>
                   {tecnicosAsignadosExtra.map((name, idx) => {
                     const firma = firmasTecnicosExtra[idx]?.firma || '';
                     return (
@@ -5275,7 +5288,6 @@ export default function InformesScreen() {
                     </View>
                     {!!tecnicosAsignadosExtra.length && (
                       <View style={[styles.additionalTechWrap, styles.rowTopGap]}>
-                        <Text style={styles.additionalTechTitle}>Tecnicos adicionales</Text>
                         {tecnicosAsignadosExtra.map((name, idx) => {
                           const firma = firmasTecnicosExtra[idx]?.firma || '';
                           return (
@@ -5309,26 +5321,46 @@ export default function InformesScreen() {
                     )}
                   </>
                 ) : (
-                  <View style={styles.row}>
-                    <View style={styles.inputCol}>
-                      <Text style={styles.signatureFieldLabel}>Tecnico 1</Text>
-                      <Text style={styles.signatureNameText}>{permTecnico1 || actaCentroSeleccionado?.tecnico_1 || 'Sin nombre'}</Text>
-                      {actaCentroSeleccionado?.firma_tecnico_1 ? (
-                        <Image source={{ uri: actaCentroSeleccionado.firma_tecnico_1 }} style={styles.firmaPreview} resizeMode="contain" />
-                      ) : (
-                        <Text style={styles.signatureEmptyText}>Sin firma</Text>
-                      )}
+                  <>
+                    <View style={styles.row}>
+                      <View style={styles.inputCol}>
+                        <Text style={styles.signatureFieldLabel}>Tecnico 1</Text>
+                        <Text style={styles.signatureNameText}>{permTecnico1 || actaCentroSeleccionado?.tecnico_1 || 'Sin nombre'}</Text>
+                        {actaCentroSeleccionado?.firma_tecnico_1 ? (
+                          <Image source={{ uri: actaCentroSeleccionado.firma_tecnico_1 }} style={styles.firmaPreview} resizeMode="contain" />
+                        ) : (
+                          <Text style={styles.signatureEmptyText}>Sin firma</Text>
+                        )}
+                      </View>
+                      <View style={styles.inputCol}>
+                        <Text style={styles.signatureFieldLabel}>Tecnico 2</Text>
+                        <Text style={styles.signatureNameText}>{permTecnico2 || actaCentroSeleccionado?.tecnico_2 || 'Sin nombre'}</Text>
+                        {actaCentroSeleccionado?.firma_tecnico_2 ? (
+                          <Image source={{ uri: actaCentroSeleccionado.firma_tecnico_2 }} style={styles.firmaPreview} resizeMode="contain" />
+                        ) : (
+                          <Text style={styles.signatureEmptyText}>Sin firma</Text>
+                        )}
+                      </View>
                     </View>
-                    <View style={styles.inputCol}>
-                      <Text style={styles.signatureFieldLabel}>Tecnico 2</Text>
-                      <Text style={styles.signatureNameText}>{permTecnico2 || actaCentroSeleccionado?.tecnico_2 || 'Sin nombre'}</Text>
-                      {actaCentroSeleccionado?.firma_tecnico_2 ? (
-                        <Image source={{ uri: actaCentroSeleccionado.firma_tecnico_2 }} style={styles.firmaPreview} resizeMode="contain" />
-                      ) : (
-                        <Text style={styles.signatureEmptyText}>Sin firma</Text>
-                      )}
-                    </View>
-                  </View>
+                    {!!tecnicosAsignadosExtra.length && (
+                      <View style={[styles.additionalTechWrap, styles.rowTopGap]}>
+                        {tecnicosAsignadosExtra.map((name, idx) => {
+                          const firma = firmasTecnicosExtra[idx]?.firma || '';
+                          return (
+                            <View key={`perm-inst-${name}-${idx}`} style={styles.personBlock}>
+                              <Text style={styles.signatureFieldLabel}>{`Tecnico ${idx + 3}`}</Text>
+                              <Text style={styles.signatureNameText}>{name || 'Sin nombre'}</Text>
+                              {firma ? (
+                                <Image source={{ uri: firma }} style={styles.firmaPreview} resizeMode="contain" />
+                              ) : (
+                                <Text style={styles.signatureEmptyText}>Sin firma</Text>
+                              )}
+                            </View>
+                          );
+                        })}
+                      </View>
+                    )}
+                  </>
                 )}
               </View>
             </ScrollView>
@@ -5495,7 +5527,7 @@ export default function InformesScreen() {
                             : null
                           : null,
                       firmas_tecnicos_adicionales:
-                        permisoContexto === 'mantencion' || permisoContexto === 'retiro'
+                        permisoContexto === 'instalacion' || permisoContexto === 'mantencion' || permisoContexto === 'retiro'
                           ? JSON.stringify(
                               firmasTecnicosExtra
                                 .map((row) => ({
