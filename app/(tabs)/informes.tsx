@@ -36,6 +36,7 @@ import {
   fetchActividadesMias,
   fetchActividades,
   fetchActasEntrega,
+  fetchCambiosEquipoMantencion,
   fetchCentrosPorCliente,
   fetchClientes,
   fetchPermisosTrabajo,
@@ -158,6 +159,7 @@ type Permiso = {
   cliente?: string;
   centro?: string;
   equipos?: RetiroEquipoChecklist[];
+  cambios_equipo?: any[] | string;
 };
 type LevantamientoTerreno = {
   id_levantamiento_terreno?: number;
@@ -470,12 +472,13 @@ const parseRetiroEquipos = (value?: RetiroEquipoChecklist[] | string): RetiroEqu
     if (!Array.isArray(raw)) return [];
     return raw
       .map((row: any) => ({
-        id_retiro_equipo: Number(row?.id_retiro_equipo || 0) || undefined,
+        id_retiro_equipo:
+          Number(row?.id_retiro_equipo || row?.id_cambio_equipo_mantencion || 0) || undefined,
         equipo_id: Number(row?.equipo_id || 0) || undefined,
-        equipo_nombre: String(row?.equipo_nombre || row?.nombre || '').trim(),
-        numero_serie: String(row?.numero_serie || '').trim(),
-        codigo: String(row?.codigo || '').trim(),
-        retirado: !!row?.retirado,
+        equipo_nombre: String(row?.equipo_nombre || row?.equipo || row?.nombre || '').trim(),
+        numero_serie: String(row?.numero_serie || row?.serie_anterior || '').trim(),
+        codigo: String(row?.codigo || row?.codigo_anterior || '').trim(),
+        retirado: typeof row?.retirado === 'boolean' ? !!row?.retirado : true,
       }))
       .filter((row: RetiroEquipoChecklist) => row.equipo_nombre || row.numero_serie || row.codigo);
   } catch {
@@ -502,6 +505,8 @@ export default function InformesScreen() {
   const [centrosForm, setCentrosForm] = useState<Centro[]>([]);
   const [actas, setActas] = useState<Acta[]>([]);
   const [permisos, setPermisos] = useState<Permiso[]>([]);
+  const [loadingActas, setLoadingActas] = useState(false);
+  const [loadingPermisos, setLoadingPermisos] = useState(false);
   const [mantencionesTerreno, setMantencionesTerreno] = useState<Permiso[]>([]);
   const [retirosTerreno, setRetirosTerreno] = useState<Permiso[]>([]);
   const [levantamientosTerreno, setLevantamientosTerreno] = useState<LevantamientoTerreno[]>([]);
@@ -749,6 +754,9 @@ export default function InformesScreen() {
   }, [armadoEquiposGuardados]);
   const instalacionSeleccionada = !!(permClienteId && permCentroId);
   const instalacionesCompletadas = useMemo(() => {
+    if (moduloInforme === 'instalacion' && (loadingActas || loadingPermisos)) {
+      return [];
+    }
     const ids = permisosInstalacion
       .map((p) => Number(p.centro_id || 0))
       .filter(Boolean)
@@ -791,8 +799,11 @@ export default function InformesScreen() {
         fechaPermiso: permisosInstalacion.find((p) => Number(p.centro_id || 0) === centroId)?.fecha_ingreso || '',
       };
     });
-  }, [permisosInstalacion, actas, permCentros, centrosFiltro, armadoEquiposGuardadoActas]);
+  }, [permisosInstalacion, actas, permCentros, centrosFiltro, armadoEquiposGuardadoActas, moduloInforme, loadingActas, loadingPermisos]);
   const instalacionesEnProceso = useMemo(() => {
+    if (moduloInforme === 'instalacion' && (loadingActas || loadingPermisos)) {
+      return [];
+    }
     const actividadesVigentes = new Set(
       actividadesAsignadas
         .map((a) => Number(a.id_actividad || 0))
@@ -895,6 +906,8 @@ export default function InformesScreen() {
     armadoSeleccionadoId,
     clientes,
     permClienteId,
+    loadingActas,
+    loadingPermisos,
   ]);
   const mostrarAsignadasCompletadas = false;
   const mantencionesRecientesVisibles = useMemo(
@@ -932,8 +945,9 @@ export default function InformesScreen() {
   const canEliminarRetiroReciente = roleNorm === 'admin' || roleNorm === 'operaciones' || roleNorm === 'superadmin';
   const nombresBloqueadosPorProgramacion = !!actividadAsignadaActiva;
   const bloquearClienteCentroActa = !!actividadAsignadaActiva || !!editId;
-  const permisoInstalacionSoloLectura = permisoContexto === 'instalacion' && permisoSoloLectura;
-  const permisoEditable = !permisoInstalacionSoloLectura;
+  const permisoFormularioSoloLectura = permisoSoloLectura;
+  const permisoInstalacionSoloLectura = permisoContexto === 'instalacion' && permisoFormularioSoloLectura;
+  const permisoEditable = !permisoFormularioSoloLectura;
   const clienteCentroSoloLectura =
     permisoContexto === 'mantencion' || !!actividadAsignadaActiva;
   const estadoActividad = (value?: string) => {
@@ -963,18 +977,81 @@ export default function InformesScreen() {
       return false;
     });
   }, [actividadesAsignadas, moduloInforme]);
-  const actividadesProgramadas = useMemo(
-    () => {
-      const actividadesConActa = new Set(
+  const actividadIdsConRegistroModulo = useMemo(() => {
+    if (moduloInforme === 'instalacion') {
+      return new Set(
         actas
           .map((a) => Number(a.actividad_id || 0))
           .filter((id) => id > 0)
       );
+    }
+    if (moduloInforme === 'mantencion') {
+      return new Set(
+        permisosMantencion
+          .map((m) => Number(m.actividad_id || 0))
+          .filter((id) => id > 0)
+      );
+    }
+    if (moduloInforme === 'retiro') {
+      return new Set(
+        permisosRetiro
+          .map((r) => Number(r.actividad_id || 0))
+          .filter((id) => id > 0)
+      );
+    }
+    if (moduloInforme === 'levantamiento') {
+      return new Set(
+        levantamientosTerreno
+          .map((l) => Number(l.actividad_id || 0))
+          .filter((id) => id > 0)
+      );
+    }
+    return new Set<number>();
+  }, [actas, permisosMantencion, permisosRetiro, levantamientosTerreno, moduloInforme]);
+  const actividadTieneRegistroModulo = useCallback((actividad: ActividadAsignada) => {
+    const idActividad = Number(actividad.id_actividad || 0) || 0;
+    if (idActividad > 0 && actividadIdsConRegistroModulo.has(idActividad)) return true;
+
+    const centroIdActividad =
+      Number(actividad.centro_id || actividad.centro?.id_centro || actividad.centro?.id || 0) || 0;
+    const fechaActividad = toInputDate(actividad.fecha_inicio) || '';
+
+    if (moduloInforme === 'mantencion') {
+      return permisosMantencion.some((item) => {
+        const centroId = Number(item.centro_id || 0) || 0;
+        const fecha = toInputDate(item.fecha_ingreso) || '';
+        return !!centroIdActividad && centroId === centroIdActividad && !!fechaActividad && fecha === fechaActividad;
+      });
+    }
+
+    if (moduloInforme === 'retiro') {
+      return permisosRetiro.some((item) => {
+        const centroId = Number(item.centro_id || 0) || 0;
+        const fecha = toInputDate(item.fecha_retiro) || '';
+        return !!centroIdActividad && centroId === centroIdActividad && !!fechaActividad && fecha === fechaActividad;
+      });
+    }
+
+    if (moduloInforme === 'levantamiento') {
+      return levantamientosTerreno.some((item) => {
+        const centroId = Number(item.centro_id || 0) || 0;
+        const fecha = toInputDate(item.fecha_levantamiento) || '';
+        return !!centroIdActividad && centroId === centroIdActividad && !!fechaActividad && fecha === fechaActividad;
+      });
+    }
+
+    return false;
+  }, [actividadIdsConRegistroModulo, levantamientosTerreno, moduloInforme, permisosMantencion, permisosRetiro]);
+  const actividadesProgramadas = useMemo(
+    () => {
       return actividadesAsignadasFiltradas.filter((a) => {
         const idActividad = Number(a.id_actividad || 0);
         const estado = estadoActividad(a.estado);
         const esActiva = Number(actividadAsignadaActiva?.id_actividad || 0) === idActividad;
+        const tieneRegistro = actividadTieneRegistroModulo(a);
         if (esActiva) return false;
+        if (estado === 'finalizado') return false;
+        if (moduloInforme === 'mantencion' && !tieneRegistro) return true;
         if (estado === 'pendiente') return true;
         // Compatibilidad operativa: si en web dejaron "En progreso" pero aun no existe acta,
         // en mobile se sigue mostrando como pendiente de iniciar.
@@ -982,34 +1059,30 @@ export default function InformesScreen() {
           moduloInforme !== 'levantamiento' &&
           moduloInforme !== 'instalacion' &&
           estado === 'en_progreso' &&
-          !actividadesConActa.has(idActividad)
+          !tieneRegistro
         ) return true;
         return false;
       });
     },
-    [actividadesAsignadasFiltradas, actividadAsignadaActiva, actas, moduloInforme]
+    [actividadesAsignadasFiltradas, actividadAsignadaActiva, actividadTieneRegistroModulo, moduloInforme]
   );
   const actividadesEnProceso = useMemo(
     () => {
-      const actividadesConActa = new Set(
-        actas
-          .map((a) => Number(a.actividad_id || 0))
-          .filter((id) => id > 0)
-      );
       return actividadesAsignadasFiltradas.filter((a) => {
         const idActividad = Number(a.id_actividad || 0);
         const esActiva = Number(actividadAsignadaActiva?.id_actividad || 0) === idActividad;
         const estado = estadoActividad(a.estado);
+        const tieneRegistro = actividadTieneRegistroModulo(a);
         if (esActiva) {
           if (moduloInforme === 'instalacion') return false;
           return estado !== 'finalizado';
         }
         if (moduloInforme === 'levantamiento') return estado === 'en_progreso';
-        if (moduloInforme === 'instalacion') return estado === 'en_progreso' && !actividadesConActa.has(idActividad);
-        return estado === 'en_progreso' && actividadesConActa.has(idActividad);
+        if (moduloInforme === 'instalacion') return estado === 'en_progreso' && !tieneRegistro;
+        return estado === 'en_progreso' && tieneRegistro;
       });
     },
-    [actividadesAsignadasFiltradas, actividadAsignadaActiva, actas, moduloInforme]
+    [actividadesAsignadasFiltradas, actividadAsignadaActiva, actividadTieneRegistroModulo, moduloInforme]
   );
   const actividadInstalacionActivaEnProceso = useMemo(() => {
     if (moduloInforme !== 'instalacion' || !actividadAsignadaActiva) return false;
@@ -1076,6 +1149,7 @@ export default function InformesScreen() {
   const cargarActas = async () => {
     if (!token || moduloInforme !== 'instalacion' || tipoInstalacion !== 'acta_entrega') return;
     setLoading(true);
+    setLoadingActas(true);
     try {
       const data = await fetchActasEntrega({
         centro_id: filtroCentroId || undefined,
@@ -1087,11 +1161,13 @@ export default function InformesScreen() {
       setActas([]);
       Alert.alert('Informes', 'No se pudieron cargar las actas.');
     } finally {
+      setLoadingActas(false);
       setLoading(false);
     }
   };
   const cargarPermisos = async () => {
     if (!token || moduloInforme !== 'instalacion') return;
+    setLoadingPermisos(true);
     try {
       const data = await fetchPermisosTrabajo({
         centro_id: filtroCentroId || undefined,
@@ -1107,6 +1183,8 @@ export default function InformesScreen() {
         error?.message ||
         'No se pudieron cargar los permisos de trabajo.';
       Alert.alert('Informes', backendMsg);
+    } finally {
+      setLoadingPermisos(false);
     }
   };
   const cargarMantencionesTerreno = async () => {
@@ -2421,7 +2499,7 @@ export default function InformesScreen() {
       return;
     }
     if (
-      permisoInstalacionSoloLectura &&
+      permisoFormularioSoloLectura &&
       (target === 'perm_recepciona' || target === 'perm_tecnico1' || target === 'perm_tecnico2')
     ) {
       return;
@@ -2468,7 +2546,7 @@ export default function InformesScreen() {
       return;
     }
     if (
-      permisoInstalacionSoloLectura &&
+      permisoFormularioSoloLectura &&
       (target === 'perm_recepciona' || target === 'perm_tecnico1' || target === 'perm_tecnico2')
     ) {
       return;
@@ -3602,10 +3680,23 @@ export default function InformesScreen() {
                 <View style={styles.rowActions}>
                   <Pressable
                     style={styles.actionBtn}
-                    onPress={() => {
-                      const lista = parseRetiroEquipos(item?.equipos);
-                      setRetiroChecklistReadOnly(lista);
-                      setShowRetiroChecklistReadModal(true);
+                    onPress={async () => {
+                      try {
+                        const mantencionId = Number(item?.id_mantencion_terreno || 0) || null;
+                        let lista: RetiroEquipoChecklist[] = [];
+                        if (mantencionId) {
+                          const cambios = await fetchCambiosEquipoMantencion(mantencionId);
+                          lista = parseRetiroEquipos(cambios);
+                        } else {
+                          lista = parseRetiroEquipos(item?.cambios_equipo || item?.equipos);
+                        }
+                        setRetiroChecklistReadOnly(lista);
+                        setShowRetiroChecklistReadModal(true);
+                      } catch {
+                        const lista = parseRetiroEquipos(item?.cambios_equipo || item?.equipos);
+                        setRetiroChecklistReadOnly(lista);
+                        setShowRetiroChecklistReadModal(true);
+                      }
                     }}>
                     <Ionicons name="list-outline" size={16} color="#1d4ed8" />
                   </Pressable>
@@ -3628,7 +3719,7 @@ export default function InformesScreen() {
 	                      setPermisoContexto('mantencion');
 	                      setMantencionChecklistEnabled(true);
 	                      setMantencionEditandoId(Number(item.id_mantencion_terreno || 0) || null);
-	                      setPermisoSoloLectura(false);
+	                      setPermisoSoloLectura(true);
 	                      setCambioEquipoEnabled(false);
                       setEquipoCambioId(null);
                       setSerieNuevaCambio('');
@@ -4621,8 +4712,12 @@ export default function InformesScreen() {
           <View style={styles.modalCard}>
             <View style={styles.modalHeader}>
 	              <Text style={styles.modalTitle}>
-	                {permisoInstalacionSoloLectura
-	                  ? 'Ver permiso de trabajo'
+	                {permisoFormularioSoloLectura
+	                  ? permisoContexto === 'mantencion'
+	                    ? 'Ver informe de mantencion'
+	                    : permisoContexto === 'retiro'
+	                    ? 'Ver informe de retiro'
+	                    : 'Ver permiso de trabajo'
 	                  : permisoContexto === 'mantencion'
 	                  ? 'Informe de mantencion'
 	                  : permisoContexto === 'retiro'
@@ -5251,11 +5346,11 @@ export default function InformesScreen() {
                         <Text style={styles.signatureFieldLabel}>Tecnico 1</Text>
                         <Text style={styles.signatureNameText}>{permTecnico1 || 'Sin nombre'}</Text>
                         <View style={styles.firmaActions}>
-                          <Pressable style={styles.firmaBtn} onPress={() => abrirFirma('perm_tecnico1')}>
+                          <Pressable style={[styles.firmaBtn, !permisoEditable && styles.ctaDisabled]} disabled={!permisoEditable} onPress={() => abrirFirma('perm_tecnico1')}>
                             <Text style={styles.firmaBtnText}>{permFirmaTecnico1 ? 'Editar firma' : 'Firmar'}</Text>
                           </Pressable>
                           {!!permFirmaTecnico1 && (
-                            <Pressable style={styles.firmaClearBtn} onPress={() => limpiarFirma('perm_tecnico1')}>
+                            <Pressable style={styles.firmaClearBtn} disabled={!permisoEditable} onPress={() => limpiarFirma('perm_tecnico1')}>
                               <Ionicons name="trash-outline" size={14} color="#dc2626" />
                             </Pressable>
                           )}
@@ -5270,11 +5365,11 @@ export default function InformesScreen() {
                         <Text style={styles.signatureFieldLabel}>Tecnico 2</Text>
                         <Text style={styles.signatureNameText}>{permTecnico2 || 'Sin nombre'}</Text>
                         <View style={styles.firmaActions}>
-                          <Pressable style={styles.firmaBtn} onPress={() => abrirFirma('perm_tecnico2')}>
+                          <Pressable style={[styles.firmaBtn, !permisoEditable && styles.ctaDisabled]} disabled={!permisoEditable} onPress={() => abrirFirma('perm_tecnico2')}>
                             <Text style={styles.firmaBtnText}>{permFirmaTecnico2 ? 'Editar firma' : 'Firmar'}</Text>
                           </Pressable>
                           {!!permFirmaTecnico2 && (
-                            <Pressable style={styles.firmaClearBtn} onPress={() => limpiarFirma('perm_tecnico2')}>
+                            <Pressable style={styles.firmaClearBtn} disabled={!permisoEditable} onPress={() => limpiarFirma('perm_tecnico2')}>
                               <Ionicons name="trash-outline" size={14} color="#dc2626" />
                             </Pressable>
                           )}
@@ -5296,15 +5391,17 @@ export default function InformesScreen() {
                               <Text style={styles.signatureNameText}>{name}</Text>
                               <View style={styles.firmaActions}>
                                 <Pressable
-                                  style={styles.firmaBtn}
+                                  style={[styles.firmaBtn, !permisoEditable && styles.ctaDisabled]}
+                                  disabled={!permisoEditable}
                                   onPress={() => {
+                                    if (!permisoEditable) return;
                                     setFirmaExtraIndex(idx);
                                     abrirFirma('tecnico_extra');
                                   }}>
                                   <Text style={styles.firmaBtnText}>{firma ? 'Editar firma' : 'Firmar'}</Text>
                                 </Pressable>
                                 {!!firma && (
-                                  <Pressable style={styles.firmaClearBtn} onPress={() => limpiarFirma('tecnico_extra', idx)}>
+                                  <Pressable style={styles.firmaClearBtn} disabled={!permisoEditable} onPress={() => limpiarFirma('tecnico_extra', idx)}>
                                     <Ionicons name="trash-outline" size={14} color="#dc2626" />
                                   </Pressable>
                                 )}
@@ -5381,9 +5478,9 @@ export default function InformesScreen() {
                   setSerieNuevaCambio('');
                   setTipoInstalacion('acta_entrega');
                 }}>
-	                <Text style={styles.cancelBtnText}>{permisoInstalacionSoloLectura ? 'Cerrar' : 'Cancelar'}</Text>
+	                <Text style={styles.cancelBtnText}>{permisoFormularioSoloLectura ? 'Cerrar' : 'Cancelar'}</Text>
 	              </Pressable>
-	              {!permisoInstalacionSoloLectura ? (
+	              {!permisoFormularioSoloLectura ? (
 	                <Pressable
 	                  style={[styles.saveBtn, saving && styles.ctaDisabled]}
 	                  disabled={saving}
@@ -5483,6 +5580,10 @@ export default function InformesScreen() {
                     setSaving(true);
                     const payload = {
                       centro_id: permCentroId,
+                      actividad_id:
+                        permisoContexto === 'mantencion'
+                          ? Number(actividadAsignadaActiva?.id_actividad || 0) || null
+                          : null,
                       acta_entrega_id:
                         permisoContexto === 'instalacion'
                           ? actaCentroSeleccionado?.id_acta_entrega || null

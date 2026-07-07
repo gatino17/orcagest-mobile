@@ -112,15 +112,16 @@ export const fetchCentrosPorCliente = async (clienteId: string | number) => {
     const res = await api.get(`/consultas_centro/centros/${clienteId}`);
     return res.data;
   } catch {
-    // Fallback: reconstruye centros por cliente desde /centros y /clientes.
-    const [clientesRes, centrosRes] = await Promise.all([
-      api.get('/clientes/'),
-      api.get('/centros/', { params: { per_page: 0 } }),
-    ]);
+    // Fallback: pide solo los centros del cliente para evitar una carga masiva.
+    const clientesRes = await api.get('/clientes/');
     const clientes = Array.isArray(clientesRes.data) ? clientesRes.data : [];
-    const centros = Array.isArray(centrosRes.data?.centros) ? centrosRes.data.centros : [];
     const cliente = clientes.find((c: any) => Number(c?.id_cliente ?? c?.id ?? 0) === Number(clienteId));
     const nombreCliente = String(cliente?.nombre || '').trim().toLowerCase();
+    if (!nombreCliente) return [];
+    const centrosRes = await api.get('/centros/', {
+      params: { per_page: 0, cliente: cliente?.nombre || '' },
+    });
+    const centros = Array.isArray(centrosRes.data?.centros) ? centrosRes.data.centros : [];
     return centros
       .filter((c: any) => String(c?.cliente || '').trim().toLowerCase() === nombreCliente)
       .map((c: any) => ({
