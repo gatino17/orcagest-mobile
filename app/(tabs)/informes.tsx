@@ -158,6 +158,8 @@ type Permiso = {
   empresa?: string;
   cliente?: string;
   centro?: string;
+  base_tierra?: string | boolean | null;
+  cantidad_radares?: number | string | null;
   equipos?: RetiroEquipoChecklist[];
   cambios_equipo?: any[] | string;
 };
@@ -204,6 +206,7 @@ type RetiroEquipoChecklist = {
   numero_serie?: string;
   codigo?: string;
   retirado?: boolean;
+  modalidad_retorno?: 'por_mano' | 'despacho_orca';
 };
 type MantencionEquipoChecklist = {
   equipo_id?: number;
@@ -249,6 +252,8 @@ type ModuloInforme = 'instalacion' | 'mantencion' | 'retiro' | 'levantamiento';
 type TipoInstalacion = 'acta_entrega' | 'informe_intervencion';
 type TipoRegistroInstalacion = 'instalacion' | 'reapuntamiento';
 type LevantamientoFoto = { uri: string; descripcion: string };
+const ACTIVIDADES_FETCH_DEBOUNCE_MS = 2500;
+const INFORMES_CACHE_TTL_MS = 30000;
 type FirmaTarget =
   | 'tecnico1'
   | 'tecnico2'
@@ -258,6 +263,25 @@ type FirmaTarget =
   | 'perm_tecnico1'
   | 'perm_tecnico2'
   | null;
+
+const normalizarBaseTierra = (value: unknown): 'si' | 'no' | '' => {
+  if (value === true) return 'si';
+  if (value === false) return 'no';
+  const text = String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+  if (text === 'si' || text === 'sí') return 'si';
+  if (text === 'no') return 'no';
+  return '';
+};
+
+const normalizarModalidadRetorno = (value: unknown): 'por_mano' | 'despacho_orca' => {
+  const text = String(value ?? '').trim().toLowerCase();
+  if (text === 'por_mano' || text === 'retirado_centro') return 'por_mano';
+  return 'despacho_orca';
+};
 type PermisoContexto = 'instalacion' | 'mantencion' | 'retiro';
 
 const toInputDate = (value?: string) => {
@@ -479,6 +503,7 @@ const parseRetiroEquipos = (value?: RetiroEquipoChecklist[] | string): RetiroEqu
         numero_serie: String(row?.numero_serie || row?.serie_anterior || '').trim(),
         codigo: String(row?.codigo || row?.codigo_anterior || '').trim(),
         retirado: typeof row?.retirado === 'boolean' ? !!row?.retirado : true,
+        modalidad_retorno: normalizarModalidadRetorno(row?.modalidad_retorno || row?.estado_logistico),
       }))
       .filter((row: RetiroEquipoChecklist) => row.equipo_nombre || row.numero_serie || row.codigo);
   } catch {
@@ -505,8 +530,12 @@ export default function InformesScreen() {
   const [centrosForm, setCentrosForm] = useState<Centro[]>([]);
   const [actas, setActas] = useState<Acta[]>([]);
   const [permisos, setPermisos] = useState<Permiso[]>([]);
-  const [loadingActas, setLoadingActas] = useState(false);
-  const [loadingPermisos, setLoadingPermisos] = useState(false);
+  const [, setLoadingActas] = useState(false);
+  const [, setLoadingPermisos] = useState(false);
+  const actividadesAsignadasInFlightRef = useRef<Promise<void> | null>(null);
+  const actividadesAsignadasLastLoadedRef = useRef(0);
+  const actasCacheRef = useRef<Record<string, { data: Acta[]; fetchedAt: number }>>({});
+  const permisosCacheRef = useRef<Record<string, { data: Permiso[]; fetchedAt: number }>>({});
   const [mantencionesTerreno, setMantencionesTerreno] = useState<Permiso[]>([]);
   const [retirosTerreno, setRetirosTerreno] = useState<Permiso[]>([]);
   const [levantamientosTerreno, setLevantamientosTerreno] = useState<LevantamientoTerreno[]>([]);
@@ -605,6 +634,11 @@ export default function InformesScreen() {
   const [showRetiroChecklistModal, setShowRetiroChecklistModal] = useState(false);
   const [showRetiroChecklistReadModal, setShowRetiroChecklistReadModal] = useState(false);
   const [retiroChecklistReadOnly, setRetiroChecklistReadOnly] = useState<RetiroEquipoChecklist[]>([]);
+  const [retiroChecklistReadMeta, setRetiroChecklistReadMeta] = useState<{
+    tipo: 'parcial' | 'completo';
+    estado: 'retirado_centro' | 'en_transito';
+  } | null>(null);
+  const [retiroFormDirty, setRetiroFormDirty] = useState(false);
   const [showCambioEquipoModal, setShowCambioEquipoModal] = useState(false);
   const [equiposCentro, setEquiposCentro] = useState<EquipoCentro[]>([]);
   const [retiroEquiposChecklist, setRetiroEquiposChecklist] = useState<RetiroEquipoChecklist[]>([]);
@@ -752,11 +786,17 @@ export default function InformesScreen() {
       { total: 0, instalados: 0, devueltos: 0 }
     );
   }, [armadoEquiposGuardados]);
+  const informesFiltroCacheKey = useMemo(
+    () =>
+      JSON.stringify({
+        centro_id: Number(filtroCentroId || 0) || 0,
+        fecha_desde: filtroFechaDesde || '',
+        fecha_hasta: filtroFechaHasta || '',
+      }),
+    [filtroCentroId, filtroFechaDesde, filtroFechaHasta]
+  );
   const instalacionSeleccionada = !!(permClienteId && permCentroId);
   const instalacionesCompletadas = useMemo(() => {
-    if (moduloInforme === 'instalacion' && (loadingActas || loadingPermisos)) {
-      return [];
-    }
     const ids = permisosInstalacion
       .map((p) => Number(p.centro_id || 0))
       .filter(Boolean)
@@ -799,11 +839,8 @@ export default function InformesScreen() {
         fechaPermiso: permisosInstalacion.find((p) => Number(p.centro_id || 0) === centroId)?.fecha_ingreso || '',
       };
     });
-  }, [permisosInstalacion, actas, permCentros, centrosFiltro, armadoEquiposGuardadoActas, moduloInforme, loadingActas, loadingPermisos]);
+  }, [permisosInstalacion, actas, permCentros, centrosFiltro, armadoEquiposGuardadoActas, moduloInforme]);
   const instalacionesEnProceso = useMemo(() => {
-    if (moduloInforme === 'instalacion' && (loadingActas || loadingPermisos)) {
-      return [];
-    }
     const actividadesVigentes = new Set(
       actividadesAsignadas
         .map((a) => Number(a.id_actividad || 0))
@@ -906,8 +943,6 @@ export default function InformesScreen() {
     armadoSeleccionadoId,
     clientes,
     permClienteId,
-    loadingActas,
-    loadingPermisos,
   ]);
   const mostrarAsignadasCompletadas = false;
   const mantencionesRecientesVisibles = useMemo(
@@ -936,6 +971,51 @@ export default function InformesScreen() {
       return nombre.includes(q) || serie.includes(q);
     });
   }, [mantencionEquiposChecklist, mantencionChecklistQuery]);
+  const retiroSeleccionadosCount = useMemo(
+    () => retiroEquiposChecklist.filter((item) => !!item.retirado).length,
+    [retiroEquiposChecklist]
+  );
+  const retiroPorManoCount = useMemo(
+    () =>
+      retiroEquiposChecklist.filter(
+        (item) => !!item.retirado && normalizarModalidadRetorno(item.modalidad_retorno) === 'por_mano'
+      ).length,
+    [retiroEquiposChecklist]
+  );
+  const retiroDespachoCount = useMemo(
+    () =>
+      retiroEquiposChecklist.filter(
+        (item) => !!item.retirado && normalizarModalidadRetorno(item.modalidad_retorno) === 'despacho_orca'
+      ).length,
+    [retiroEquiposChecklist]
+  );
+  const retiroTipoLabel = retiroTipo === 'completo' ? 'Completo' : 'Parcial';
+  const retiroEstadoLabel =
+    retiroSeleccionadosCount > 0 && retiroPorManoCount > 0 && retiroDespachoCount > 0
+      ? 'Mixto'
+      : retiroDespachoCount > 0
+      ? 'Despacho a Orca'
+      : 'Por mano a Orca';
+  const upsertRetiroTerrenoLocal = useCallback((retiro: Permiso | null | undefined) => {
+    if (!retiro || !retiro.id_retiro_terreno) return;
+    setRetirosTerreno((prev) => {
+      const next = Array.isArray(prev) ? [...prev] : [];
+      const idx = next.findIndex(
+        (item) => Number(item.id_retiro_terreno || 0) === Number(retiro.id_retiro_terreno || 0)
+      );
+      if (idx >= 0) {
+        next[idx] = { ...next[idx], ...retiro };
+      } else {
+        next.unshift(retiro);
+      }
+      return next.sort((a, b) => {
+        const ta = new Date(a.fecha_retiro || 0).getTime();
+        const tb = new Date(b.fecha_retiro || 0).getTime();
+        if (tb !== ta) return tb - ta;
+        return Number(b.id_retiro_terreno || 0) - Number(a.id_retiro_terreno || 0);
+      });
+    });
+  }, []);
   const nombreRegistroInstalacion =
     tipoRegistroInstalacion === 'reapuntamiento' ? 'Reapuntamiento' : 'Instalacion';
   const nombreDocumentoActa =
@@ -1146,9 +1226,13 @@ export default function InformesScreen() {
     }
   };
 
-  const cargarActas = async () => {
+  const cargarActas = async (options?: { force?: boolean }) => {
     if (!token || moduloInforme !== 'instalacion' || tipoInstalacion !== 'acta_entrega') return;
-    setLoading(true);
+    const cached = actasCacheRef.current[informesFiltroCacheKey];
+    if (cached) {
+      setActas(cached.data);
+      if (!options?.force && Date.now() - cached.fetchedAt < INFORMES_CACHE_TTL_MS) return;
+    }
     setLoadingActas(true);
     try {
       const data = await fetchActasEntrega({
@@ -1156,17 +1240,28 @@ export default function InformesScreen() {
         fecha_desde: filtroFechaDesde || undefined,
         fecha_hasta: filtroFechaHasta || undefined,
       });
-      setActas(Array.isArray(data) ? data : []);
+      const rows = Array.isArray(data) ? data : [];
+      actasCacheRef.current[informesFiltroCacheKey] = {
+        data: rows,
+        fetchedAt: Date.now(),
+      };
+      setActas(rows);
     } catch {
-      setActas([]);
-      Alert.alert('Informes', 'No se pudieron cargar las actas.');
+      if (!cached) {
+        setActas([]);
+        Alert.alert('Informes', 'No se pudieron cargar las actas.');
+      }
     } finally {
       setLoadingActas(false);
-      setLoading(false);
     }
   };
-  const cargarPermisos = async () => {
+  const cargarPermisos = async (options?: { force?: boolean }) => {
     if (!token || moduloInforme !== 'instalacion') return;
+    const cached = permisosCacheRef.current[informesFiltroCacheKey];
+    if (cached) {
+      setPermisos(cached.data);
+      if (!options?.force && Date.now() - cached.fetchedAt < INFORMES_CACHE_TTL_MS) return;
+    }
     setLoadingPermisos(true);
     try {
       const data = await fetchPermisosTrabajo({
@@ -1174,15 +1269,22 @@ export default function InformesScreen() {
         fecha_desde: filtroFechaDesde || undefined,
         fecha_hasta: filtroFechaHasta || undefined,
       });
-      setPermisos(Array.isArray(data) ? data : []);
+      const rows = Array.isArray(data) ? data : [];
+      permisosCacheRef.current[informesFiltroCacheKey] = {
+        data: rows,
+        fetchedAt: Date.now(),
+      };
+      setPermisos(rows);
     } catch (error: any) {
-      setPermisos([]);
-      const backendMsg =
-        error?.response?.data?.error ||
-        error?.response?.data?.message ||
-        error?.message ||
-        'No se pudieron cargar los permisos de trabajo.';
-      Alert.alert('Informes', backendMsg);
+      if (!cached) {
+        setPermisos([]);
+        const backendMsg =
+          error?.response?.data?.error ||
+          error?.response?.data?.message ||
+          error?.message ||
+          'No se pudieron cargar los permisos de trabajo.';
+        Alert.alert('Informes', backendMsg);
+      }
     } finally {
       setLoadingPermisos(false);
     }
@@ -1244,62 +1346,78 @@ export default function InformesScreen() {
       Alert.alert('Informes', backendMsg);
     }
   };
-  const cargarActividadesAsignadas = useCallback(async () => {
+  const cargarActividadesAsignadas = useCallback(async (options?: { force?: boolean }) => {
     if (!token) {
       setActividadesAsignadas([]);
       return;
     }
-    setLoadingActividadesAsignadas(true);
-    try {
-      const byName = String(name || '')
-        .toLowerCase()
-        .trim()
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '');
-      const userIdNum = Number(userId || 0) || 0;
-      const filtrarActivas = (arr: any[]) =>
-        (Array.isArray(arr) ? arr : []).filter((item) => {
+    if (actividadesAsignadasInFlightRef.current) {
+      if (!options?.force) return await actividadesAsignadasInFlightRef.current;
+      await actividadesAsignadasInFlightRef.current.catch(() => {});
+    }
+    if (
+      !options?.force &&
+      Date.now() - actividadesAsignadasLastLoadedRef.current < ACTIVIDADES_FETCH_DEBOUNCE_MS
+    ) {
+      return;
+    }
+    const request = (async () => {
+      setLoadingActividadesAsignadas(true);
+      try {
+        const byName = String(name || '')
+          .toLowerCase()
+          .trim()
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '');
+        const userIdNum = Number(userId || 0) || 0;
+        const filtrarActivas = (arr: any[]) =>
+          (Array.isArray(arr) ? arr : []).filter((item) => {
+            const estado = String(item?.estado || '').trim().toLowerCase();
+            return estado !== 'cancelado';
+          });
+        let lista: any[] = [];
+        try {
+          lista = filtrarActivas(await fetchActividadesMias());
+        } catch {
+          lista = [];
+        }
+        if (!lista.length) {
+          const all = filtrarActivas(await fetchActividades());
+          const normalize = (v: any) =>
+            String(v || '')
+              .toLowerCase()
+              .trim()
+              .normalize('NFD')
+              .replace(/[\u0300-\u036f]/g, '');
+          lista = all.filter((item) => {
+            const principalId = Number(item?.encargado_principal?.id_encargado || item?.tecnico_encargado || 0) || 0;
+            const ayudanteId = Number(item?.encargado_ayudante?.id_encargado || item?.tecnico_ayudante || 0) || 0;
+            if (userIdNum > 0 && (principalId === userIdNum || ayudanteId === userIdNum)) return true;
+            const nombres = [
+              item?.encargado_principal?.nombre_encargado,
+              item?.encargado_ayudante?.nombre_encargado,
+              ...(Array.isArray(item?.tecnicos_asignados) ? item.tecnicos_asignados.map((t: any) => t?.nombre_encargado) : []),
+            ]
+              .map((n) => normalize(n))
+              .filter(Boolean);
+            return !!byName && nombres.some((n) => n.includes(byName) || byName.includes(n));
+          });
+        }
+        lista = lista.filter((item) => {
           const estado = String(item?.estado || '').trim().toLowerCase();
           return estado !== 'cancelado';
         });
-      let lista: any[] = [];
-      try {
-        lista = filtrarActivas(await fetchActividadesMias());
+        setActividadesAsignadas(lista);
+        actividadesAsignadasLastLoadedRef.current = Date.now();
       } catch {
-        lista = [];
+        setActividadesAsignadas([]);
+      } finally {
+        setLoadingActividadesAsignadas(false);
+        actividadesAsignadasInFlightRef.current = null;
       }
-      if (!lista.length) {
-        const all = filtrarActivas(await fetchActividades());
-        const normalize = (v: any) =>
-          String(v || '')
-            .toLowerCase()
-            .trim()
-            .normalize('NFD')
-            .replace(/[\u0300-\u036f]/g, '');
-        lista = all.filter((item) => {
-          const principalId = Number(item?.encargado_principal?.id_encargado || item?.tecnico_encargado || 0) || 0;
-          const ayudanteId = Number(item?.encargado_ayudante?.id_encargado || item?.tecnico_ayudante || 0) || 0;
-          if (userIdNum > 0 && (principalId === userIdNum || ayudanteId === userIdNum)) return true;
-          const nombres = [
-            item?.encargado_principal?.nombre_encargado,
-            item?.encargado_ayudante?.nombre_encargado,
-            ...(Array.isArray(item?.tecnicos_asignados) ? item.tecnicos_asignados.map((t: any) => t?.nombre_encargado) : []),
-          ]
-            .map((n) => normalize(n))
-            .filter(Boolean);
-          return !!byName && nombres.some((n) => n.includes(byName) || byName.includes(n));
-        });
-      }
-      lista = lista.filter((item) => {
-        const estado = String(item?.estado || '').trim().toLowerCase();
-        return estado !== 'cancelado';
-      });
-      setActividadesAsignadas(lista);
-    } catch {
-      setActividadesAsignadas([]);
-    } finally {
-      setLoadingActividadesAsignadas(false);
-    }
+    })();
+    actividadesAsignadasInFlightRef.current = request;
+    await request;
   }, [token, name, userId]);
 
   const aplicarActividadAsignada = (actividad: ActividadAsignada) => {
@@ -1340,7 +1458,7 @@ export default function InformesScreen() {
     const est = estadoActividad(actividad.estado);
     if (actividadId && est === 'pendiente') {
       updateActividadCalendario(actividadId, { estado: 'En progreso' })
-        .then(() => cargarActividadesAsignadas())
+        .then(() => cargarActividadesAsignadas({ force: true }))
         .catch(() => {});
     }
     if (area.startsWith('levant')) {
@@ -1412,7 +1530,7 @@ export default function InformesScreen() {
     if (!actividadId) return;
     try {
       await updateActividadCalendario(actividadId, { estado: 'Finalizado' });
-      await cargarActividadesAsignadas();
+      await cargarActividadesAsignadas({ force: true });
     } catch {
       // silencioso para no bloquear guardado de informe
     }
@@ -1459,7 +1577,7 @@ export default function InformesScreen() {
       await cargarLevantamientosTerreno();
       if (!levantamientoEditandoId) {
         await marcarActividadFinalizadaSiCorresponde();
-        await cargarActividadesAsignadas();
+        await cargarActividadesAsignadas({ force: true });
         setActividadAsignadaActiva(null);
         setTecnicosAsignadosExtra([]);
       }
@@ -1595,10 +1713,18 @@ export default function InformesScreen() {
   useEffect(() => {
     if (!token) return;
     const onActividadUpdated = () => {
-      cargarActividadesAsignadas();
+      cargarActividadesAsignadas({ force: true });
     };
     return subscribeActividadUpdated(onActividadUpdated);
   }, [token, cargarActividadesAsignadas]);
+
+  useEffect(() => {
+    if (!token || moduloInforme !== 'retiro') return;
+    const timer = setInterval(() => {
+      cargarRetirosTerreno();
+    }, 12000);
+    return () => clearInterval(timer);
+  }, [token, moduloInforme, filtroCentroId, filtroFechaDesde, filtroFechaHasta]);
 
   useEffect(() => {
     cargarCentrosPorClienteFiltro(filtroClienteId);
@@ -1718,9 +1844,7 @@ export default function InformesScreen() {
     setPermRegion(String(permCentroSel.area || permCentroSel.region || ''));
     setPermLocalidad(String(permCentroSel.ubicacion || permCentroSel.localidad || permCentroSel.direccion || ''));
     setPermTelefonoCentro(String(permCentroSel.telefono || permCentroSel.telefono_centro || ''));
-    setPermBaseTierra(
-      permCentroSel.base_tierra === true ? 'si' : permCentroSel.base_tierra === false ? 'no' : ''
-    );
+    setPermBaseTierra(normalizarBaseTierra(permCentroSel.base_tierra));
     setPermCantidadRadares(String(permCentroSel.cantidad_radares ?? ''));
   }, [permCentroSel]);
 
@@ -1764,9 +1888,7 @@ export default function InformesScreen() {
         permisoCentroSeleccionado.telefono_centro ||
         ''
     );
-    setPermBaseTierra(
-      permCentroSel?.base_tierra === true ? 'si' : permCentroSel?.base_tierra === false ? 'no' : ''
-    );
+    setPermBaseTierra(normalizarBaseTierra(permCentroSel?.base_tierra));
     setPermCantidadRadares(String(permCentroSel?.cantidad_radares ?? ''));
     setPermResponsabilidad(permisoCentroSeleccionado.responsabilidad || '');
     setPermPuntosGpsList(parseGpsPoints(permisoCentroSeleccionado.puntos_gps));
@@ -1809,9 +1931,7 @@ export default function InformesScreen() {
         permisoCentroSeleccionado?.telefono_centro ||
         ''
     );
-    setPermBaseTierra(
-      permCentroSel?.base_tierra === true ? 'si' : permCentroSel?.base_tierra === false ? 'no' : ''
-    );
+    setPermBaseTierra(normalizarBaseTierra(permCentroSel?.base_tierra));
     setPermCantidadRadares(String(permCentroSel?.cantidad_radares ?? ''));
     setPermRegion(
       String(
@@ -1903,9 +2023,10 @@ export default function InformesScreen() {
   ]);
   useEffect(() => {
     if (permisoContexto !== 'retiro') return;
-    const base = permCentroSel || null;
+    const base = retiroEditandoSeleccionado || permCentroSel || null;
     if (!base) return;
     const editingRetiro = !!retiroEditandoId && !!retiroEditandoSeleccionado;
+    if (editingRetiro && retiroFormDirty) return;
     const selectedRetiro = retiroEditandoSeleccionado || null;
     const asignados = Array.isArray(actividadAsignadaActiva?.tecnicos_asignados)
       ? actividadAsignadaActiva?.tecnicos_asignados || []
@@ -1926,10 +2047,12 @@ export default function InformesScreen() {
 
     setPermFecha(editingRetiro ? toInputDate(selectedRetiro?.fecha_retiro) || todayInputDate() : todayInputDate());
     setPermFechaSalida('');
-    setPermCorreoCentro(String(permCentroSel?.correo_centro || permCentroSel?.correo || ''));
-    setPermTelefonoCentro(String(permCentroSel?.telefono || permCentroSel?.telefono_centro || ''));
-    setPermRegion(String(permCentroSel?.area || permCentroSel?.region || ''));
-    setPermLocalidad(String(permCentroSel?.ubicacion || permCentroSel?.localidad || permCentroSel?.direccion || ''));
+    setPermCorreoCentro(String(permCentroSel?.correo_centro || permCentroSel?.correo || selectedRetiro?.correo_centro || ''));
+    setPermTelefonoCentro(String(permCentroSel?.telefono || permCentroSel?.telefono_centro || selectedRetiro?.telefono_centro || ''));
+    setPermRegion(String(permCentroSel?.area || permCentroSel?.region || selectedRetiro?.region || ''));
+    setPermLocalidad(String(permCentroSel?.ubicacion || permCentroSel?.localidad || permCentroSel?.direccion || selectedRetiro?.localidad || ''));
+    setPermBaseTierra(normalizarBaseTierra(permCentroSel?.base_tierra ?? selectedRetiro?.base_tierra));
+    setPermCantidadRadares(String(permCentroSel?.cantidad_radares ?? selectedRetiro?.cantidad_radares ?? ''));
     setPermTecnico1(editingRetiro ? selectedRetiro?.tecnico_1 || tecnicoPrincipalAsignado || '' : tecnicoPrincipalAsignado);
     setPermTecnico2(editingRetiro ? selectedRetiro?.tecnico_2 || tecnicoAyudanteAsignado || '' : tecnicoAyudanteAsignado);
     setPermFirmaTecnico1(editingRetiro ? selectedRetiro?.firma_tecnico_1 || '' : '');
@@ -1956,10 +2079,11 @@ export default function InformesScreen() {
         ? 'en_transito'
         : 'retirado_centro'
     );
-  }, [retiroEditandoId, retiroEditandoSeleccionado, permCentroSel, permisoContexto, actividadAsignadaActiva]);
+  }, [retiroEditandoId, retiroEditandoSeleccionado, permCentroSel, permisoContexto, actividadAsignadaActiva, retiroFormDirty]);
 
   useEffect(() => {
     if (permisoContexto !== 'retiro') return;
+    if (retiroEditandoId && retiroFormDirty) return;
     if (!equiposCentro.length) {
       setRetiroEquiposChecklist([]);
       return;
@@ -1971,17 +2095,20 @@ export default function InformesScreen() {
       if (id) currentById.set(id, e);
     });
 
-    const fromRetiro = (retiroEditandoSeleccionado?.equipos || []).map((eq) => ({
-      id_retiro_equipo: Number(eq.id_retiro_equipo || 0) || undefined,
-      equipo_id: Number(eq.equipo_id || 0) || undefined,
-      equipo_nombre: eq.equipo_nombre || currentById.get(Number(eq.equipo_id || 0))?.nombre || '',
-      numero_serie:
+      const fromRetiro = (retiroEditandoSeleccionado?.equipos || []).map((eq) => ({
+        id_retiro_equipo: Number(eq.id_retiro_equipo || 0) || undefined,
+        equipo_id: Number(eq.equipo_id || 0) || undefined,
+        equipo_nombre: eq.equipo_nombre || currentById.get(Number(eq.equipo_id || 0))?.nombre || '',
+        numero_serie:
         eq.numero_serie ||
         currentById.get(Number(eq.equipo_id || 0))?.numero_serie ||
         '',
-      codigo: eq.codigo || currentById.get(Number(eq.equipo_id || 0))?.codigo || '',
-      retirado: !!eq.retirado,
-    }));
+        codigo: eq.codigo || currentById.get(Number(eq.equipo_id || 0))?.codigo || '',
+        retirado: !!eq.retirado,
+        modalidad_retorno: normalizarModalidadRetorno(
+          eq.modalidad_retorno || retiroEditandoSeleccionado?.estado_logistico
+        ),
+      }));
 
     if (fromRetiro.length) {
       const existentes = new Set(fromRetiro.map((r) => Number(r.equipo_id || 0)));
@@ -1993,6 +2120,7 @@ export default function InformesScreen() {
           numero_serie: e.numero_serie || '',
           codigo: e.codigo || '',
           retirado: false,
+          modalidad_retorno: 'despacho_orca',
         }));
       setRetiroEquiposChecklist([...fromRetiro, ...faltantes]);
       return;
@@ -2005,9 +2133,22 @@ export default function InformesScreen() {
         numero_serie: e.numero_serie || '',
         codigo: e.codigo || '',
         retirado: false,
+        modalidad_retorno: 'despacho_orca',
       }))
     );
-  }, [equiposCentro, retiroEditandoSeleccionado, permisoContexto]);
+  }, [equiposCentro, retiroEditandoSeleccionado, permisoContexto, retiroEditandoId, retiroFormDirty]);
+
+  useEffect(() => {
+    const selected = retiroEquiposChecklist.filter((item) => !!item.retirado);
+    if (!selected.length) {
+      setRetiroEstado('en_transito');
+      return;
+    }
+    const tieneDespacho = selected.some(
+      (item) => normalizarModalidadRetorno(item.modalidad_retorno) === 'despacho_orca'
+    );
+    setRetiroEstado(tieneDespacho ? 'en_transito' : 'retirado_centro');
+  }, [retiroEquiposChecklist]);
 
   useEffect(() => {
     if (permisoContexto !== 'mantencion' || !mantencionChecklistEnabled) {
@@ -2094,6 +2235,8 @@ export default function InformesScreen() {
     setRetiroTipo('parcial');
     setRetiroEstado('en_transito');
     setRetiroEquiposChecklist([]);
+    setRetiroChecklistReadMeta(null);
+    setRetiroFormDirty(false);
     setEvidenciaTargetIndex(null);
     setCambioEquipoEnabled(false);
     setEquipoCambioId(null);
@@ -2198,16 +2341,49 @@ export default function InformesScreen() {
     setShowEditor(true);
   };
 
-  const nuevoRetiro = () => {
-    setActividadAsignadaActiva(null);
-    setTecnicosAsignadosExtra([]);
-    resetPermisoForm();
-    setPermisoContexto('retiro');
-    setRetiroEditandoId(null);
-    setPermClienteId(null);
-    setPermCentroId(null);
-    setPermBuscarCentro('');
-    setShowRetiroTipoModal(true);
+  const abrirRetiroEquiposModal = () => {
+    if (permisoFormularioSoloLectura) {
+      setRetiroChecklistReadOnly(retiroEquiposChecklist);
+      setRetiroChecklistReadMeta({
+        tipo: retiroTipo,
+        estado: retiroEstado,
+      });
+      setShowRetiroChecklistReadModal(true);
+      return;
+    }
+    setShowRetiroChecklistModal(true);
+  };
+
+  const actualizarTipoRetiro = (tipo: 'parcial' | 'completo') => {
+    setRetiroFormDirty(true);
+    setRetiroTipo(tipo);
+    if (tipo === 'completo') {
+      setRetiroEquiposChecklist((prev) =>
+        prev.map((row) => ({
+          ...row,
+          retirado: true,
+          modalidad_retorno: row.modalidad_retorno || 'despacho_orca',
+        }))
+      );
+    }
+  };
+
+  const actualizarModalidadRetiroEquipo = (
+    index: number,
+    modalidad: 'por_mano' | 'despacho_orca'
+  ) => {
+    setRetiroFormDirty(true);
+    setRetiroEquiposChecklist((prev) =>
+      prev.map((row, i) =>
+        i === index
+          ? {
+              ...row,
+              retirado: true,
+              modalidad_retorno: modalidad,
+            }
+          : row
+      )
+    );
   };
 
   const abrirActa = (acta: Acta, soloLectura = true) => {
@@ -2277,8 +2453,8 @@ export default function InformesScreen() {
     try {
       if (editId) await updateActaEntrega(editId, payload);
       else await createActaEntrega(payload);
-      await cargarActas();
-      await cargarActividadesAsignadas();
+      await cargarActas({ force: true });
+      await cargarActividadesAsignadas({ force: true });
       setShowEditor(false);
       resetForm();
       Alert.alert('Informes', 'Acta guardada correctamente.');
@@ -2304,7 +2480,7 @@ export default function InformesScreen() {
         onPress: async () => {
           try {
             await deleteActaEntrega(id);
-            await cargarActas();
+            await cargarActas({ force: true });
           } catch {
             Alert.alert('Informes', 'No se pudo eliminar el acta.');
           }
@@ -2330,7 +2506,7 @@ export default function InformesScreen() {
         );
         return;
       }
-      await cargarActas();
+      await cargarActas({ force: true });
       setArmadoSeleccionadoId(armadoId);
       setShowArmadosModal(false);
       setVinculoActaId(targetActaId);
@@ -2457,7 +2633,7 @@ export default function InformesScreen() {
       setArmadoEquiposGuardadoActas((prev) =>
         prev.includes(Number(targetActaId)) ? prev : [...prev, Number(targetActaId)]
       );
-      await cargarActas();
+      await cargarActas({ force: true });
       setVinculoSoloLectura(true);
       setArmadoEquiposSoloLectura(true);
       setShowArmadoEquiposModal(false);
@@ -3691,10 +3867,12 @@ export default function InformesScreen() {
                           lista = parseRetiroEquipos(item?.cambios_equipo || item?.equipos);
                         }
                         setRetiroChecklistReadOnly(lista);
+                        setRetiroChecklistReadMeta(null);
                         setShowRetiroChecklistReadModal(true);
                       } catch {
                         const lista = parseRetiroEquipos(item?.cambios_equipo || item?.equipos);
                         setRetiroChecklistReadOnly(lista);
+                        setRetiroChecklistReadMeta(null);
                         setShowRetiroChecklistReadModal(true);
                       }
                     }}>
@@ -3759,20 +3937,21 @@ export default function InformesScreen() {
                   {estadoEdicionRetiro(item.estado_edicion) === 'edicion_autorizada' ? (
                     <Pressable
                       style={styles.actionBtn}
-                      onPress={() => {
-                        const clientePorNombre = clientes.find(
-                          (c) =>
-                            String(c.nombre || c.razon_social || '').trim().toLowerCase() ===
-                            String(item.empresa || item.cliente || '').trim().toLowerCase()
-                        );
-                        const clienteId = Number(clientePorNombre?.id_cliente ?? clientePorNombre?.id ?? 0) || null;
-	                        if (clienteId) setPermClienteId(clienteId);
-	                        setPermCentroId(Number(item.centro_id || 0) || null);
-	                        setPermisoContexto('retiro');
-	                        setRetiroEditandoId(Number(item.id_retiro_terreno || 0) || null);
-	                        setPermisoSoloLectura(false);
-	                        setShowPermisoModal(true);
-                      }}>
+	                      onPress={() => {
+	                        const clientePorNombre = clientes.find(
+	                          (c) =>
+	                            String(c.nombre || c.razon_social || '').trim().toLowerCase() ===
+	                            String(item.empresa || item.cliente || '').trim().toLowerCase()
+	                        );
+	                        const clienteId = Number(clientePorNombre?.id_cliente ?? clientePorNombre?.id ?? 0) || null;
+		                        if (clienteId) setPermClienteId(clienteId);
+		                        setPermCentroId(Number(item.centro_id || 0) || null);
+		                        setPermisoContexto('retiro');
+		                        setRetiroFormDirty(false);
+		                        setRetiroEditandoId(Number(item.id_retiro_terreno || 0) || null);
+		                        setPermisoSoloLectura(false);
+		                        setShowPermisoModal(true);
+	                      }}>
                       <Ionicons name="create-outline" size={16} color="#1d4ed8" />
                     </Pressable>
                   ) : null}
@@ -3793,6 +3972,13 @@ export default function InformesScreen() {
                     onPress={() => {
                       const lista = parseRetiroEquipos(item?.equipos);
                       setRetiroChecklistReadOnly(lista);
+                      setRetiroChecklistReadMeta({
+                        tipo: String(item?.tipo_retiro || '').trim().toLowerCase() === 'completo' ? 'completo' : 'parcial',
+                        estado:
+                          String(item?.estado_logistico || '').trim().toLowerCase() === 'en_transito'
+                            ? 'en_transito'
+                            : 'retirado_centro',
+                      });
                       setShowRetiroChecklistReadModal(true);
                     }}>
                     <Ionicons name="list-outline" size={16} color="#1d4ed8" />
@@ -4541,25 +4727,59 @@ export default function InformesScreen() {
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Checklist de equipos retirados</Text>
+              <Text style={styles.modalTitle}>Retiro de equipos</Text>
               <Pressable onPress={() => setShowRetiroChecklistModal(false)}>
                 <Ionicons name="close" size={20} color="#334155" />
               </Pressable>
             </View>
             <View style={styles.inputBlock}>
+              <Text style={styles.selectLabel}>Tipo de retiro</Text>
+              <View style={styles.baseChoiceRow}>
+                <Pressable
+                  style={[styles.baseChoiceBtn, retiroTipo === 'parcial' && styles.baseChoiceBtnActive]}
+                  onPress={() => actualizarTipoRetiro('parcial')}>
+                  <Text style={[styles.baseChoiceText, retiroTipo === 'parcial' && styles.baseChoiceTextActive]}>
+                    Parcial
+                  </Text>
+                </Pressable>
+                <Pressable
+                  style={[styles.baseChoiceBtn, retiroTipo === 'completo' && styles.baseChoiceBtnActive]}
+                  onPress={() => actualizarTipoRetiro('completo')}>
+                  <Text style={[styles.baseChoiceText, retiroTipo === 'completo' && styles.baseChoiceTextActive]}>
+                    Completo
+                  </Text>
+                </Pressable>
+              </View>
+            </View>
+            <View style={styles.inputBlock}>
+              <Text style={styles.selectLabel}>Resumen logistico</Text>
+              <View style={styles.retiroModalSummary}>
+                <Text style={styles.sectionHint}>Tipo: {retiroTipoLabel}</Text>
+                <Text style={styles.sectionHint}>Equipos marcados: {retiroSeleccionadosCount}/{retiroEquiposChecklist.length}</Text>
+                <Text style={styles.sectionHint}>Por mano: {retiroPorManoCount}</Text>
+                <Text style={styles.sectionHint}>Despacho a Orca: {retiroDespachoCount}</Text>
+              </View>
               <View style={styles.firmaActions}>
                 <Pressable
                   style={styles.firmaBtn}
-                  onPress={() =>
-                    setRetiroEquiposChecklist((prev) => prev.map((row) => ({ ...row, retirado: true })))
-                  }>
+                  onPress={() => {
+                    setRetiroFormDirty(true);
+                    setRetiroEquiposChecklist((prev) =>
+                      prev.map((row) => ({
+                        ...row,
+                        retirado: true,
+                        modalidad_retorno: row.modalidad_retorno || 'despacho_orca',
+                      }))
+                    );
+                  }}>
                   <Text style={styles.firmaBtnText}>Marcar todos</Text>
                 </Pressable>
                 <Pressable
                   style={styles.firmaBtn}
-                  onPress={() =>
-                    setRetiroEquiposChecklist((prev) => prev.map((row) => ({ ...row, retirado: false })))
-                  }>
+                  onPress={() => {
+                    setRetiroFormDirty(true);
+                    setRetiroEquiposChecklist((prev) => prev.map((row) => ({ ...row, retirado: false })));
+                  }}>
                   <Text style={styles.firmaBtnText}>Limpiar</Text>
                 </Pressable>
               </View>
@@ -4570,16 +4790,72 @@ export default function InformesScreen() {
                   <Pressable
                     key={`ret-check-${Number(eq.equipo_id || 0) || idx}`}
                     style={[styles.equipoItem, !!eq.retirado && styles.equipoItemActive]}
-                    onPress={() =>
+                    onPress={() => {
+                      setRetiroFormDirty(true);
                       setRetiroEquiposChecklist((prev) =>
                         prev.map((row, i) => (i === idx ? { ...row, retirado: !row.retirado } : row))
-                      )
-                    }>
+                      );
+                    }}>
                     <View style={{ flex: 1 }}>
                       <Text style={[styles.equipoItemTitle, !!eq.retirado && styles.equipoItemTitleActive]}>
                         {eq.equipo_nombre || `Equipo ${idx + 1}`}
                       </Text>
-                      <Text style={styles.equipoItemMeta}>Serie: {eq.numero_serie || '-'} | Codigo: {eq.codigo || '-'}</Text>
+                      <Text style={styles.equipoItemMeta}>Serie: {eq.numero_serie || '-'}</Text>
+                      <Text style={styles.equipoItemMeta}>Codigo: {eq.codigo || '-'}</Text>
+                      {!!eq.retirado ? (
+                        <View style={styles.retiroItemModeRow}>
+                          <Pressable
+                            style={[
+                              styles.retiroItemModeBtn,
+                              normalizarModalidadRetorno(eq.modalidad_retorno) === 'por_mano' &&
+                                styles.retiroItemModeBtnGreen,
+                            ]}
+                            onPress={() => actualizarModalidadRetiroEquipo(idx, 'por_mano')}>
+                            <Ionicons
+                              name="hand-left-outline"
+                              size={12}
+                              color={
+                                normalizarModalidadRetorno(eq.modalidad_retorno) === 'por_mano'
+                                  ? '#166534'
+                                  : '#6b7280'
+                              }
+                            />
+                            <Text
+                              style={[
+                                styles.retiroItemModeText,
+                                normalizarModalidadRetorno(eq.modalidad_retorno) === 'por_mano' &&
+                                  styles.retiroItemModeTextActive,
+                              ]}>
+                              Por mano
+                            </Text>
+                          </Pressable>
+                          <Pressable
+                            style={[
+                              styles.retiroItemModeBtn,
+                              normalizarModalidadRetorno(eq.modalidad_retorno) === 'despacho_orca' &&
+                                styles.retiroItemModeBtnAmber,
+                            ]}
+                            onPress={() => actualizarModalidadRetiroEquipo(idx, 'despacho_orca')}>
+                            <Ionicons
+                              name="car-outline"
+                              size={12}
+                              color={
+                                normalizarModalidadRetorno(eq.modalidad_retorno) === 'despacho_orca'
+                                  ? '#166534'
+                                  : '#6b7280'
+                              }
+                            />
+                            <Text
+                              style={[
+                                styles.retiroItemModeText,
+                                normalizarModalidadRetorno(eq.modalidad_retorno) === 'despacho_orca' &&
+                                  styles.retiroItemModeTextActive,
+                              ]}>
+                              Despacho a Orca
+                            </Text>
+                          </Pressable>
+                        </View>
+                      ) : null}
                     </View>
                     <Ionicons
                       name={eq.retirado ? 'checkbox' : 'square-outline'}
@@ -4595,7 +4871,7 @@ export default function InformesScreen() {
             </View>
             <View style={styles.modalActions}>
               <Pressable style={styles.cancelBtn} onPress={() => setShowRetiroChecklistModal(false)}>
-                <Text style={styles.cancelBtnText}>Cerrar</Text>
+                <Text style={styles.cancelBtnText}>Listo</Text>
               </Pressable>
             </View>
           </View>
@@ -4606,11 +4882,38 @@ export default function InformesScreen() {
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Listado de equipos retirados</Text>
-              <Pressable onPress={() => setShowRetiroChecklistReadModal(false)}>
+              <Text style={styles.modalTitle}>Retiro de equipos</Text>
+              <Pressable
+                onPress={() => {
+                  setShowRetiroChecklistReadModal(false);
+                  setRetiroChecklistReadMeta(null);
+                }}>
                 <Ionicons name="close" size={20} color="#334155" />
               </Pressable>
             </View>
+            {retiroChecklistReadMeta ? (
+              <View style={styles.retiroModalSummary}>
+                <Text style={styles.sectionHint}>
+                  Tipo: {retiroChecklistReadMeta.tipo === 'completo' ? 'Completo' : 'Parcial'} | Modalidad:{' '}
+                  {retiroChecklistReadMeta.estado === 'retirado_centro' ? 'Por mano a Orca' : 'Despacho a Orca'}
+                </Text>
+                <Text style={styles.sectionHint}>
+                  Por mano:{' '}
+                  {
+                    retiroChecklistReadOnly.filter(
+                      (eq) => !!eq.retirado && normalizarModalidadRetorno(eq.modalidad_retorno) === 'por_mano'
+                    ).length
+                  }{' '}
+                  | Despacho a Orca:{' '}
+                  {
+                    retiroChecklistReadOnly.filter(
+                      (eq) =>
+                        !!eq.retirado && normalizarModalidadRetorno(eq.modalidad_retorno) === 'despacho_orca'
+                    ).length
+                  }
+                </Text>
+              </View>
+            ) : null}
             <Text style={[styles.rowMeta, { marginBottom: 8 }]}>
               Marcados: {retiroChecklistReadOnly.filter((eq) => !!eq.retirado).length}/{retiroChecklistReadOnly.length}
             </Text>
@@ -4621,6 +4924,14 @@ export default function InformesScreen() {
                     <View style={{ flex: 1 }}>
                       <Text style={styles.equipoItemTitle}>{eq.equipo_nombre || `Equipo ${idx + 1}`}</Text>
                       <Text style={styles.equipoItemMeta}>Serie: {eq.numero_serie || '-'} | Codigo: {eq.codigo || '-'}</Text>
+                      {!!eq.retirado ? (
+                        <Text style={styles.equipoItemMeta}>
+                          Modalidad:{' '}
+                          {normalizarModalidadRetorno(eq.modalidad_retorno) === 'por_mano'
+                            ? 'Por mano'
+                            : 'Despacho a Orca'}
+                        </Text>
+                      ) : null}
                     </View>
                     <Ionicons
                       name={eq.retirado ? 'checkmark-circle' : 'ellipse-outline'}
@@ -4635,7 +4946,12 @@ export default function InformesScreen() {
               </ScrollView>
             </View>
             <View style={styles.modalActions}>
-              <Pressable style={styles.cancelBtn} onPress={() => setShowRetiroChecklistReadModal(false)}>
+              <Pressable
+                style={styles.cancelBtn}
+                onPress={() => {
+                  setShowRetiroChecklistReadModal(false);
+                  setRetiroChecklistReadMeta(null);
+                }}>
                 <Text style={styles.cancelBtnText}>Cerrar</Text>
               </Pressable>
             </View>
@@ -4725,13 +5041,14 @@ export default function InformesScreen() {
                   : 'Permiso de trabajo'}
               </Text>
               <Pressable
-                onPress={() => {
-	                  setShowPermisoModal(false);
-	                  setShowRetiroChecklistModal(false);
-	                  setPermisoSoloLectura(false);
-	                  setPermisoContexto('instalacion');
-                  setMantencionEditandoId(null);
-                  setRetiroEditandoId(null);
+	                onPress={() => {
+		                  setShowPermisoModal(false);
+		                  setShowRetiroChecklistModal(false);
+		                  setPermisoSoloLectura(false);
+		                  setPermisoContexto('instalacion');
+	                  setRetiroFormDirty(false);
+	                  setMantencionEditandoId(null);
+	                  setRetiroEditandoId(null);
                   setCambioEquipoEnabled(false);
                   setEquipoCambioId(null);
                   setSerieNuevaCambio('');
@@ -5059,54 +5376,45 @@ export default function InformesScreen() {
               </View>
               {permisoContexto === 'retiro' ? (
                 <View style={styles.inputBlock}>
-                  <View style={styles.row}>
-                    <View style={styles.inputCol}>
-                      <Text style={styles.selectLabel}>Tipo de retiro</Text>
-                      <View style={styles.baseChoiceRow}>
-                        <Pressable
-                          style={[styles.baseChoiceBtn, retiroTipo === 'parcial' && styles.baseChoiceBtnActive]}
-                          onPress={() => {
-                            setRetiroTipo('parcial');
-                            setShowRetiroChecklistModal(true);
-                          }}>
-                          <Text style={[styles.baseChoiceText, retiroTipo === 'parcial' && styles.baseChoiceTextActive]}>Parcial</Text>
-                        </Pressable>
-                        <Pressable
-                          style={[styles.baseChoiceBtn, retiroTipo === 'completo' && styles.baseChoiceBtnActive]}
-                          onPress={() => {
-                            setRetiroTipo('completo');
-                            setShowRetiroChecklistModal(true);
-                          }}>
-                          <Text style={[styles.baseChoiceText, retiroTipo === 'completo' && styles.baseChoiceTextActive]}>Completo</Text>
-                        </Pressable>
+                  <Text style={styles.sectionTitleBlue}>Retiro de equipos</Text>
+                  <View style={styles.retiroSummaryCard}>
+                    <View style={styles.retiroSummaryRow}>
+                      <View style={[styles.retiroSummaryPill, styles.retiroSummaryPillBlue]}>
+                        <Ionicons name="layers-outline" size={13} color="#1d4ed8" />
+                        <Text style={styles.retiroSummaryPillText}>{retiroTipoLabel}</Text>
+                      </View>
+                      <View
+                        style={[
+                          styles.retiroSummaryPill,
+                          retiroEstado === 'retirado_centro'
+                            ? styles.retiroSummaryPillGreen
+                            : styles.retiroSummaryPillAmber,
+                        ]}>
+                        <Ionicons
+                          name={retiroEstado === 'retirado_centro' ? 'hand-left-outline' : 'car-outline'}
+                          size={13}
+                          color={retiroEstado === 'retirado_centro' ? '#166534' : '#b45309'}
+                        />
+                        <Text style={styles.retiroSummaryPillText}>{retiroEstadoLabel}</Text>
                       </View>
                     </View>
-                    <View style={styles.inputCol}>
-                      <Text style={styles.selectLabel}>Estado</Text>
-                      <View style={styles.baseChoiceRow}>
-                        <Pressable
-                          style={[styles.baseChoiceBtn, retiroEstado === 'retirado_centro' && styles.baseChoiceBtnActive]}
-                          onPress={() => setRetiroEstado('retirado_centro')}>
-                          <Text style={[styles.baseChoiceText, retiroEstado === 'retirado_centro' && styles.baseChoiceTextActive]}>Retirado</Text>
-                        </Pressable>
-                        <Pressable
-                          style={[styles.baseChoiceBtn, retiroEstado === 'en_transito' && styles.baseChoiceBtnActive]}
-                          onPress={() => setRetiroEstado('en_transito')}>
-                          <Text style={[styles.baseChoiceText, retiroEstado === 'en_transito' && styles.baseChoiceTextActive]}>Transito</Text>
-                        </Pressable>
-                      </View>
-                    </View>
-                  </View>
-
-                  <View style={{ marginTop: 10, gap: 8 }}>
-                    <Text style={styles.selectLabel}>Checklist de equipos</Text>
                     <Text style={styles.sectionHint}>
-                      Seleccionados:{' '}
-                      {retiroEquiposChecklist.filter((eq) => !!eq.retirado).length}/{retiroEquiposChecklist.length}
+                      Equipos marcados: {retiroSeleccionadosCount}/{retiroEquiposChecklist.length}
                     </Text>
-                    <Pressable style={styles.checklistOpenBtn} onPress={() => setShowRetiroChecklistModal(true)}>
-                      <Ionicons name="list-outline" size={15} color="#0b67d0" />
-                      <Text style={styles.checklistOpenBtnText}>Abrir checklist</Text>
+                    <Text style={styles.sectionHint}>
+                      Por mano: {retiroPorManoCount} | Despacho a Orca: {retiroDespachoCount}
+                    </Text>
+                    <Pressable
+                      style={[styles.checklistOpenBtn, !permisoEditable && styles.ctaDisabled]}
+                      onPress={abrirRetiroEquiposModal}>
+                      <Ionicons
+                        name={permisoFormularioSoloLectura ? 'eye-outline' : 'archive-outline'}
+                        size={15}
+                        color="#0b67d0"
+                      />
+                      <Text style={styles.checklistOpenBtnText}>
+                        {permisoFormularioSoloLectura ? 'Ver retiro de equipos' : 'Configurar retiro de equipos'}
+                      </Text>
                     </Pressable>
                   </View>
                 </View>
@@ -5505,9 +5813,13 @@ export default function InformesScreen() {
                     return;
                   }
                   if (permisoContexto === 'retiro') {
-                    const anyChecked = retiroEquiposChecklist.some((eq) => !!eq.retirado);
-                    if (!anyChecked) {
+                    const selectedCount = retiroEquiposChecklist.filter((eq) => !!eq.retirado).length;
+                    if (!selectedCount) {
                       Alert.alert(titulo, 'Marca al menos un equipo retirado en el checklist.');
+                      return;
+                    }
+                    if (retiroTipo === 'completo' && selectedCount !== retiroEquiposChecklist.length) {
+                      Alert.alert(titulo, 'Si el retiro es completo, debes marcar todos los equipos del listado.');
                       return;
                     }
                   }
@@ -5639,62 +5951,75 @@ export default function InformesScreen() {
                             )
                           : null,
                     };
-                    let result: any = null;
+	                    const retiroEquiposPayload = retiroEquiposChecklist.map((eq) => ({
+	                      equipo_id: eq.equipo_id || null,
+	                      equipo_nombre: eq.equipo_nombre || null,
+	                      numero_serie: eq.numero_serie || null,
+	                      codigo: eq.codigo || null,
+	                      retirado: !!eq.retirado,
+	                      modalidad_retorno: normalizarModalidadRetorno(eq.modalidad_retorno),
+	                    }));
+	                    const retiroEstadoPayload = retiroEquiposPayload.some(
+	                      (eq) => !!eq.retirado && eq.modalidad_retorno === 'despacho_orca'
+	                    )
+	                      ? 'en_transito'
+	                      : 'retirado_centro';
+	                    let result: any = null;
                     if (permisoContexto === 'instalacion' && permisoCentroSeleccionado?.id_permiso_trabajo) {
                       result = await updatePermisoTrabajo(permisoCentroSeleccionado.id_permiso_trabajo, payload);
                     } else if (permisoContexto === 'mantencion' && mantencionEditandoId) {
                       result = await updateMantencionTerreno(mantencionEditandoId, payload);
                     } else if (permisoContexto === 'mantencion') {
                       result = await createMantencionTerreno(payload);
-                    } else if (permisoContexto === 'retiro' && retiroEditandoId) {
-                      result = await updateRetiroTerreno(retiroEditandoId, {
-                        centro_id: permCentroId,
-                        fecha_retiro: permFecha,
-                        tipo_retiro: retiroTipo,
-                        estado_logistico: retiroEstado,
-                        observacion: permDescripcionTrabajo || null,
-                        tecnico_1: permTecnico1 || null,
-                        firma_tecnico_1: permFirmaTecnico1 || null,
-                        tecnico_2: permTecnico2 || null,
-                        firma_tecnico_2: permFirmaTecnico2 || null,
-                        recepciona_nombre: permRecepciona || null,
-                        recepciona_rut: permRecepcionaRut || null,
-                        firma_recepciona: permFirmaRecepciona || null,
-                        equipos: retiroEquiposChecklist.map((eq) => ({
-                          equipo_id: eq.equipo_id || null,
-                          equipo_nombre: eq.equipo_nombre || null,
-                          numero_serie: eq.numero_serie || null,
-                          codigo: eq.codigo || null,
-                          retirado: !!eq.retirado,
-                        })),
-                      });
-                    } else if (permisoContexto === 'retiro') {
-                      result = await createRetiroTerreno({
-                        centro_id: permCentroId,
-                        fecha_retiro: permFecha,
-                        tipo_retiro: retiroTipo,
-                        estado_logistico: retiroEstado,
-                        observacion: permDescripcionTrabajo || null,
-                        tecnico_1: permTecnico1 || null,
-                        firma_tecnico_1: permFirmaTecnico1 || null,
-                        tecnico_2: permTecnico2 || null,
-                        firma_tecnico_2: permFirmaTecnico2 || null,
-                        recepciona_nombre: permRecepciona || null,
-                        recepciona_rut: permRecepcionaRut || null,
-                        firma_recepciona: permFirmaRecepciona || null,
-                        equipos: retiroEquiposChecklist.map((eq) => ({
-                          equipo_id: eq.equipo_id || null,
-                          equipo_nombre: eq.equipo_nombre || null,
-                          numero_serie: eq.numero_serie || null,
-                          codigo: eq.codigo || null,
-                          retirado: !!eq.retirado,
-                        })),
-                      });
-                    } else {
-                      result = await createPermisoTrabajo(payload);
-                    }
+	                    } else if (permisoContexto === 'retiro' && retiroEditandoId) {
+	                      result = await updateRetiroTerreno(retiroEditandoId, {
+	                        centro_id: permCentroId,
+	                        fecha_retiro: permFecha,
+	                        tipo_retiro: retiroTipo,
+	                        estado_logistico: retiroEstadoPayload,
+	                        observacion: permDescripcionTrabajo || null,
+	                        tecnico_1: permTecnico1 || null,
+	                        firma_tecnico_1: permFirmaTecnico1 || null,
+	                        tecnico_2: permTecnico2 || null,
+	                        firma_tecnico_2: permFirmaTecnico2 || null,
+	                        recepciona_nombre: permRecepciona || null,
+	                        recepciona_rut: permRecepcionaRut || null,
+	                        firma_recepciona: permFirmaRecepciona || null,
+	                        equipos: retiroEquiposPayload,
+	                      });
+	                    } else if (permisoContexto === 'retiro') {
+	                      result = await createRetiroTerreno({
+	                        centro_id: permCentroId,
+	                        fecha_retiro: permFecha,
+	                        tipo_retiro: retiroTipo,
+	                        estado_logistico: retiroEstadoPayload,
+	                        observacion: permDescripcionTrabajo || null,
+	                        tecnico_1: permTecnico1 || null,
+	                        firma_tecnico_1: permFirmaTecnico1 || null,
+	                        tecnico_2: permTecnico2 || null,
+	                        firma_tecnico_2: permFirmaTecnico2 || null,
+	                        recepciona_nombre: permRecepciona || null,
+	                        recepciona_rut: permRecepcionaRut || null,
+	                        firma_recepciona: permFirmaRecepciona || null,
+	                        equipos: retiroEquiposPayload,
+	                      });
+	                    } else {
+	                      result = await createPermisoTrabajo(payload);
+	                    }
 
-                    if (permisoContexto === 'mantencion' && cambioEquipoEnabled && equipoCambioId) {
+                      if (permisoContexto === 'retiro' && result?.retiro) {
+                        const retiroNormalizado = {
+                          ...result.retiro,
+                          tipo_retiro: retiroTipo,
+                          estado_logistico: retiroEstadoPayload,
+                          equipos: retiroEquiposPayload,
+                        };
+                        upsertRetiroTerrenoLocal(retiroNormalizado);
+                        setRetiroEquiposChecklist(parseRetiroEquipos(retiroNormalizado.equipos));
+                        setRetiroFormDirty(false);
+                      }
+
+	                    if (permisoContexto === 'mantencion' && cambioEquipoEnabled && equipoCambioId) {
                       const mantId =
                         Number(result?.mantencion?.id_mantencion_terreno || 0) ||
                         Number(mantencionEditandoId || 0);
@@ -5712,10 +6037,10 @@ export default function InformesScreen() {
                         });
                       }
                     }
-                    await cargarPermisos();
+                    await cargarPermisos({ force: true });
                     await cargarMantencionesTerreno();
                     await cargarRetirosTerreno();
-                    await cargarActividadesAsignadas();
+                    await cargarActividadesAsignadas({ force: true });
                     if (permisoContexto === 'mantencion' || permisoContexto === 'retiro') {
                       await marcarActividadFinalizadaSiCorresponde();
                       setActividadAsignadaActiva(null);
@@ -6638,6 +6963,54 @@ const styles = StyleSheet.create({
     padding: 12,
     marginTop: 4,
   },
+  retiroSummaryCard: {
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    borderRadius: 12,
+    backgroundColor: '#f7fbff',
+    padding: 12,
+    gap: 10,
+    marginTop: 4,
+  },
+  retiroSummaryRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  retiroSummaryPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderWidth: 1,
+  },
+  retiroSummaryPillBlue: { borderColor: '#bfdbfe', backgroundColor: '#eff6ff' },
+  retiroSummaryPillGreen: { borderColor: '#86efac', backgroundColor: '#f0fdf4' },
+  retiroSummaryPillAmber: { borderColor: '#fcd34d', backgroundColor: '#fffbeb' },
+  retiroSummaryPillText: { color: '#0f172a', fontSize: 12, fontWeight: '800' },
+  retiroModalSummary: {
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+    backgroundColor: '#f8fbff',
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    gap: 2,
+  },
+  retiroItemModeRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 },
+  retiroItemModeBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    backgroundColor: '#f3f4f6',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  retiroItemModeBtnGreen: { borderColor: '#86efac', backgroundColor: '#f0fdf4' },
+  retiroItemModeBtnAmber: { borderColor: '#86efac', backgroundColor: '#f0fdf4' },
+  retiroItemModeText: { color: '#475569', fontSize: 11.5, fontWeight: '800' },
+  retiroItemModeTextActive: { color: '#166534' },
   cambioEquipoCard: {
     borderWidth: 1,
     borderColor: '#bfdbfe',
