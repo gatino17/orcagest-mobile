@@ -1,7 +1,42 @@
 import * as SecureStore from 'expo-secure-store';
-import { createEquipo, saveMaterialesArmado, updateArmado, updateEquipo } from '@/lib/api';
+import {
+  createActaEntrega,
+  createCambioEquipoMantencion,
+  createEquipo,
+  createLevantamientoTerreno,
+  createMantencionTerreno,
+  createPermisoTrabajo,
+  createRendicion,
+  createRetiroTerreno,
+  enviarRendicion,
+  saveMaterialesArmado,
+  updateActaEntrega,
+  updateArmado,
+  updateEquipo,
+  updateLevantamientoTerreno,
+  updateMantencionTerreno,
+  updatePermisoTrabajo,
+  updateRendicion,
+  updateRetiroTerreno,
+} from '@/lib/api';
 
-type OpType = 'save_materiales' | 'update_equipo' | 'create_equipo' | 'update_armado';
+type OpType =
+  | 'save_materiales'
+  | 'update_equipo'
+  | 'create_equipo'
+  | 'update_armado'
+  | 'create_acta'
+  | 'update_acta'
+  | 'create_permiso'
+  | 'update_permiso'
+  | 'create_mantencion'
+  | 'update_mantencion'
+  | 'create_retiro'
+  | 'update_retiro'
+  | 'create_levantamiento'
+  | 'update_levantamiento'
+  | 'create_rendicion'
+  | 'update_rendicion';
 
 type PendingOp = {
   id: string;
@@ -10,16 +45,22 @@ type PendingOp = {
   createdAt: string;
 };
 
-const QUEUE_KEY = 'offline_queue_v1';
+type OfflineQueueStatus = {
+  pending: number;
+  notice: string;
+};
+
+const QUEUE_KEY = 'offline_queue_v2';
 const NOTICE_KEY = 'offline_notice_v1';
 const SYNC_MIN_INTERVAL_MS = 4000;
 
 let syncingPromise: Promise<{ synced: number; pending: number }> | null = null;
 let lastSyncAt = 0;
+const statusListeners = new Set<(status: OfflineQueueStatus) => void>();
 
 const uid = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-const isNetworkError = (error: any) => {
+export const isOfflineQueueableError = (error: any) => {
   if (!error) return false;
   if (error?.response) return false;
   if (error?.code === 'ECONNABORTED') return true;
@@ -49,8 +90,37 @@ export const getOfflineNotice = async () => {
   return (await SecureStore.getItemAsync(NOTICE_KEY)) || '';
 };
 
+const emitStatus = (status: OfflineQueueStatus) => {
+  statusListeners.forEach((listener) => {
+    try {
+      listener(status);
+    } catch {
+      // ignore listener errors
+    }
+  });
+};
+
+export const getOfflineStatus = async (): Promise<OfflineQueueStatus> => {
+  const [pending, notice] = await Promise.all([getPendingCount(), getOfflineNotice()]);
+  return { pending, notice };
+};
+
+export const refreshOfflineStatus = async () => {
+  const status = await getOfflineStatus();
+  emitStatus(status);
+  return status;
+};
+
+export const subscribeOfflineQueueStatus = (listener: (status: OfflineQueueStatus) => void) => {
+  statusListeners.add(listener);
+  return () => {
+    statusListeners.delete(listener);
+  };
+};
+
 export const clearOfflineNotice = async () => {
   await SecureStore.deleteItemAsync(NOTICE_KEY);
+  await refreshOfflineStatus();
 };
 
 export const getPendingCount = async () => {
@@ -58,11 +128,17 @@ export const getPendingCount = async () => {
   return queue.length;
 };
 
+export const listPendingOfflineOps = async () => {
+  return readQueue();
+};
+
 export const enqueueOfflineOp = async (type: OpType, payload: any) => {
   const queue = await readQueue();
   queue.push({ id: uid(), type, payload, createdAt: new Date().toISOString() });
   await writeQueue(queue);
-  await setNotice('Sin red: queda pendiente subir armado.');
+  const notice = 'Sin red: hay cambios pendientes por sincronizar.';
+  await setNotice(notice);
+  emitStatus({ pending: queue.length, notice });
 };
 
 const execOp = async (op: PendingOp) => {
@@ -78,6 +154,60 @@ const execOp = async (op: PendingOp) => {
   if (op.type === 'update_armado') {
     return updateArmado(op.payload.armadoId, op.payload.data);
   }
+  if (op.type === 'create_acta') {
+    return createActaEntrega(op.payload.data);
+  }
+  if (op.type === 'update_acta') {
+    return updateActaEntrega(op.payload.id, op.payload.data);
+  }
+  if (op.type === 'create_permiso') {
+    return createPermisoTrabajo(op.payload.data);
+  }
+  if (op.type === 'update_permiso') {
+    return updatePermisoTrabajo(op.payload.id, op.payload.data);
+  }
+  if (op.type === 'create_mantencion') {
+    const result = await createMantencionTerreno(op.payload.data);
+    const mantId = Number(result?.mantencion?.id_mantencion_terreno || 0) || 0;
+    if (mantId > 0 && op.payload.cambioEquipo) {
+      await createCambioEquipoMantencion(mantId, op.payload.cambioEquipo);
+    }
+    return result;
+  }
+  if (op.type === 'update_mantencion') {
+    const result = await updateMantencionTerreno(op.payload.id, op.payload.data);
+    if (Number(op.payload.id || 0) > 0 && op.payload.cambioEquipo) {
+      await createCambioEquipoMantencion(op.payload.id, op.payload.cambioEquipo);
+    }
+    return result;
+  }
+  if (op.type === 'create_retiro') {
+    return createRetiroTerreno(op.payload.data);
+  }
+  if (op.type === 'update_retiro') {
+    return updateRetiroTerreno(op.payload.id, op.payload.data);
+  }
+  if (op.type === 'create_levantamiento') {
+    return createLevantamientoTerreno(op.payload.data);
+  }
+  if (op.type === 'update_levantamiento') {
+    return updateLevantamientoTerreno(op.payload.id, op.payload.data);
+  }
+  if (op.type === 'create_rendicion') {
+    const result = await createRendicion(op.payload.data);
+    const rendicionId = Number(result?.rendicion?.id_rendicion || 0) || 0;
+    if (op.payload.sendAfter && rendicionId > 0) {
+      await enviarRendicion(rendicionId);
+    }
+    return result;
+  }
+  if (op.type === 'update_rendicion') {
+    const result = await updateRendicion(op.payload.id, op.payload.data);
+    if (op.payload.sendAfter && Number(op.payload.id || 0) > 0) {
+      await enviarRendicion(op.payload.id);
+    }
+    return result;
+  }
   return null;
 };
 
@@ -89,39 +219,49 @@ export const syncOfflineQueue = async () => {
   }
 
   const run = async () => {
-  const queue = await readQueue();
-  if (!queue.length) {
-    lastSyncAt = Date.now();
-    return { synced: 0, pending: 0 };
-  }
-
-  await setNotice('Red estable: se esta subiendo lo pendiente.');
-
-  const remaining: PendingOp[] = [];
-  let synced = 0;
-
-  for (let idx = 0; idx < queue.length; idx += 1) {
-    const op = queue[idx];
-    try {
-      await execOp(op);
-      synced += 1;
-    } catch (error) {
-      if (isNetworkError(error)) {
-        remaining.push(op, ...queue.slice(idx + 1));
-        break;
-      }
-      // Si falla por validación/servidor, descartamos ese op para no bloquear toda la cola.
+    const queue = await readQueue();
+    if (!queue.length) {
+      await SecureStore.deleteItemAsync(NOTICE_KEY);
+      lastSyncAt = Date.now();
+      emitStatus({ pending: 0, notice: '' });
+      return { synced: 0, pending: 0 };
     }
-  }
 
-  await writeQueue(remaining);
-  if (remaining.length === 0 && synced > 0) {
-    await setNotice('Todo en linea y subido.');
-  } else if (remaining.length > 0) {
-    await setNotice('Sin red: queda pendiente subir armado.');
-  }
-  lastSyncAt = Date.now();
-  return { synced, pending: remaining.length };
+    const syncingNotice = 'Red estable: se esta subiendo lo pendiente.';
+    await setNotice(syncingNotice);
+    emitStatus({ pending: queue.length, notice: syncingNotice });
+
+    const remaining: PendingOp[] = [];
+    let synced = 0;
+
+    for (let idx = 0; idx < queue.length; idx += 1) {
+      const op = queue[idx];
+      try {
+        await execOp(op);
+        synced += 1;
+      } catch (error) {
+        if (isOfflineQueueableError(error)) {
+          remaining.push(op, ...queue.slice(idx + 1));
+          break;
+        }
+        // Si falla por validacion/servidor, descartamos ese op para no bloquear toda la cola.
+      }
+    }
+
+    await writeQueue(remaining);
+    let finalNotice = '';
+    if (remaining.length === 0 && synced > 0) {
+      finalNotice = 'Todo en linea y subido.';
+      await setNotice(finalNotice);
+    } else if (remaining.length > 0) {
+      finalNotice = 'Sin red: hay cambios pendientes por sincronizar.';
+      await setNotice(finalNotice);
+    } else {
+      await SecureStore.deleteItemAsync(NOTICE_KEY);
+    }
+    emitStatus({ pending: remaining.length, notice: finalNotice });
+    lastSyncAt = Date.now();
+    return { synced, pending: remaining.length };
   };
 
   syncingPromise = run();

@@ -1,9 +1,10 @@
 import React, { useContext, useEffect, useMemo, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, StatusBar as RNStatusBar, Modal, TextInput } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, Modal, TextInput } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { AuthContext } from '../_layout';
 import { fetchClientes, fetchCentrosPorCliente, fetchHistorialCentro } from '@/lib/api';
+import { readCachedValue, writeCachedValue } from '@/lib/cache-store';
 
 type Cliente = { id_cliente?: number; id?: number; nombre?: string; razon_social?: string };
 type Centro = { id_centro?: number; id?: number; nombre?: string; cliente_id?: number; direccion?: string };
@@ -23,13 +24,31 @@ export default function ConsultaCentroScreen() {
   const [modalCentrosVisible, setModalCentrosVisible] = useState(false);
   const [centroIndex, setCentroIndex] = useState<CentroIndex[]>([]);
   const [loadingIndex, setLoadingIndex] = useState(false);
+  const clientesCacheKey = 'consulta_centro_v1_clientes';
+  const centroIndexCacheKey = 'consulta_centro_v1_centro_index';
+  const centrosClienteCacheKey = (clienteId: number | null | undefined) =>
+    `consulta_centro_v1_centros_${Number(clienteId || 0) || 0}`;
+  const historialCentroCacheKey = (centroId: number | null | undefined) =>
+    `consulta_centro_v1_historial_${Number(centroId || 0) || 0}`;
 
   useEffect(() => {
     if (!token) return;
     setLoading(true);
     fetchClientes()
-      .then(setClientes)
-      .catch(() => setError('No se pudieron cargar los clientes'))
+      .then((rows) => {
+        const data = Array.isArray(rows) ? rows : [];
+        setClientes(data);
+        writeCachedValue(clientesCacheKey, data).catch(() => {});
+      })
+      .catch(async () => {
+        const cached = await readCachedValue<Cliente[]>(clientesCacheKey, []);
+        if (Array.isArray(cached.value) && cached.value.length) {
+          setClientes(cached.value);
+          setError(null);
+        } else {
+          setError('No se pudieron cargar los clientes');
+        }
+      })
       .finally(() => setLoading(false));
   }, [token]);
 
@@ -44,8 +63,20 @@ export default function ConsultaCentroScreen() {
     }
     setLoading(true);
     fetchCentrosPorCliente(clienteSel)
-      .then(setCentros)
-      .catch(() => setError('No se pudieron cargar los centros'))
+      .then((rows) => {
+        const data = Array.isArray(rows) ? rows : [];
+        setCentros(data);
+        writeCachedValue(centrosClienteCacheKey(clienteSel), data).catch(() => {});
+      })
+      .catch(async () => {
+        const cachedCliente = await readCachedValue<Centro[]>(centrosClienteCacheKey(clienteSel), []);
+        if (Array.isArray(cachedCliente.value) && cachedCliente.value.length) {
+          setCentros(cachedCliente.value);
+          setError(null);
+        } else {
+          setError('No se pudieron cargar los centros');
+        }
+      })
       .finally(() => setLoading(false));
   }, [clienteSel, centroIndex]);
 
@@ -73,7 +104,16 @@ export default function ConsultaCentroScreen() {
     )
       .then((groups) => {
         if (!mounted) return;
-        setCentroIndex(groups.flat().filter((x) => x.id && x.clienteId));
+        const data = groups.flat().filter((x) => x.id && x.clienteId);
+        setCentroIndex(data);
+        writeCachedValue(centroIndexCacheKey, data).catch(() => {});
+      })
+      .catch(async () => {
+        const cached = await readCachedValue<CentroIndex[]>(centroIndexCacheKey, []);
+        if (!mounted) return;
+        if (Array.isArray(cached.value) && cached.value.length) {
+          setCentroIndex(cached.value);
+        }
       })
       .finally(() => mounted && setLoadingIndex(false));
     return () => {
@@ -85,10 +125,27 @@ export default function ConsultaCentroScreen() {
     if (!centroSel) return;
     setLoading(true);
     fetchHistorialCentro(centroSel)
-      .then((h) => setHistorial(h || null))
-      .catch(() => setError('No se pudo cargar el historial'))
+      .then((h) => {
+        setHistorial(h || null);
+        setError(null);
+        writeCachedValue(historialCentroCacheKey(centroSel), h || null).catch(() => {});
+      })
+      .catch(async () => {
+        const cached = await readCachedValue<any>(historialCentroCacheKey(centroSel), null);
+        if (cached.value) {
+          setHistorial(cached.value);
+          setError(null);
+        } else {
+          const centroLocal =
+            centros.find((x) => (x.id_centro ?? x.id) === centroSel) ||
+            centroIndex.find((x) => (x.id_centro ?? x.id) === centroSel) ||
+            null;
+          setHistorial(centroLocal ? { centro: centroLocal, equipos_ip: [], historial: {} } : null);
+          setError(null);
+        }
+      })
       .finally(() => setLoading(false));
-  }, [centroSel]);
+  }, [centroSel, centros, centroIndex]);
 
   const clienteNombre = useMemo(() => {
     const c = clientes.find((x) => (x.id_cliente ?? x.id) === clienteSel);
@@ -156,8 +213,8 @@ export default function ConsultaCentroScreen() {
       : { color: '#64748b', fontWeight: '600' as const };
 
   return (
-    <SafeAreaView style={styles.safe}>
-      <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
+    <SafeAreaView edges={['top']} style={styles.safe}>
+      <ScrollView style={styles.scroll} contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
         <View style={styles.hero}>
           <View style={styles.heroRow}>
             <View style={styles.heroIcon}>
@@ -485,9 +542,12 @@ export default function ConsultaCentroScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: '#ffffff' },
+  scroll: { flex: 1, backgroundColor: '#ffffff' },
   container: {
+    flexGrow: 1,
     padding: 16,
-    paddingTop: (RNStatusBar.currentHeight || 24) + 12,
+    paddingTop: 12,
+    paddingBottom: 18,
     gap: 12,
     backgroundColor: '#ffffff',
   },

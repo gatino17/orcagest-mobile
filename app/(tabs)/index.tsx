@@ -1,5 +1,5 @@
 import React, { useContext, useEffect, useState, useMemo, useCallback, useRef } from 'react';
-import { StyleSheet, Pressable, ScrollView, StatusBar as RNStatusBar, ActivityIndicator, View, Alert, Animated } from 'react-native';
+import { StyleSheet, Pressable, ScrollView, ActivityIndicator, View, Alert, Animated } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { useRouter } from 'expo-router';
@@ -9,9 +9,15 @@ import * as SecureStore from 'expo-secure-store';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { AuthContext } from '../_layout';
-import { fetchActividades, fetchActividadesMias, getArmados, updateArmado } from '@/lib/api';
-import { clearOfflineNotice, getOfflineNotice, getPendingCount, syncOfflineQueue } from '@/lib/offline-queue';
-import { subscribeArmadoUpdated } from '@/lib/realtime';
+import { getArmados, updateArmado } from '@/lib/api';
+import {
+  fetchActividadesAsignadasUsuario,
+  readCachedActividadesAsignadas,
+  tipoActividadProgramada,
+  writeCachedActividadesAsignadas,
+} from '@/lib/actividades';
+import { clearOfflineNotice, refreshOfflineStatus, subscribeOfflineQueueStatus } from '@/lib/offline-queue';
+import { subscribeActividadUpdated, subscribeArmadoUpdated } from '@/lib/realtime';
 
 export default function HomeScreen() {
   const router = useRouter();
@@ -109,16 +115,6 @@ export default function HomeScreen() {
     return 'Pendiente';
   };
 
-  const tipoTrabajoTexto = (areaRaw?: string, nombreRaw?: string) => {
-    const area = String(areaRaw || '').trim().toLowerCase();
-    const nombre = String(nombreRaw || '').trim().toLowerCase();
-    if (area.startsWith('reap') || nombre.includes('reap')) return 'reapuntamiento';
-    if (area.startsWith('instal') || nombre.includes('instal')) return 'instalacion';
-    if (area.startsWith('manten') || nombre.includes('manten')) return 'mantencion';
-    if (area.startsWith('retir') || nombre.includes('retir')) return 'retiro';
-    return 'trabajo';
-  };
-
   const cargarArmados = useCallback(async (silent = false) => {
     if (!userId) return;
     if (!silent) setLoadingArmados(true);
@@ -199,42 +195,13 @@ export default function HomeScreen() {
   const cargarTrabajosProgramados = useCallback(async (silent = false) => {
     if (!token) return;
     try {
-      const filtrarActivas = (arr: any[]) =>
-        (Array.isArray(arr) ? arr : []).filter((a) => {
-          const estado = String(a?.estado || '').toLowerCase();
-          return estado !== 'finalizado' && estado !== 'cancelado';
-        });
-      let listaBase = filtrarActivas(await fetchActividadesMias());
-      if (!listaBase.length) {
-        const byName = String(name || '')
-          .toLowerCase()
-          .trim()
-          .normalize('NFD')
-          .replace(/[\u0300-\u036f]/g, '');
-        const uid = Number(userId || 0) || 0;
-        const normalize = (v: any) =>
-          String(v || '')
-            .toLowerCase()
-            .trim()
-            .normalize('NFD')
-            .replace(/[\u0300-\u036f]/g, '');
-        const all = filtrarActivas(await fetchActividades());
-        listaBase = all.filter((item) => {
-          const principalId = Number(item?.encargado_principal?.id_encargado || item?.tecnico_encargado || 0) || 0;
-          const ayudanteId = Number(item?.encargado_ayudante?.id_encargado || item?.tecnico_ayudante || 0) || 0;
-          if (uid > 0 && (principalId === uid || ayudanteId === uid)) return true;
-          const nombres = [
-            item?.encargado_principal?.nombre_encargado,
-            item?.encargado_ayudante?.nombre_encargado,
-            ...(Array.isArray(item?.tecnicos_asignados) ? item.tecnicos_asignados.map((t: any) => t?.nombre_encargado) : []),
-          ]
-            .map((n) => normalize(n))
-            .filter(Boolean);
-          return !!byName && nombres.some((n) => n.includes(byName) || byName.includes(n));
-        });
-      }
-      const lista = listaBase;
+      const listaBase = await fetchActividadesAsignadasUsuario({ userId, name });
+      const lista = (Array.isArray(listaBase) ? listaBase : []).filter((a) => {
+        const estado = String(a?.estado || '').toLowerCase();
+        return estado !== 'finalizado' && estado !== 'cancelado';
+      });
       setTrabajosProgramados(lista);
+      writeCachedActividadesAsignadas(userId, listaBase).catch(() => {});
 
       const idsActuales = new Set<number>(
         lista.map((a) => Number(a?.id_actividad || 0)).filter((id) => Number.isFinite(id) && id > 0)
@@ -244,7 +211,7 @@ export default function HomeScreen() {
         const nuevosIds = Array.from(idsActuales).filter((id) => !conocidos.has(id));
         if (nuevosIds.length > 0) {
           const nuevo = lista.find((a) => Number(a?.id_actividad || 0) === nuevosIds[0]);
-          const tipo = tipoTrabajoTexto(nuevo?.area, nuevo?.nombre_actividad);
+          const tipo = tipoActividadProgramada(nuevo?.area, nuevo?.nombre_actividad);
           setTieneNuevoArmado(true);
           setMensajeNotificacion(
             `Tienes asignado ${tipo} en ${nuevo?.centro?.nombre || 'centro'}.`
@@ -252,13 +219,19 @@ export default function HomeScreen() {
         }
       } else if (!silent && lista.length > 0) {
         const a = lista[0];
-        const tipo = tipoTrabajoTexto(a?.area, a?.nombre_actividad);
+        const tipo = tipoActividadProgramada(a?.area, a?.nombre_actividad);
         setTieneNuevoArmado(true);
         setMensajeNotificacion(`Tienes ${lista.length} trabajo(s) programado(s). Ultimo: ${tipo} en ${a?.centro?.nombre || 'centro'}.`);
       }
       knownTrabajosRef.current = idsActuales;
     } catch {
-      setTrabajosProgramados([]);
+      const cached = await readCachedActividadesAsignadas(userId);
+      setTrabajosProgramados(
+        (Array.isArray(cached) ? cached : []).filter((a) => {
+          const estado = String(a?.estado || '').toLowerCase();
+          return estado !== 'finalizado' && estado !== 'cancelado';
+        })
+      );
     }
   }, [token, name, userId]);
 
@@ -274,6 +247,17 @@ export default function HomeScreen() {
   }, [readAperturasCache]);
 
   useEffect(() => {
+    readCachedActividadesAsignadas(userId).then((cached) => {
+      setTrabajosProgramados(
+        (Array.isArray(cached) ? cached : []).filter((a) => {
+          const estado = String(a?.estado || '').toLowerCase();
+          return estado !== 'finalizado' && estado !== 'cancelado';
+        })
+      );
+    });
+  }, [userId]);
+
+  useEffect(() => {
     if (!token || !userId) return;
     const onArmadoUpdated = (evt: any) => {
       const tecnicoId = Number(evt?.tecnico_id || evt?.tecnico || 0);
@@ -283,9 +267,17 @@ export default function HomeScreen() {
     return subscribeArmadoUpdated(onArmadoUpdated);
   }, [token, userId, cargarArmados]);
 
+  useEffect(() => {
+    if (!token) return;
+    const onActividadUpdated = () => {
+      cargarTrabajosProgramados(true);
+    };
+    return subscribeActividadUpdated(onActividadUpdated);
+  }, [token, cargarTrabajosProgramados]);
+
   const refrescarEstadoOffline = useCallback(async () => {
-    const [count, notice] = await Promise.all([getPendingCount(), getOfflineNotice()]);
-    setPendientesOffline(count);
+    const { pending, notice } = await refreshOfflineStatus();
+    setPendientesOffline(pending);
     if (notice) {
       setTieneNuevoArmado(true);
       setMensajeNotificacion(notice);
@@ -294,13 +286,15 @@ export default function HomeScreen() {
 
   useEffect(() => {
     refrescarEstadoOffline();
-    const timer = setInterval(async () => {
-      await syncOfflineQueue().catch(() => {});
-      await refrescarEstadoOffline();
-      await cargarTrabajosProgramados(true);
-    }, 12000);
-    return () => clearInterval(timer);
-  }, [refrescarEstadoOffline, cargarTrabajosProgramados]);
+    const unsubscribe = subscribeOfflineQueueStatus(({ pending, notice }) => {
+      setPendientesOffline(pending);
+      if (notice) {
+        setTieneNuevoArmado(true);
+        setMensajeNotificacion(notice);
+      }
+    });
+    return unsubscribe;
+  }, [refrescarEstadoOffline]);
 
   useEffect(() => {
     const shouldPulse = tieneNuevoArmado || pendientesOffline > 0;
@@ -471,9 +465,10 @@ export default function HomeScreen() {
   );
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: '#ffffff' }}>
+    <SafeAreaView edges={['top']} style={styles.safe}>
       <StatusBar style="dark" translucent={false} />
       <ScrollView
+        style={styles.scroll}
         contentContainerStyle={styles.container}
         showsVerticalScrollIndicator={false}>
         <ThemedView style={styles.headerMini}>
@@ -708,9 +703,19 @@ export default function HomeScreen() {
 }
 
 const styles = StyleSheet.create({
+  safe: {
+    flex: 1,
+    backgroundColor: '#ffffff',
+  },
+  scroll: {
+    flex: 1,
+    backgroundColor: '#ffffff',
+  },
   container: {
+    flexGrow: 1,
     padding: 16,
-    paddingTop: (RNStatusBar.currentHeight || 24) + 12,
+    paddingTop: 12,
+    paddingBottom: 18,
     gap: 12,
     backgroundColor: '#ffffff',
   },

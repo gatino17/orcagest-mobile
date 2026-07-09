@@ -3,11 +3,12 @@ import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import 'react-native-reanimated';
 import React, { createContext, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, View } from 'react-native';
+import { ActivityIndicator, AppState, View } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 import { jwtDecode } from 'jwt-decode';
 
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import { syncOfflineQueue } from '@/lib/offline-queue';
 
 export const unstable_settings = {
   anchor: '(tabs)',
@@ -63,6 +64,23 @@ export default function RootLayout() {
       })
       .finally(() => setReady(true));
   }, []);
+
+  useEffect(() => {
+    if (!token) return;
+    syncOfflineQueue().catch(() => {});
+    const interval = setInterval(() => {
+      syncOfflineQueue().catch(() => {});
+    }, 12000);
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        syncOfflineQueue().catch(() => {});
+      }
+    });
+    return () => {
+      clearInterval(interval);
+      sub.remove();
+    };
+  }, [token]);
 
   const setToken = async (value: string | null) => {
     setTokenState(value);

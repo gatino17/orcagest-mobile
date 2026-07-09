@@ -30,12 +30,10 @@ import {
   createRetiroTerreno,
   deleteActaEntrega,
   deleteRetiroTerreno,
-  fetchMantencionesTerreno,
-  fetchLevantamientosTerreno,
-  solicitarEdicionLevantamientoTerreno,
-  fetchActividadesMias,
-  fetchActividades,
-  fetchActasEntrega,
+	  fetchMantencionesTerreno,
+	  fetchLevantamientosTerreno,
+	  solicitarEdicionLevantamientoTerreno,
+	  fetchActasEntrega,
   fetchCambiosEquipoMantencion,
   fetchCentrosPorCliente,
   fetchClientes,
@@ -48,9 +46,16 @@ import {
   updateActividadCalendario,
   updateMantencionTerreno,
   updatePermisoTrabajo,
-  updateRetiroTerreno,
-} from '@/lib/api';
+	  updateRetiroTerreno,
+	} from '@/lib/api';
 import { subscribeActividadUpdated } from '@/lib/realtime';
+import {
+  fetchActividadesAsignadasUsuario,
+  readCachedActividadesAsignadas,
+  writeCachedActividadesAsignadas,
+} from '@/lib/actividades';
+import { readCachedValue, removeCachedValue, writeCachedValue } from '@/lib/cache-store';
+import { enqueueOfflineOp, isOfflineQueueableError } from '@/lib/offline-queue';
 
 type Cliente = { id_cliente?: number; id?: number; nombre?: string; razon_social?: string };
 type Centro = {
@@ -126,6 +131,7 @@ type Permiso = {
   id_mantencion_terreno?: number;
   id_retiro_terreno?: number;
   centro_id?: number;
+  codigo_ponton?: string;
   acta_entrega_id?: number;
   fecha_ingreso?: string;
   fecha_salida?: string;
@@ -216,6 +222,83 @@ type MantencionEquipoChecklist = {
   revisado?: boolean;
   observacion?: string;
 };
+type InformesDraft = {
+  moduloInforme: ModuloInforme;
+  actividadAsignadaActiva: any | null;
+  tecnicosAsignadosExtra: string[];
+  firmasTecnicosExtra: FirmaTecnicoExtra[];
+  showEditor: boolean;
+  showPermisoModal: boolean;
+  showRetiroChecklistModal: boolean;
+  showLevantamientoModal: boolean;
+  mostrarInstalacionForm: boolean;
+  acta: {
+    actaSoloLectura: boolean;
+    editId: number | null;
+    clienteIdForm: number | null;
+    centroIdForm: number | null;
+    fechaRegistro: string;
+    tecnico1: string;
+    firmaTecnico1: string;
+    tecnico2: string;
+    firmaTecnico2: string;
+    recepcionaNombre: string;
+    firmaRecepciona: string;
+    equiposConsiderados: string;
+    centroOrigenTraslado: string;
+    tipoRegistroInstalacion: TipoRegistroInstalacion;
+    tipoInstalacion: TipoInstalacion;
+    armadoSeleccionadoId: number | null;
+    vinculoActaId: number | null;
+  };
+  permiso: {
+    permisoContexto: PermisoContexto;
+    permisoSoloLectura: boolean;
+    permClienteId: number | null;
+    permCentroId: number | null;
+    permFecha: string;
+    permFechaSalida: string;
+    permResponsabilidad: string;
+    permTecnico1: string;
+    permFirmaTecnico1: string;
+    permTecnico2: string;
+    permFirmaTecnico2: string;
+    permRecepciona: string;
+    permRecepcionaRut: string;
+    permFirmaRecepciona: string;
+    permPuntosGpsList: GpsPoint[];
+    permSellosList: SelloItem[];
+    permMedicionFaseNeutro: string;
+    permMedicionNeutroTierra: string;
+    permHertz: string;
+    permDescripcionTrabajo: string;
+    permEvidenciaFotos: string[];
+    mantencionEditandoId: number | null;
+    retiroEditandoId: number | null;
+    retiroTipo: 'parcial' | 'completo';
+    retiroEstado: 'retirado_centro' | 'en_transito';
+    retiroEquiposChecklist: RetiroEquipoChecklist[];
+    retiroFormDirty: boolean;
+    cambioEquipoEnabled: boolean;
+    equipoCambioId: number | null;
+    serieNuevaCambio: string;
+    mantencionChecklistEnabled: boolean;
+    mantencionEquiposChecklist: MantencionEquipoChecklist[];
+  };
+  levantamiento: {
+    levantamientoFecha: string;
+    levantamientoResumen: string;
+    levantamientoObservaciones: string;
+    levantamientoVoltaje: string;
+    levantamientoCorriente: string;
+    levantamientoPotencia: string;
+    levantamientoFotos: LevantamientoFoto[];
+    levantamientoEditandoId: number | null;
+    levantamientoEditMeta: LevantamientoEditMeta | null;
+  };
+};
+
+const offlineTempId = () => -Date.now();
 type ActividadAsignada = {
   id_actividad?: number;
   nombre_actividad?: string;
@@ -534,8 +617,13 @@ export default function InformesScreen() {
   const [, setLoadingPermisos] = useState(false);
   const actividadesAsignadasInFlightRef = useRef<Promise<void> | null>(null);
   const actividadesAsignadasLastLoadedRef = useRef(0);
+  const informesDraftRestoredRef = useRef(false);
+  const restoringInformesDraftRef = useRef(false);
   const actasCacheRef = useRef<Record<string, { data: Acta[]; fetchedAt: number }>>({});
   const permisosCacheRef = useRef<Record<string, { data: Permiso[]; fetchedAt: number }>>({});
+  const mantencionesCacheRef = useRef<Record<string, { data: Permiso[]; fetchedAt: number }>>({});
+  const retirosCacheRef = useRef<Record<string, { data: Permiso[]; fetchedAt: number }>>({});
+  const levantamientosCacheRef = useRef<Record<string, { data: LevantamientoTerreno[]; fetchedAt: number }>>({});
   const [mantencionesTerreno, setMantencionesTerreno] = useState<Permiso[]>([]);
   const [retirosTerreno, setRetirosTerreno] = useState<Permiso[]>([]);
   const [levantamientosTerreno, setLevantamientosTerreno] = useState<LevantamientoTerreno[]>([]);
@@ -660,6 +748,12 @@ export default function InformesScreen() {
   const [solicitandoEdicionLevantamientoId, setSolicitandoEdicionLevantamientoId] = useState<number | null>(null);
   const [levantamientoEditandoId, setLevantamientoEditandoId] = useState<number | null>(null);
   const [levantamientoEditMeta, setLevantamientoEditMeta] = useState<LevantamientoEditMeta | null>(null);
+  const informesDraftCacheKey = useMemo(() => `informes_v1_draft_${userId || 'anon'}`, [userId]);
+  const clientesCacheKey = useMemo(() => `informes_v1_clientes_${userId || 'anon'}`, [userId]);
+  const centrosCacheKey = useCallback(
+    (clienteId: number | null | undefined) => `informes_v1_centros_${userId || 'anon'}_${Number(clienteId || 0) || 0}`,
+    [userId]
+  );
 
   const clienteForm = useMemo(
     () => clientes.find((c) => Number(c.id_cliente ?? c.id ?? 0) === Number(clienteIdForm ?? 0)) || null,
@@ -759,6 +853,67 @@ export default function InformesScreen() {
       ) || null
     );
   }, [permisosRetiro, retiroEditandoId]);
+  const clienteActualInforme = useMemo(
+    () =>
+      clientePermSel?.nombre ||
+      clientePermSel?.razon_social ||
+      actividadAsignadaActiva?.centro?.cliente ||
+      retiroEditandoSeleccionado?.cliente ||
+      retiroEditandoSeleccionado?.empresa ||
+      mantencionEditandoSeleccionada?.cliente ||
+      mantencionEditandoSeleccionada?.empresa ||
+      permisoCentroSeleccionado?.cliente ||
+      permisoCentroSeleccionado?.empresa ||
+      actaCentroSeleccionado?.cliente ||
+      actaCentroSeleccionado?.empresa ||
+      '-',
+    [
+      clientePermSel,
+      actividadAsignadaActiva,
+      retiroEditandoSeleccionado,
+      mantencionEditandoSeleccionada,
+      permisoCentroSeleccionado,
+      actaCentroSeleccionado,
+    ]
+  );
+  const centroActualInforme = useMemo(
+    () =>
+      permCentroSel?.nombre ||
+      actividadAsignadaActiva?.centro?.nombre ||
+      retiroEditandoSeleccionado?.centro ||
+      mantencionEditandoSeleccionada?.centro ||
+      permisoCentroSeleccionado?.centro ||
+      actaCentroSeleccionado?.centro ||
+      '-',
+    [
+      permCentroSel,
+      actividadAsignadaActiva,
+      retiroEditandoSeleccionado,
+      mantencionEditandoSeleccionada,
+      permisoCentroSeleccionado,
+      actaCentroSeleccionado,
+    ]
+  );
+  const codigoPontonActualInforme = useMemo(
+    () =>
+      permCentroSel?.nombre_ponton ||
+      actividadAsignadaActiva?.centro?.nombre_ponton ||
+      retiroEditandoSeleccionado?.codigo_ponton ||
+      mantencionEditandoSeleccionada?.codigo_ponton ||
+      permisoCentroSeleccionado?.codigo_ponton ||
+      actaCentroSeleccionado?.codigo_ponton ||
+      codigoPontonActa ||
+      '-',
+    [
+      permCentroSel,
+      actividadAsignadaActiva,
+      retiroEditandoSeleccionado,
+      mantencionEditandoSeleccionada,
+      permisoCentroSeleccionado,
+      actaCentroSeleccionado,
+      codigoPontonActa,
+    ]
+  );
   const equipoCambioSeleccionado = useMemo(
     () =>
       equiposCentro.find((e) => Number(e.id_equipo || 0) === Number(equipoCambioId || 0)) || null,
@@ -794,6 +949,11 @@ export default function InformesScreen() {
         fecha_hasta: filtroFechaHasta || '',
       }),
     [filtroCentroId, filtroFechaDesde, filtroFechaHasta]
+  );
+  const informesPersistentCacheBaseKey = useMemo(
+    () =>
+      `informes_v1_${userId || 'anon'}_${Number(filtroCentroId || 0) || 0}_${filtroFechaDesde || 'na'}_${filtroFechaHasta || 'na'}`,
+    [userId, filtroCentroId, filtroFechaDesde, filtroFechaHasta]
   );
   const instalacionSeleccionada = !!(permClienteId && permCentroId);
   const instalacionesCompletadas = useMemo(() => {
@@ -1016,6 +1176,85 @@ export default function InformesScreen() {
       });
     });
   }, []);
+  const upsertActaLocal = useCallback((acta: Acta | null | undefined) => {
+    if (!acta || !acta.id_acta_entrega) return;
+    setActas((prev) => {
+      const next = Array.isArray(prev) ? [...prev] : [];
+      const idx = next.findIndex((item) => Number(item.id_acta_entrega || 0) === Number(acta.id_acta_entrega || 0));
+      if (idx >= 0) {
+        next[idx] = { ...next[idx], ...acta };
+      } else {
+        next.unshift(acta);
+      }
+      return next.sort((a, b) => {
+        const ta = new Date(a.fecha_registro || a.updated_at || a.created_at || 0).getTime();
+        const tb = new Date(b.fecha_registro || b.updated_at || b.created_at || 0).getTime();
+        if (tb !== ta) return tb - ta;
+        return Number(b.id_acta_entrega || 0) - Number(a.id_acta_entrega || 0);
+      });
+    });
+  }, []);
+  const upsertPermisoLocal = useCallback((permiso: Permiso | null | undefined) => {
+    if (!permiso || !permiso.id_permiso_trabajo) return;
+    setPermisos((prev) => {
+      const next = Array.isArray(prev) ? [...prev] : [];
+      const idx = next.findIndex(
+        (item) => Number(item.id_permiso_trabajo || 0) === Number(permiso.id_permiso_trabajo || 0)
+      );
+      if (idx >= 0) {
+        next[idx] = { ...next[idx], ...permiso };
+      } else {
+        next.unshift(permiso);
+      }
+      return next.sort((a, b) => {
+        const ta = new Date(a.fecha_ingreso || a.updated_at || 0).getTime();
+        const tb = new Date(b.fecha_ingreso || b.updated_at || 0).getTime();
+        if (tb !== ta) return tb - ta;
+        return Number(b.id_permiso_trabajo || 0) - Number(a.id_permiso_trabajo || 0);
+      });
+    });
+  }, []);
+  const upsertMantencionLocal = useCallback((mantencion: Permiso | null | undefined) => {
+    if (!mantencion || !mantencion.id_mantencion_terreno) return;
+    setMantencionesTerreno((prev) => {
+      const next = Array.isArray(prev) ? [...prev] : [];
+      const idx = next.findIndex(
+        (item) => Number(item.id_mantencion_terreno || 0) === Number(mantencion.id_mantencion_terreno || 0)
+      );
+      if (idx >= 0) {
+        next[idx] = { ...next[idx], ...mantencion };
+      } else {
+        next.unshift(mantencion);
+      }
+      return next.sort((a, b) => {
+        const ta = new Date(a.fecha_ingreso || a.updated_at || 0).getTime();
+        const tb = new Date(b.fecha_ingreso || b.updated_at || 0).getTime();
+        if (tb !== ta) return tb - ta;
+        return Number(b.id_mantencion_terreno || 0) - Number(a.id_mantencion_terreno || 0);
+      });
+    });
+  }, []);
+  const upsertLevantamientoLocal = useCallback((levantamiento: LevantamientoTerreno | null | undefined) => {
+    if (!levantamiento || !levantamiento.id_levantamiento_terreno) return;
+    setLevantamientosTerreno((prev) => {
+      const next = Array.isArray(prev) ? [...prev] : [];
+      const idx = next.findIndex(
+        (item) =>
+          Number(item.id_levantamiento_terreno || 0) === Number(levantamiento.id_levantamiento_terreno || 0)
+      );
+      if (idx >= 0) {
+        next[idx] = { ...next[idx], ...levantamiento };
+      } else {
+        next.unshift(levantamiento);
+      }
+      return next.sort((a, b) => {
+        const ta = new Date(a.fecha_levantamiento || a.updated_at || 0).getTime();
+        const tb = new Date(b.fecha_levantamiento || b.updated_at || 0).getTime();
+        if (tb !== ta) return tb - ta;
+        return Number(b.id_levantamiento_terreno || 0) - Number(a.id_levantamiento_terreno || 0);
+      });
+    });
+  }, []);
   const nombreRegistroInstalacion =
     tipoRegistroInstalacion === 'reapuntamiento' ? 'Reapuntamiento' : 'Instalacion';
   const nombreDocumentoActa =
@@ -1122,6 +1361,21 @@ export default function InformesScreen() {
 
     return false;
   }, [actividadIdsConRegistroModulo, levantamientosTerreno, moduloInforme, permisosMantencion, permisosRetiro]);
+  const estadoEdicionRetiroPorActividad = useCallback((actividad: ActividadAsignada) => {
+    const idActividad = Number(actividad.id_actividad || 0) || 0;
+    const centroIdActividad =
+      Number(actividad.centro_id || actividad.centro?.id_centro || actividad.centro?.id || 0) || 0;
+    const fechaActividad = toInputDate(actividad.fecha_inicio) || '';
+    const match =
+      permisosRetiro.find((item) => Number(item.actividad_id || 0) === idActividad) ||
+      permisosRetiro.find((item) => {
+        const centroId = Number(item.centro_id || 0) || 0;
+        const fecha = toInputDate(item.fecha_retiro) || '';
+        return !!centroIdActividad && centroId === centroIdActividad && !!fechaActividad && fecha === fechaActividad;
+      }) ||
+      null;
+    return estadoEdicionRetiro(match?.estado_edicion);
+  }, [permisosRetiro]);
   const actividadesProgramadas = useMemo(
     () => {
       return actividadesAsignadasFiltradas.filter((a) => {
@@ -1153,16 +1407,27 @@ export default function InformesScreen() {
         const esActiva = Number(actividadAsignadaActiva?.id_actividad || 0) === idActividad;
         const estado = estadoActividad(a.estado);
         const tieneRegistro = actividadTieneRegistroModulo(a);
+        const retiroEstadoEdicion = moduloInforme === 'retiro' ? estadoEdicionRetiroPorActividad(a) : '';
         if (esActiva) {
           if (moduloInforme === 'instalacion') return false;
+          if (moduloInforme === 'retiro' && retiroEstadoEdicion !== 'edicion_autorizada') return false;
           return estado !== 'finalizado';
         }
         if (moduloInforme === 'levantamiento') return estado === 'en_progreso';
         if (moduloInforme === 'instalacion') return estado === 'en_progreso' && !tieneRegistro;
+        if (moduloInforme === 'retiro') {
+          return estado === 'en_progreso' && tieneRegistro && retiroEstadoEdicion === 'edicion_autorizada';
+        }
         return estado === 'en_progreso' && tieneRegistro;
       });
     },
-    [actividadesAsignadasFiltradas, actividadAsignadaActiva, actividadTieneRegistroModulo, moduloInforme]
+    [
+      actividadesAsignadasFiltradas,
+      actividadAsignadaActiva,
+      actividadTieneRegistroModulo,
+      estadoEdicionRetiroPorActividad,
+      moduloInforme,
+    ]
   );
   const actividadInstalacionActivaEnProceso = useMemo(() => {
     if (moduloInforme !== 'instalacion' || !actividadAsignadaActiva) return false;
@@ -1173,8 +1438,15 @@ export default function InformesScreen() {
   const totalActividadesEnProcesoVisible =
     actividadesEnProceso.length + (actividadInstalacionActivaEnProceso ? 1 : 0);
   const actividadesCompletadas = useMemo(
-    () => actividadesAsignadasFiltradas.filter((a) => estadoActividad(a.estado) === 'finalizado'),
-    [actividadesAsignadasFiltradas]
+    () =>
+      actividadesAsignadasFiltradas.filter((a) => {
+        if (estadoActividad(a.estado) === 'finalizado') return true;
+        if (moduloInforme === 'retiro' && actividadTieneRegistroModulo(a)) {
+          return estadoEdicionRetiroPorActividad(a) !== 'edicion_autorizada';
+        }
+        return false;
+      }),
+    [actividadesAsignadasFiltradas, actividadTieneRegistroModulo, estadoEdicionRetiroPorActividad, moduloInforme]
   );
   const mostrarAsignadasEnProceso =
     moduloInforme !== 'instalacion' || actividadesEnProceso.length > 0;
@@ -1184,15 +1456,22 @@ export default function InformesScreen() {
     setLoading(true);
     try {
       const listaClientes = await fetchClientes();
-      setClientes(Array.isArray(listaClientes) ? listaClientes : []);
+      const rows = Array.isArray(listaClientes) ? listaClientes : [];
+      setClientes(rows);
+      writeCachedValue(clientesCacheKey, rows).catch(() => {});
     } catch (error: any) {
-      setClientes([]);
-      const backendMsg =
-        error?.response?.data?.error ||
-        error?.response?.data?.message ||
-        error?.message ||
-        'No se pudieron cargar los clientes.';
-      Alert.alert('Informes', backendMsg);
+      const cached = await readCachedValue<Cliente[]>(clientesCacheKey, []);
+      if (Array.isArray(cached.value) && cached.value.length) {
+        setClientes(cached.value);
+      } else {
+        setClientes([]);
+        const backendMsg =
+          error?.response?.data?.error ||
+          error?.response?.data?.message ||
+          error?.message ||
+          'No se pudieron cargar los clientes.';
+        Alert.alert('Informes', backendMsg);
+      }
     } finally {
       setLoading(false);
     }
@@ -1205,10 +1484,17 @@ export default function InformesScreen() {
     }
     try {
       const lista = await fetchCentrosPorCliente(clienteId);
-      setCentrosFiltro(Array.isArray(lista) ? lista : []);
+      const rows = Array.isArray(lista) ? lista : [];
+      setCentrosFiltro(rows);
+      writeCachedValue(centrosCacheKey(clienteId), rows).catch(() => {});
     } catch {
-      setCentrosFiltro([]);
-      Alert.alert('Informes', 'No se pudieron cargar los centros del cliente.');
+      const cached = await readCachedValue<Centro[]>(centrosCacheKey(clienteId), []);
+      if (Array.isArray(cached.value) && cached.value.length) {
+        setCentrosFiltro(cached.value);
+      } else {
+        setCentrosFiltro([]);
+        Alert.alert('Informes', 'No se pudieron cargar los centros del cliente.');
+      }
     }
   };
 
@@ -1219,19 +1505,35 @@ export default function InformesScreen() {
     }
     try {
       const lista = await fetchCentrosPorCliente(clienteId);
-      setCentrosForm(Array.isArray(lista) ? lista : []);
+      const rows = Array.isArray(lista) ? lista : [];
+      setCentrosForm(rows);
+      writeCachedValue(centrosCacheKey(clienteId), rows).catch(() => {});
     } catch {
-      setCentrosForm([]);
-      Alert.alert('Informes', 'No se pudieron cargar los centros para el acta.');
+      const cached = await readCachedValue<Centro[]>(centrosCacheKey(clienteId), []);
+      if (Array.isArray(cached.value) && cached.value.length) {
+        setCentrosForm(cached.value);
+      } else {
+        setCentrosForm([]);
+        Alert.alert('Informes', 'No se pudieron cargar los centros para el acta.');
+      }
     }
   };
 
   const cargarActas = async (options?: { force?: boolean }) => {
     if (!token || moduloInforme !== 'instalacion' || tipoInstalacion !== 'acta_entrega') return;
     const cached = actasCacheRef.current[informesFiltroCacheKey];
+    const persistentCacheKey = `${informesPersistentCacheBaseKey}_actas`;
     if (cached) {
       setActas(cached.data);
       if (!options?.force && Date.now() - cached.fetchedAt < INFORMES_CACHE_TTL_MS) return;
+    } else {
+      const persisted = await readCachedValue<Acta[]>(persistentCacheKey, []);
+      if (Array.isArray(persisted.value) && persisted.value.length) {
+        const entry = { data: persisted.value, fetchedAt: persisted.updatedAt || 0 };
+        actasCacheRef.current[informesFiltroCacheKey] = entry;
+        setActas(entry.data);
+        if (!options?.force && Date.now() - entry.fetchedAt < INFORMES_CACHE_TTL_MS) return;
+      }
     }
     setLoadingActas(true);
     try {
@@ -1246,8 +1548,9 @@ export default function InformesScreen() {
         fetchedAt: Date.now(),
       };
       setActas(rows);
+      writeCachedValue(persistentCacheKey, rows).catch(() => {});
     } catch {
-      if (!cached) {
+      if (!cached && !actasCacheRef.current[informesFiltroCacheKey]?.data?.length) {
         setActas([]);
         Alert.alert('Informes', 'No se pudieron cargar las actas.');
       }
@@ -1258,9 +1561,18 @@ export default function InformesScreen() {
   const cargarPermisos = async (options?: { force?: boolean }) => {
     if (!token || moduloInforme !== 'instalacion') return;
     const cached = permisosCacheRef.current[informesFiltroCacheKey];
+    const persistentCacheKey = `${informesPersistentCacheBaseKey}_permisos`;
     if (cached) {
       setPermisos(cached.data);
       if (!options?.force && Date.now() - cached.fetchedAt < INFORMES_CACHE_TTL_MS) return;
+    } else {
+      const persisted = await readCachedValue<Permiso[]>(persistentCacheKey, []);
+      if (Array.isArray(persisted.value) && persisted.value.length) {
+        const entry = { data: persisted.value, fetchedAt: persisted.updatedAt || 0 };
+        permisosCacheRef.current[informesFiltroCacheKey] = entry;
+        setPermisos(entry.data);
+        if (!options?.force && Date.now() - entry.fetchedAt < INFORMES_CACHE_TTL_MS) return;
+      }
     }
     setLoadingPermisos(true);
     try {
@@ -1275,8 +1587,9 @@ export default function InformesScreen() {
         fetchedAt: Date.now(),
       };
       setPermisos(rows);
+      writeCachedValue(persistentCacheKey, rows).catch(() => {});
     } catch (error: any) {
-      if (!cached) {
+      if (!cached && !permisosCacheRef.current[informesFiltroCacheKey]?.data?.length) {
         setPermisos([]);
         const backendMsg =
           error?.response?.data?.error ||
@@ -1291,59 +1604,131 @@ export default function InformesScreen() {
   };
   const cargarMantencionesTerreno = async () => {
     if (!token || moduloInforme !== 'mantencion') return;
+    const persistentCacheKey = `${informesPersistentCacheBaseKey}_mantenciones`;
+    const cached = mantencionesCacheRef.current[informesFiltroCacheKey];
+    if (cached) {
+      setMantencionesTerreno(cached.data);
+      if (Date.now() - cached.fetchedAt < INFORMES_CACHE_TTL_MS) return;
+    } else {
+      const persisted = await readCachedValue<Permiso[]>(persistentCacheKey, []);
+      if (Array.isArray(persisted.value) && persisted.value.length) {
+        const entry = { data: persisted.value, fetchedAt: persisted.updatedAt || 0 };
+        mantencionesCacheRef.current[informesFiltroCacheKey] = entry;
+        setMantencionesTerreno(entry.data);
+        if (Date.now() - entry.fetchedAt < INFORMES_CACHE_TTL_MS) return;
+      }
+    }
     try {
       const data = await fetchMantencionesTerreno({
         centro_id: filtroCentroId || undefined,
         fecha_desde: filtroFechaDesde || undefined,
         fecha_hasta: filtroFechaHasta || undefined,
       });
-      setMantencionesTerreno(Array.isArray(data) ? data : []);
+      const rows = Array.isArray(data) ? data : [];
+      mantencionesCacheRef.current[informesFiltroCacheKey] = {
+        data: rows,
+        fetchedAt: Date.now(),
+      };
+      setMantencionesTerreno(rows);
+      writeCachedValue(persistentCacheKey, rows).catch(() => {});
     } catch (error: any) {
-      setMantencionesTerreno([]);
+      if (!mantencionesCacheRef.current[informesFiltroCacheKey]?.data?.length) {
+        setMantencionesTerreno([]);
+      }
       const backendMsg =
         error?.response?.data?.error ||
         error?.response?.data?.message ||
         error?.message ||
         'No se pudieron cargar las mantenciones en terreno.';
-      Alert.alert('Informes', backendMsg);
+      if (!mantencionesCacheRef.current[informesFiltroCacheKey]?.data?.length) {
+        Alert.alert('Informes', backendMsg);
+      }
     }
   };
   const cargarRetirosTerreno = async () => {
     if (!token || moduloInforme !== 'retiro') return;
+    const persistentCacheKey = `${informesPersistentCacheBaseKey}_retiros`;
+    const cached = retirosCacheRef.current[informesFiltroCacheKey];
+    if (cached) {
+      setRetirosTerreno(cached.data);
+      if (Date.now() - cached.fetchedAt < INFORMES_CACHE_TTL_MS) return;
+    } else {
+      const persisted = await readCachedValue<Permiso[]>(persistentCacheKey, []);
+      if (Array.isArray(persisted.value) && persisted.value.length) {
+        const entry = { data: persisted.value, fetchedAt: persisted.updatedAt || 0 };
+        retirosCacheRef.current[informesFiltroCacheKey] = entry;
+        setRetirosTerreno(entry.data);
+        if (Date.now() - entry.fetchedAt < INFORMES_CACHE_TTL_MS) return;
+      }
+    }
     try {
       const data = await fetchRetirosTerreno({
         centro_id: filtroCentroId || undefined,
         fecha_desde: filtroFechaDesde || undefined,
         fecha_hasta: filtroFechaHasta || undefined,
       });
-      setRetirosTerreno(Array.isArray(data) ? data : []);
+      const rows = Array.isArray(data) ? data : [];
+      retirosCacheRef.current[informesFiltroCacheKey] = {
+        data: rows,
+        fetchedAt: Date.now(),
+      };
+      setRetirosTerreno(rows);
+      writeCachedValue(persistentCacheKey, rows).catch(() => {});
     } catch (error: any) {
-      setRetirosTerreno([]);
+      if (!retirosCacheRef.current[informesFiltroCacheKey]?.data?.length) {
+        setRetirosTerreno([]);
+      }
       const backendMsg =
         error?.response?.data?.error ||
         error?.response?.data?.message ||
         error?.message ||
         'No se pudieron cargar los retiros en terreno.';
-      Alert.alert('Informes', backendMsg);
+      if (!retirosCacheRef.current[informesFiltroCacheKey]?.data?.length) {
+        Alert.alert('Informes', backendMsg);
+      }
     }
   };
   const cargarLevantamientosTerreno = async () => {
     if (!token || moduloInforme !== 'levantamiento') return;
+    const persistentCacheKey = `${informesPersistentCacheBaseKey}_levantamientos`;
+    const cached = levantamientosCacheRef.current[informesFiltroCacheKey];
+    if (cached) {
+      setLevantamientosTerreno(cached.data);
+      if (Date.now() - cached.fetchedAt < INFORMES_CACHE_TTL_MS) return;
+    } else {
+      const persisted = await readCachedValue<LevantamientoTerreno[]>(persistentCacheKey, []);
+      if (Array.isArray(persisted.value) && persisted.value.length) {
+        const entry = { data: persisted.value, fetchedAt: persisted.updatedAt || 0 };
+        levantamientosCacheRef.current[informesFiltroCacheKey] = entry;
+        setLevantamientosTerreno(entry.data);
+        if (Date.now() - entry.fetchedAt < INFORMES_CACHE_TTL_MS) return;
+      }
+    }
     try {
       const data = await fetchLevantamientosTerreno({
         centro_id: filtroCentroId || undefined,
         fecha_desde: filtroFechaDesde || undefined,
         fecha_hasta: filtroFechaHasta || undefined,
       });
-      setLevantamientosTerreno(Array.isArray(data) ? data : []);
+      const rows = Array.isArray(data) ? data : [];
+      levantamientosCacheRef.current[informesFiltroCacheKey] = {
+        data: rows,
+        fetchedAt: Date.now(),
+      };
+      setLevantamientosTerreno(rows);
+      writeCachedValue(persistentCacheKey, rows).catch(() => {});
     } catch (error: any) {
-      setLevantamientosTerreno([]);
+      if (!levantamientosCacheRef.current[informesFiltroCacheKey]?.data?.length) {
+        setLevantamientosTerreno([]);
+      }
       const backendMsg =
         error?.response?.data?.error ||
         error?.response?.data?.message ||
         error?.message ||
         'No se pudieron cargar los levantamientos en terreno.';
-      Alert.alert('Informes', backendMsg);
+      if (!levantamientosCacheRef.current[informesFiltroCacheKey]?.data?.length) {
+        Alert.alert('Informes', backendMsg);
+      }
     }
   };
   const cargarActividadesAsignadas = useCallback(async (options?: { force?: boolean }) => {
@@ -1361,59 +1746,19 @@ export default function InformesScreen() {
     ) {
       return;
     }
-    const request = (async () => {
-      setLoadingActividadesAsignadas(true);
-      try {
-        const byName = String(name || '')
-          .toLowerCase()
-          .trim()
-          .normalize('NFD')
-          .replace(/[\u0300-\u036f]/g, '');
-        const userIdNum = Number(userId || 0) || 0;
-        const filtrarActivas = (arr: any[]) =>
-          (Array.isArray(arr) ? arr : []).filter((item) => {
-            const estado = String(item?.estado || '').trim().toLowerCase();
-            return estado !== 'cancelado';
-          });
-        let lista: any[] = [];
-        try {
-          lista = filtrarActivas(await fetchActividadesMias());
-        } catch {
-          lista = [];
-        }
-        if (!lista.length) {
-          const all = filtrarActivas(await fetchActividades());
-          const normalize = (v: any) =>
-            String(v || '')
-              .toLowerCase()
-              .trim()
-              .normalize('NFD')
-              .replace(/[\u0300-\u036f]/g, '');
-          lista = all.filter((item) => {
-            const principalId = Number(item?.encargado_principal?.id_encargado || item?.tecnico_encargado || 0) || 0;
-            const ayudanteId = Number(item?.encargado_ayudante?.id_encargado || item?.tecnico_ayudante || 0) || 0;
-            if (userIdNum > 0 && (principalId === userIdNum || ayudanteId === userIdNum)) return true;
-            const nombres = [
-              item?.encargado_principal?.nombre_encargado,
-              item?.encargado_ayudante?.nombre_encargado,
-              ...(Array.isArray(item?.tecnicos_asignados) ? item.tecnicos_asignados.map((t: any) => t?.nombre_encargado) : []),
-            ]
-              .map((n) => normalize(n))
-              .filter(Boolean);
-            return !!byName && nombres.some((n) => n.includes(byName) || byName.includes(n));
-          });
-        }
-        lista = lista.filter((item) => {
-          const estado = String(item?.estado || '').trim().toLowerCase();
-          return estado !== 'cancelado';
-        });
-        setActividadesAsignadas(lista);
-        actividadesAsignadasLastLoadedRef.current = Date.now();
-      } catch {
-        setActividadesAsignadas([]);
-      } finally {
-        setLoadingActividadesAsignadas(false);
-        actividadesAsignadasInFlightRef.current = null;
+	    const request = (async () => {
+	      setLoadingActividadesAsignadas(true);
+	      try {
+	        const lista = await fetchActividadesAsignadasUsuario({ userId, name });
+	        setActividadesAsignadas(lista);
+	        writeCachedActividadesAsignadas(userId, lista).catch(() => {});
+	        actividadesAsignadasLastLoadedRef.current = Date.now();
+	      } catch {
+	        const cached = await readCachedActividadesAsignadas(userId);
+	        setActividadesAsignadas(Array.isArray(cached) ? cached : []);
+	      } finally {
+	        setLoadingActividadesAsignadas(false);
+	        actividadesAsignadasInFlightRef.current = null;
       }
     })();
     actividadesAsignadasInFlightRef.current = request;
@@ -1512,13 +1857,22 @@ export default function InformesScreen() {
       return;
     }
     if (area.startsWith('retir')) {
+      const retiroExistente =
+        permisosRetiro.find((item) => Number(item.actividad_id || 0) === Number(actividadId || 0)) ||
+        permisosRetiro.find((item) => {
+          const centroItem = Number(item.centro_id || 0) || 0;
+          const fechaItem = toInputDate(item.fecha_retiro) || '';
+          return !!centroId && centroItem === centroId && !!fechaActividad && fechaItem === fechaActividad;
+        }) ||
+        null;
+      const estadoRetiroExistente = estadoEdicionRetiro(retiroExistente?.estado_edicion);
       resetPermisoForm();
-      setPermisoSoloLectura(false);
+      setPermisoSoloLectura(!!retiroExistente && estadoRetiroExistente !== 'edicion_autorizada');
       if (tecnicoPrincipal) setPermTecnico1(tecnicoPrincipal);
       if (tecnicoAyudante) setPermTecnico2(tecnicoAyudante);
       setPermisoContexto('retiro');
       setPermFecha(fechaActividad);
-      setRetiroEditandoId(null);
+      setRetiroEditandoId(Number(retiroExistente?.id_retiro_terreno || 0) || null);
       // Flujo directo: abrir modal de retiro ya seleccionado desde la actividad programada.
       setShowRetiroTipoModal(false);
       setShowPermisoModal(true);
@@ -1552,23 +1906,23 @@ export default function InformesScreen() {
       Alert.alert('Levantamiento', 'Agrega una descripcion o al menos una foto antes de finalizar.');
       return;
     }
+    const payload = {
+      centro_id: centroId,
+      actividad_id: Number(actividadAsignadaActiva?.id_actividad || 0) || null,
+      fecha_levantamiento: levantamientoFecha || todayInputDate(),
+      region: region || centroSelForm?.area || centroSelForm?.region || null,
+      localidad: localidad || centroSelForm?.ubicacion || centroSelForm?.localidad || null,
+      codigo_ponton: codigoPontonActa || centroSelForm?.nombre_ponton || null,
+      resumen: levantamientoResumen || null,
+      observaciones: levantamientoObservaciones || null,
+      medicion_voltaje: levantamientoVoltaje || null,
+      medicion_corriente: levantamientoCorriente || null,
+      medicion_potencia: levantamientoPotencia || null,
+      fotos: levantamientoFotos,
+      estado: 'finalizado',
+    };
     try {
       setSaving(true);
-      const payload = {
-        centro_id: centroId,
-        actividad_id: Number(actividadAsignadaActiva?.id_actividad || 0) || null,
-        fecha_levantamiento: levantamientoFecha || todayInputDate(),
-        region: region || centroSelForm?.area || centroSelForm?.region || null,
-        localidad: localidad || centroSelForm?.ubicacion || centroSelForm?.localidad || null,
-        codigo_ponton: codigoPontonActa || centroSelForm?.nombre_ponton || null,
-        resumen: levantamientoResumen || null,
-        observaciones: levantamientoObservaciones || null,
-        medicion_voltaje: levantamientoVoltaje || null,
-        medicion_corriente: levantamientoCorriente || null,
-        medicion_potencia: levantamientoPotencia || null,
-        fotos: levantamientoFotos,
-        estado: 'finalizado',
-      };
       if (levantamientoEditandoId) {
         await updateLevantamientoTerreno(levantamientoEditandoId, payload);
       } else {
@@ -1581,6 +1935,7 @@ export default function InformesScreen() {
         setActividadAsignadaActiva(null);
         setTecnicosAsignadosExtra([]);
       }
+      await removeCachedValue(informesDraftCacheKey);
       setShowLevantamientoModal(false);
       setLevantamientoEditandoId(null);
       setLevantamientoEditMeta(null);
@@ -1592,6 +1947,47 @@ export default function InformesScreen() {
       setLevantamientoFotos([]);
       Alert.alert('Levantamiento', levantamientoEditandoId ? 'Levantamiento editado y finalizado.' : 'Levantamiento guardado y finalizado.');
     } catch (error: any) {
+      if (isOfflineQueueableError(error)) {
+        const offlineId = levantamientoEditandoId || offlineTempId();
+        await enqueueOfflineOp(
+          levantamientoEditandoId ? 'update_levantamiento' : 'create_levantamiento',
+          levantamientoEditandoId
+            ? { id: offlineId, data: payload }
+            : { data: payload }
+        );
+        upsertLevantamientoLocal({
+          id_levantamiento_terreno: offlineId,
+          centro_id: centroId,
+          actividad_id: Number(actividadAsignadaActiva?.id_actividad || 0) || undefined,
+          fecha_levantamiento: payload.fecha_levantamiento || todayInputDate(),
+          region: payload.region || '',
+          localidad: payload.localidad || '',
+          codigo_ponton: payload.codigo_ponton || '',
+          resumen: payload.resumen || '',
+          observaciones: payload.observaciones || '',
+          medicion_voltaje: payload.medicion_voltaje || '',
+          medicion_corriente: payload.medicion_corriente || '',
+          medicion_potencia: payload.medicion_potencia || '',
+          fotos: payload.fotos || [],
+          cliente: actividadAsignadaActiva?.centro?.cliente || centroSelForm?.cliente || levantamientoEditMeta?.cliente || '',
+          centro: actividadAsignadaActiva?.centro?.nombre || centroSelForm?.nombre || levantamientoEditMeta?.centro || '',
+          estado: 'pendiente_sync',
+        });
+        await removeCachedValue(informesDraftCacheKey);
+        setShowLevantamientoModal(false);
+        setLevantamientoEditandoId(null);
+        setLevantamientoEditMeta(null);
+        setLevantamientoResumen('');
+        setLevantamientoObservaciones('');
+        setLevantamientoVoltaje('');
+        setLevantamientoCorriente('');
+        setLevantamientoPotencia('');
+        setLevantamientoFotos([]);
+        setActividadAsignadaActiva(null);
+        setTecnicosAsignadosExtra([]);
+        Alert.alert('Levantamiento', 'Sin red. El levantamiento quedo pendiente para sincronizar.');
+        return;
+      }
       const backendMsg =
         error?.response?.data?.error ||
         error?.response?.data?.message ||
@@ -1689,18 +2085,113 @@ export default function InformesScreen() {
     ]);
   };
 
-  useEffect(() => {
-    cargarClientes();
-    cargarActividadesAsignadas();
-  }, [token, cargarActividadesAsignadas]);
+	useEffect(() => {
+	  cargarClientes();
+	  cargarActividadesAsignadas();
+	}, [token, cargarActividadesAsignadas]);
+
+	useEffect(() => {
+	  readCachedActividadesAsignadas(userId).then((cached) => {
+	    if (Array.isArray(cached) && cached.length) {
+	      setActividadesAsignadas(cached);
+	    }
+	  });
+	}, [userId]);
 
   useEffect(() => {
-    if (!token) return;
-    const timer = setInterval(() => {
-      cargarActividadesAsignadas();
-    }, 12000);
-    return () => clearInterval(timer);
-  }, [token, cargarActividadesAsignadas]);
+    informesDraftRestoredRef.current = false;
+    restoringInformesDraftRef.current = false;
+  }, [userId]);
+
+  useEffect(() => {
+    if (!userId || informesDraftRestoredRef.current) return;
+    informesDraftRestoredRef.current = true;
+    readCachedValue<InformesDraft | null>(informesDraftCacheKey, null).then(({ value }) => {
+      const draft = value;
+      if (!draft) return;
+      restoringInformesDraftRef.current = true;
+      setModuloInforme(draft.moduloInforme || 'instalacion');
+      setActividadAsignadaActiva(draft.actividadAsignadaActiva || null);
+      setTecnicosAsignadosExtra(Array.isArray(draft.tecnicosAsignadosExtra) ? draft.tecnicosAsignadosExtra : []);
+      setFirmasTecnicosExtra(Array.isArray(draft.firmasTecnicosExtra) ? draft.firmasTecnicosExtra : []);
+      setMostrarInstalacionForm(!!draft.mostrarInstalacionForm);
+      setShowEditor(!!draft.showEditor);
+      setShowPermisoModal(!!draft.showPermisoModal);
+      setShowRetiroChecklistModal(!!draft.showRetiroChecklistModal);
+      setShowLevantamientoModal(!!draft.showLevantamientoModal);
+
+      setActaSoloLectura(!!draft.acta?.actaSoloLectura);
+      setEditId(Number(draft.acta?.editId || 0) || null);
+      setClienteIdForm(Number(draft.acta?.clienteIdForm || 0) || null);
+      setCentroIdForm(Number(draft.acta?.centroIdForm || 0) || null);
+      setFechaRegistro(String(draft.acta?.fechaRegistro || ''));
+      setTecnico1(String(draft.acta?.tecnico1 || ''));
+      setFirmaTecnico1(String(draft.acta?.firmaTecnico1 || ''));
+      setTecnico2(String(draft.acta?.tecnico2 || ''));
+      setFirmaTecnico2(String(draft.acta?.firmaTecnico2 || ''));
+      setRecepcionaNombre(String(draft.acta?.recepcionaNombre || ''));
+      setFirmaRecepciona(String(draft.acta?.firmaRecepciona || ''));
+      setEquiposConsiderados(String(draft.acta?.equiposConsiderados || ''));
+      setCentroOrigenTraslado(String(draft.acta?.centroOrigenTraslado || ''));
+      setTipoRegistroInstalacion(
+        draft.acta?.tipoRegistroInstalacion === 'reapuntamiento' ? 'reapuntamiento' : 'instalacion'
+      );
+      setTipoInstalacion(draft.acta?.tipoInstalacion === 'informe_intervencion' ? 'informe_intervencion' : 'acta_entrega');
+      setArmadoSeleccionadoId(Number(draft.acta?.armadoSeleccionadoId || 0) || null);
+      setVinculoActaId(Number(draft.acta?.vinculoActaId || 0) || null);
+
+      setPermisoContexto(
+        draft.permiso?.permisoContexto === 'mantencion' || draft.permiso?.permisoContexto === 'retiro'
+          ? draft.permiso.permisoContexto
+          : 'instalacion'
+      );
+      setPermisoSoloLectura(!!draft.permiso?.permisoSoloLectura);
+      setPermClienteId(Number(draft.permiso?.permClienteId || 0) || null);
+      setPermCentroId(Number(draft.permiso?.permCentroId || 0) || null);
+      setPermFecha(String(draft.permiso?.permFecha || todayInputDate()));
+      setPermFechaSalida(String(draft.permiso?.permFechaSalida || ''));
+      setPermResponsabilidad(String(draft.permiso?.permResponsabilidad || ''));
+      setPermTecnico1(String(draft.permiso?.permTecnico1 || ''));
+      setPermFirmaTecnico1(String(draft.permiso?.permFirmaTecnico1 || ''));
+      setPermTecnico2(String(draft.permiso?.permTecnico2 || ''));
+      setPermFirmaTecnico2(String(draft.permiso?.permFirmaTecnico2 || ''));
+      setPermRecepciona(String(draft.permiso?.permRecepciona || ''));
+      setPermRecepcionaRut(String(draft.permiso?.permRecepcionaRut || ''));
+      setPermFirmaRecepciona(String(draft.permiso?.permFirmaRecepciona || ''));
+      setPermPuntosGpsList(Array.isArray(draft.permiso?.permPuntosGpsList) && draft.permiso.permPuntosGpsList.length ? draft.permiso.permPuntosGpsList : [{ lat: '', lng: '' }]);
+      setPermSellosList(Array.isArray(draft.permiso?.permSellosList) && draft.permiso.permSellosList.length ? draft.permiso.permSellosList : [{ ubicacion: '', numeroAnterior: '', numeroNuevo: '' }]);
+      setPermMedicionFaseNeutro(String(draft.permiso?.permMedicionFaseNeutro || ''));
+      setPermMedicionNeutroTierra(String(draft.permiso?.permMedicionNeutroTierra || ''));
+      setPermHertz(String(draft.permiso?.permHertz || ''));
+      setPermDescripcionTrabajo(String(draft.permiso?.permDescripcionTrabajo || ''));
+      setPermEvidenciaFotos(Array.isArray(draft.permiso?.permEvidenciaFotos) ? draft.permiso.permEvidenciaFotos : []);
+      setMantencionEditandoId(Number(draft.permiso?.mantencionEditandoId || 0) || null);
+      setRetiroEditandoId(Number(draft.permiso?.retiroEditandoId || 0) || null);
+      setRetiroTipo(draft.permiso?.retiroTipo === 'completo' ? 'completo' : 'parcial');
+      setRetiroEstado(draft.permiso?.retiroEstado === 'retirado_centro' ? 'retirado_centro' : 'en_transito');
+      setRetiroEquiposChecklist(Array.isArray(draft.permiso?.retiroEquiposChecklist) ? draft.permiso.retiroEquiposChecklist : []);
+      setRetiroFormDirty(!!draft.permiso?.retiroFormDirty);
+      setCambioEquipoEnabled(!!draft.permiso?.cambioEquipoEnabled);
+      setEquipoCambioId(Number(draft.permiso?.equipoCambioId || 0) || null);
+      setSerieNuevaCambio(String(draft.permiso?.serieNuevaCambio || ''));
+      setMantencionChecklistEnabled(!!draft.permiso?.mantencionChecklistEnabled);
+      setMantencionEquiposChecklist(Array.isArray(draft.permiso?.mantencionEquiposChecklist) ? draft.permiso.mantencionEquiposChecklist : []);
+
+      setLevantamientoFecha(String(draft.levantamiento?.levantamientoFecha || todayInputDate()));
+      setLevantamientoResumen(String(draft.levantamiento?.levantamientoResumen || ''));
+      setLevantamientoObservaciones(String(draft.levantamiento?.levantamientoObservaciones || ''));
+      setLevantamientoVoltaje(String(draft.levantamiento?.levantamientoVoltaje || ''));
+      setLevantamientoCorriente(String(draft.levantamiento?.levantamientoCorriente || ''));
+      setLevantamientoPotencia(String(draft.levantamiento?.levantamientoPotencia || ''));
+      setLevantamientoFotos(Array.isArray(draft.levantamiento?.levantamientoFotos) ? draft.levantamiento.levantamientoFotos : []);
+      setLevantamientoEditandoId(Number(draft.levantamiento?.levantamientoEditandoId || 0) || null);
+      setLevantamientoEditMeta(draft.levantamiento?.levantamientoEditMeta || null);
+
+      setTimeout(() => {
+        restoringInformesDraftRef.current = false;
+      }, 1500);
+    });
+  }, [userId, informesDraftCacheKey]);
 
   useFocusEffect(
     useCallback(() => {
@@ -1765,6 +2256,7 @@ export default function InformesScreen() {
 
   useEffect(() => {
     if (!actividadAsignadaActiva) return;
+    if (restoringInformesDraftRef.current && !actividadesAsignadas.length) return;
     const idActivo = Number(actividadAsignadaActiva.id_actividad || 0);
     const sigueExistiendo = actividadesAsignadas.some((a) => Number(a.id_actividad || 0) === idActivo);
     if (sigueExistiendo) return;
@@ -1781,6 +2273,164 @@ export default function InformesScreen() {
   }, [actividadesAsignadas, actividadAsignadaActiva]);
 
   useEffect(() => {
+    const activeDraftOpen = showEditor || showPermisoModal || showRetiroChecklistModal || showLevantamientoModal;
+    if (!userId) return;
+    if (!activeDraftOpen) {
+      removeCachedValue(informesDraftCacheKey).catch(() => {});
+      return;
+    }
+    const draft: InformesDraft = {
+      moduloInforme,
+      actividadAsignadaActiva,
+      tecnicosAsignadosExtra,
+      firmasTecnicosExtra,
+      showEditor,
+      showPermisoModal,
+      showRetiroChecklistModal,
+      showLevantamientoModal,
+      mostrarInstalacionForm,
+      acta: {
+        actaSoloLectura,
+        editId,
+        clienteIdForm,
+        centroIdForm,
+        fechaRegistro,
+        tecnico1,
+        firmaTecnico1,
+        tecnico2,
+        firmaTecnico2,
+        recepcionaNombre,
+        firmaRecepciona,
+        equiposConsiderados,
+        centroOrigenTraslado,
+        tipoRegistroInstalacion,
+        tipoInstalacion,
+        armadoSeleccionadoId,
+        vinculoActaId,
+      },
+      permiso: {
+        permisoContexto,
+        permisoSoloLectura,
+        permClienteId,
+        permCentroId,
+        permFecha,
+        permFechaSalida,
+        permResponsabilidad,
+        permTecnico1,
+        permFirmaTecnico1,
+        permTecnico2,
+        permFirmaTecnico2,
+        permRecepciona,
+        permRecepcionaRut,
+        permFirmaRecepciona,
+        permPuntosGpsList,
+        permSellosList,
+        permMedicionFaseNeutro,
+        permMedicionNeutroTierra,
+        permHertz,
+        permDescripcionTrabajo,
+        permEvidenciaFotos,
+        mantencionEditandoId,
+        retiroEditandoId,
+        retiroTipo,
+        retiroEstado,
+        retiroEquiposChecklist,
+        retiroFormDirty,
+        cambioEquipoEnabled,
+        equipoCambioId,
+        serieNuevaCambio,
+        mantencionChecklistEnabled,
+        mantencionEquiposChecklist,
+      },
+      levantamiento: {
+        levantamientoFecha,
+        levantamientoResumen,
+        levantamientoObservaciones,
+        levantamientoVoltaje,
+        levantamientoCorriente,
+        levantamientoPotencia,
+        levantamientoFotos,
+        levantamientoEditandoId,
+        levantamientoEditMeta,
+      },
+    };
+    const timer = setTimeout(() => {
+      writeCachedValue(informesDraftCacheKey, draft).catch(() => {});
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [
+    userId,
+    informesDraftCacheKey,
+    moduloInforme,
+    actividadAsignadaActiva,
+    tecnicosAsignadosExtra,
+    firmasTecnicosExtra,
+    showEditor,
+    showPermisoModal,
+    showRetiroChecklistModal,
+    showLevantamientoModal,
+    mostrarInstalacionForm,
+    actaSoloLectura,
+    editId,
+    clienteIdForm,
+    centroIdForm,
+    fechaRegistro,
+    tecnico1,
+    firmaTecnico1,
+    tecnico2,
+    firmaTecnico2,
+    recepcionaNombre,
+    firmaRecepciona,
+    equiposConsiderados,
+    centroOrigenTraslado,
+    tipoRegistroInstalacion,
+    tipoInstalacion,
+    armadoSeleccionadoId,
+    vinculoActaId,
+    permisoContexto,
+    permisoSoloLectura,
+    permClienteId,
+    permCentroId,
+    permFecha,
+    permFechaSalida,
+    permResponsabilidad,
+    permTecnico1,
+    permFirmaTecnico1,
+    permTecnico2,
+    permFirmaTecnico2,
+    permRecepciona,
+    permRecepcionaRut,
+    permFirmaRecepciona,
+    permPuntosGpsList,
+    permSellosList,
+    permMedicionFaseNeutro,
+    permMedicionNeutroTierra,
+    permHertz,
+    permDescripcionTrabajo,
+    permEvidenciaFotos,
+    mantencionEditandoId,
+    retiroEditandoId,
+    retiroTipo,
+    retiroEstado,
+    retiroEquiposChecklist,
+    retiroFormDirty,
+    cambioEquipoEnabled,
+    equipoCambioId,
+    serieNuevaCambio,
+    mantencionChecklistEnabled,
+    mantencionEquiposChecklist,
+    levantamientoFecha,
+    levantamientoResumen,
+    levantamientoObservaciones,
+    levantamientoVoltaje,
+    levantamientoCorriente,
+    levantamientoPotencia,
+    levantamientoFotos,
+    levantamientoEditandoId,
+    levantamientoEditMeta,
+  ]);
+
+  useEffect(() => {
     cargarActas();
     cargarPermisos();
     cargarMantencionesTerreno();
@@ -1795,9 +2445,16 @@ export default function InformesScreen() {
       return;
     }
     fetchCentrosPorCliente(permClienteId)
-      .then((lista) => setPermCentros(Array.isArray(lista) ? lista : []))
-      .catch(() => setPermCentros([]));
-  }, [permClienteId]);
+      .then((lista) => {
+        const rows = Array.isArray(lista) ? lista : [];
+        setPermCentros(rows);
+        writeCachedValue(centrosCacheKey(permClienteId), rows).catch(() => {});
+      })
+      .catch(async () => {
+        const cached = await readCachedValue<Centro[]>(centrosCacheKey(permClienteId), []);
+        setPermCentros(Array.isArray(cached.value) ? cached.value : []);
+      });
+  }, [permClienteId, centrosCacheKey]);
 
   useEffect(() => {
     if (!permCentroId) {
@@ -2455,10 +3112,50 @@ export default function InformesScreen() {
       else await createActaEntrega(payload);
       await cargarActas({ force: true });
       await cargarActividadesAsignadas({ force: true });
+      await removeCachedValue(informesDraftCacheKey);
       setShowEditor(false);
       resetForm();
       Alert.alert('Informes', 'Acta guardada correctamente.');
     } catch (error: any) {
+      if (isOfflineQueueableError(error)) {
+        const offlineId = editId || offlineTempId();
+        await enqueueOfflineOp(
+          editId ? 'update_acta' : 'create_acta',
+          editId
+            ? { id: offlineId, data: payload }
+            : { data: payload }
+        );
+        upsertActaLocal({
+          id_acta_entrega: offlineId,
+          centro_id: centroIdForm || undefined,
+          actividad_id: Number(actividadAsignadaActiva?.id_actividad || 0) || undefined,
+          cliente_id: clienteIdForm || undefined,
+          empresa: clienteForm?.nombre || clienteForm?.razon_social || actividadAsignadaActiva?.centro?.cliente || '',
+          cliente: clienteForm?.nombre || clienteForm?.razon_social || actividadAsignadaActiva?.centro?.cliente || '',
+          centro: centroSelForm?.nombre || actividadAsignadaActiva?.centro?.nombre || '',
+          fecha_registro: payload.fecha_registro || todayInputDate(),
+          codigo_ponton: payload.codigo_ponton || '',
+          region: payload.region || '',
+          localidad: payload.localidad || '',
+          tecnico_1: payload.tecnico_1 || '',
+          firma_tecnico_1: payload.firma_tecnico_1 || '',
+          tecnico_2: payload.tecnico_2 || '',
+          firma_tecnico_2: payload.firma_tecnico_2 || '',
+          firmas_tecnicos_adicionales: payload.firmas_tecnicos_adicionales || [],
+          recepciona_nombre: payload.recepciona_nombre || '',
+          firma_recepciona: payload.firma_recepciona || '',
+          equipos_considerados: payload.equipos_considerados || '',
+          centro_origen_traslado: payload.centro_origen_traslado || '',
+          armado_id: payload.armado_id || undefined,
+          tipo_instalacion: payload.tipo_instalacion || 'instalacion',
+          updated_at: new Date().toISOString(),
+        });
+        await removeCachedValue(informesDraftCacheKey);
+        setShowEditor(false);
+        resetForm();
+        Alert.alert('Informes', 'Sin red. El acta quedo pendiente para sincronizar.');
+        return;
+      }
       const backendMsg =
         error?.response?.data?.error ||
         error?.response?.data?.message ||
@@ -5086,22 +5783,20 @@ export default function InformesScreen() {
                   <Text style={styles.centerInfoTitle}>Informacion del centro</Text>
                 </View>
                 <View style={styles.row}>
-                  <View style={styles.centerInfoItem}>
-                    <Text style={styles.centerInfoLabel}>Cliente</Text>
-                    <Text style={styles.centerInfoValue}>
-                      {clientes.find((c) => Number(c.id_cliente ?? c.id ?? 0) === Number(permClienteId ?? 0))?.nombre || '-'}
-                    </Text>
-                  </View>
-                  <View style={styles.centerInfoItem}>
-                    <Text style={styles.centerInfoLabel}>Centro</Text>
-                    <Text style={styles.centerInfoValue}>{permCentroSel?.nombre || '-'}</Text>
-                  </View>
-                </View>
-                <View style={styles.row}>
-                  <View style={styles.centerInfoItem}>
-                    <Text style={styles.centerInfoLabel}>Codigo ponton</Text>
-                    <Text style={styles.centerInfoValue}>{permCentroSel?.nombre_ponton || '-'}</Text>
-                  </View>
+	                  <View style={styles.centerInfoItem}>
+	                    <Text style={styles.centerInfoLabel}>Cliente</Text>
+	                    <Text style={styles.centerInfoValue}>{clienteActualInforme}</Text>
+	                  </View>
+	                  <View style={styles.centerInfoItem}>
+	                    <Text style={styles.centerInfoLabel}>Centro</Text>
+	                    <Text style={styles.centerInfoValue}>{centroActualInforme}</Text>
+	                  </View>
+	                </View>
+	                <View style={styles.row}>
+	                  <View style={styles.centerInfoItem}>
+	                    <Text style={styles.centerInfoLabel}>Codigo ponton</Text>
+	                    <Text style={styles.centerInfoValue}>{codigoPontonActualInforme}</Text>
+	                  </View>
                   <View style={styles.centerInfoItem}>
                     <Text style={styles.centerInfoLabel}>Region (Area)</Text>
                     <Text style={styles.centerInfoValue}>{permRegion || '-'}</Text>
@@ -5888,82 +6583,82 @@ export default function InformesScreen() {
                     });
                     if (!confirmar) return;
                   }
+                  const payload = {
+                    centro_id: permCentroId,
+                    actividad_id:
+                      permisoContexto === 'mantencion'
+                        ? Number(actividadAsignadaActiva?.id_actividad || 0) || null
+                        : null,
+                    acta_entrega_id:
+                      permisoContexto === 'instalacion'
+                        ? actaCentroSeleccionado?.id_acta_entrega || null
+                        : null,
+                    fecha_ingreso: permFecha,
+                    fecha_salida: permFechaSalida || null,
+                    correo_centro: permCorreoCentro || null,
+                    telefono_centro: permTelefonoCentro || null,
+                    base_tierra: permBaseTierra || null,
+                    cantidad_radares: permCantidadRadares ? Number(permCantidadRadares) : null,
+                    responsabilidad: permResponsabilidad || null,
+                    region: permRegion || null,
+                    localidad: permLocalidad || null,
+                    tecnico_1: permTecnico1 || null,
+                    firma_tecnico_1: permFirmaTecnico1 || null,
+                    tecnico_2: permTecnico2 || null,
+                    firma_tecnico_2: permFirmaTecnico2 || null,
+                    recepciona_nombre: permRecepciona || null,
+                    recepciona_rut: permRecepcionaRut || null,
+                    firma_recepciona: permFirmaRecepciona || null,
+                    puntos_gps: gpsSerialized || null,
+                    sellos: sellosSerialized === '[]' ? null : sellosSerialized,
+                    medicion_fase_neutro: normalizeMeasureInput(permMedicionFaseNeutro) || null,
+                    medicion_neutro_tierra: normalizeMeasureInput(permMedicionNeutroTierra) || null,
+                    hertz: normalizeMeasureInput(permHertz) || null,
+                    descripcion_trabajo: permDescripcionTrabajo || null,
+                    evidencia_foto:
+                      permisoContexto === 'mantencion' ? serializeEvidencePhotos(permEvidenciaFotos) : null,
+                    checklist_equipos:
+                      permisoContexto === 'mantencion'
+                        ? mantencionChecklistEnabled
+                          ? JSON.stringify(
+                              mantencionEquiposChecklist.map((item) => ({
+                                equipo_id: item.equipo_id || null,
+                                equipo_nombre: item.equipo_nombre || null,
+                                numero_serie: item.numero_serie || null,
+                                codigo: item.codigo || null,
+                                revisado: !!item.revisado,
+                                observacion: String(item.observacion || '').trim() || null,
+                              }))
+                            )
+                          : null
+                        : null,
+                    firmas_tecnicos_adicionales:
+                      permisoContexto === 'instalacion' || permisoContexto === 'mantencion' || permisoContexto === 'retiro'
+                        ? JSON.stringify(
+                            firmasTecnicosExtra
+                              .map((row) => ({
+                                nombre: String(row?.nombre || '').trim(),
+                                firma: String(row?.firma || ''),
+                              }))
+                              .filter((row) => !!row.nombre)
+                          )
+                        : null,
+                  };
+                  const retiroEquiposPayload = retiroEquiposChecklist.map((eq) => ({
+                    equipo_id: eq.equipo_id || null,
+                    equipo_nombre: eq.equipo_nombre || null,
+                    numero_serie: eq.numero_serie || null,
+                    codigo: eq.codigo || null,
+                    retirado: !!eq.retirado,
+                    modalidad_retorno: normalizarModalidadRetorno(eq.modalidad_retorno),
+                  }));
+                  const retiroEstadoPayload = retiroEquiposPayload.some(
+                    (eq) => !!eq.retirado && eq.modalidad_retorno === 'despacho_orca'
+                  )
+                    ? 'en_transito'
+                    : 'retirado_centro';
                   try {
                     setSaving(true);
-                    const payload = {
-                      centro_id: permCentroId,
-                      actividad_id:
-                        permisoContexto === 'mantencion'
-                          ? Number(actividadAsignadaActiva?.id_actividad || 0) || null
-                          : null,
-                      acta_entrega_id:
-                        permisoContexto === 'instalacion'
-                          ? actaCentroSeleccionado?.id_acta_entrega || null
-                          : null,
-                      fecha_ingreso: permFecha,
-                      fecha_salida: permFechaSalida || null,
-                      correo_centro: permCorreoCentro || null,
-                      telefono_centro: permTelefonoCentro || null,
-                      base_tierra: permBaseTierra || null,
-                      cantidad_radares: permCantidadRadares ? Number(permCantidadRadares) : null,
-                      responsabilidad: permResponsabilidad || null,
-                      region: permRegion || null,
-                      localidad: permLocalidad || null,
-                      tecnico_1: permTecnico1 || null,
-                      firma_tecnico_1: permFirmaTecnico1 || null,
-                      tecnico_2: permTecnico2 || null,
-                      firma_tecnico_2: permFirmaTecnico2 || null,
-                      recepciona_nombre: permRecepciona || null,
-                      recepciona_rut: permRecepcionaRut || null,
-                      firma_recepciona: permFirmaRecepciona || null,
-                      puntos_gps: gpsSerialized || null,
-                      sellos: sellosSerialized === '[]' ? null : sellosSerialized,
-                      medicion_fase_neutro: normalizeMeasureInput(permMedicionFaseNeutro) || null,
-                      medicion_neutro_tierra: normalizeMeasureInput(permMedicionNeutroTierra) || null,
-                      hertz: normalizeMeasureInput(permHertz) || null,
-                      descripcion_trabajo: permDescripcionTrabajo || null,
-                      evidencia_foto:
-                        permisoContexto === 'mantencion' ? serializeEvidencePhotos(permEvidenciaFotos) : null,
-                      checklist_equipos:
-                        permisoContexto === 'mantencion'
-                          ? mantencionChecklistEnabled
-                            ? JSON.stringify(
-                                mantencionEquiposChecklist.map((item) => ({
-                                  equipo_id: item.equipo_id || null,
-                                  equipo_nombre: item.equipo_nombre || null,
-                                  numero_serie: item.numero_serie || null,
-                                  codigo: item.codigo || null,
-                                  revisado: !!item.revisado,
-                                  observacion: String(item.observacion || '').trim() || null,
-                                }))
-                              )
-                            : null
-                          : null,
-                      firmas_tecnicos_adicionales:
-                        permisoContexto === 'instalacion' || permisoContexto === 'mantencion' || permisoContexto === 'retiro'
-                          ? JSON.stringify(
-                              firmasTecnicosExtra
-                                .map((row) => ({
-                                  nombre: String(row?.nombre || '').trim(),
-                                  firma: String(row?.firma || ''),
-                                }))
-                                .filter((row) => !!row.nombre)
-                            )
-                          : null,
-                    };
-	                    const retiroEquiposPayload = retiroEquiposChecklist.map((eq) => ({
-	                      equipo_id: eq.equipo_id || null,
-	                      equipo_nombre: eq.equipo_nombre || null,
-	                      numero_serie: eq.numero_serie || null,
-	                      codigo: eq.codigo || null,
-	                      retirado: !!eq.retirado,
-	                      modalidad_retorno: normalizarModalidadRetorno(eq.modalidad_retorno),
-	                    }));
-	                    const retiroEstadoPayload = retiroEquiposPayload.some(
-	                      (eq) => !!eq.retirado && eq.modalidad_retorno === 'despacho_orca'
-	                    )
-	                      ? 'en_transito'
-	                      : 'retirado_centro';
 	                    let result: any = null;
                     if (permisoContexto === 'instalacion' && permisoCentroSeleccionado?.id_permiso_trabajo) {
                       result = await updatePermisoTrabajo(permisoCentroSeleccionado.id_permiso_trabajo, payload);
@@ -6007,10 +6702,10 @@ export default function InformesScreen() {
 	                      result = await createPermisoTrabajo(payload);
 	                    }
 
-                      if (permisoContexto === 'retiro' && result?.retiro) {
-                        const retiroNormalizado = {
-                          ...result.retiro,
-                          tipo_retiro: retiroTipo,
+                    if (permisoContexto === 'retiro' && result?.retiro) {
+                      const retiroNormalizado = {
+                        ...result.retiro,
+                        tipo_retiro: retiroTipo,
                           estado_logistico: retiroEstadoPayload,
                           equipos: retiroEquiposPayload,
                         };
@@ -6077,6 +6772,7 @@ export default function InformesScreen() {
                         );
                       }
                     }
+                    await removeCachedValue(informesDraftCacheKey);
                     setShowPermisoModal(false);
                     setShowRetiroChecklistModal(false);
                     setPermisoContexto('instalacion');
@@ -6105,6 +6801,173 @@ export default function InformesScreen() {
                         : 'Guardado correctamente.'
                     );
                   } catch (error: any) {
+                    if (isOfflineQueueableError(error)) {
+                      const payloadBase = payload;
+                      if (permisoContexto === 'instalacion') {
+                        const permisoId = Number(permisoCentroSeleccionado?.id_permiso_trabajo || 0) || null;
+                        if (!permisoId && !(Number(payloadBase.acta_entrega_id || 0) > 0)) {
+                          Alert.alert(
+                            titulo,
+                            'Sin red. Este permiso requiere un acta ya sincronizada para poder quedar en cola.'
+                          );
+                          return;
+                        }
+                        await enqueueOfflineOp(
+                          permisoId ? 'update_permiso' : 'create_permiso',
+                          permisoId ? { id: permisoId, data: payloadBase } : { data: payloadBase }
+                        );
+                        upsertPermisoLocal({
+                          id_permiso_trabajo: permisoId || offlineTempId(),
+                          acta_entrega_id: Number(payloadBase.acta_entrega_id || 0) || undefined,
+                          centro_id: permCentroId || undefined,
+                          fecha_ingreso: payloadBase.fecha_ingreso || todayInputDate(),
+                          fecha_salida: payloadBase.fecha_salida || '',
+                          correo_centro: payloadBase.correo_centro || '',
+                          telefono_centro: payloadBase.telefono_centro || '',
+                          responsabilidad: payloadBase.responsabilidad || '',
+                          region: payloadBase.region || '',
+                          localidad: payloadBase.localidad || '',
+                          tecnico_1: payloadBase.tecnico_1 || '',
+                          firma_tecnico_1: payloadBase.firma_tecnico_1 || '',
+                          tecnico_2: payloadBase.tecnico_2 || '',
+                          firma_tecnico_2: payloadBase.firma_tecnico_2 || '',
+                          recepciona_nombre: payloadBase.recepciona_nombre || '',
+                          recepciona_rut: payloadBase.recepciona_rut || '',
+                          firma_recepciona: payloadBase.firma_recepciona || '',
+                          puntos_gps: payloadBase.puntos_gps || '',
+                          sellos: payloadBase.sellos || '',
+                          medicion_fase_neutro: payloadBase.medicion_fase_neutro || '',
+                          medicion_neutro_tierra: payloadBase.medicion_neutro_tierra || '',
+                          hertz: payloadBase.hertz || '',
+                          descripcion_trabajo: payloadBase.descripcion_trabajo || '',
+                          cliente: clientePermSel?.nombre || actividadAsignadaActiva?.centro?.cliente || '',
+                          centro: permCentroSel?.nombre || actividadAsignadaActiva?.centro?.nombre || '',
+                          base_tierra: payloadBase.base_tierra || '',
+                          cantidad_radares: payloadBase.cantidad_radares || '',
+                        });
+                      } else if (permisoContexto === 'mantencion') {
+                        const mantId = Number(mantencionEditandoId || 0) || null;
+                        const cambioPayload =
+                          cambioEquipoEnabled && equipoCambioId
+                            ? {
+                                equipo_id: equipoCambioId,
+                                armado_id: armadoVinculadoId || undefined,
+                                serie_nueva: String(serieNuevaCambio || '').trim() || undefined,
+                                codigo_nuevo:
+                                  ((String(serieNuevaCambio || '').trim().replace(/\D+/g, '') || String(serieNuevaCambio || '').trim()).slice(0, 5) ||
+                                    undefined),
+                                tecnico: permTecnico1 || undefined,
+                              }
+                            : null;
+                        await enqueueOfflineOp(
+                          mantId ? 'update_mantencion' : 'create_mantencion',
+                          mantId ? { id: mantId, data: payloadBase, cambioEquipo: cambioPayload } : { data: payloadBase, cambioEquipo: cambioPayload }
+                        );
+                        upsertMantencionLocal({
+                          id_mantencion_terreno: mantId || offlineTempId(),
+                          actividad_id: Number(actividadAsignadaActiva?.id_actividad || 0) || undefined,
+                          centro_id: permCentroId || undefined,
+                          codigo_ponton:
+                            permCentroSel?.nombre_ponton ||
+                            actividadAsignadaActiva?.centro?.nombre_ponton ||
+                            '',
+                          fecha_ingreso: payloadBase.fecha_ingreso || todayInputDate(),
+                          correo_centro: payloadBase.correo_centro || '',
+                          telefono_centro: payloadBase.telefono_centro || '',
+                          base_tierra: payloadBase.base_tierra || '',
+                          cantidad_radares: payloadBase.cantidad_radares || '',
+                          responsabilidad: payloadBase.responsabilidad || '',
+                          region: payloadBase.region || '',
+                          localidad: payloadBase.localidad || '',
+                          tecnico_1: payloadBase.tecnico_1 || '',
+                          firma_tecnico_1: payloadBase.firma_tecnico_1 || '',
+                          tecnico_2: payloadBase.tecnico_2 || '',
+                          firma_tecnico_2: payloadBase.firma_tecnico_2 || '',
+                          recepciona_nombre: payloadBase.recepciona_nombre || '',
+                          recepciona_rut: payloadBase.recepciona_rut || '',
+                          firma_recepciona: payloadBase.firma_recepciona || '',
+                          puntos_gps: payloadBase.puntos_gps || '',
+                          sellos: payloadBase.sellos || '',
+                          medicion_fase_neutro: payloadBase.medicion_fase_neutro || '',
+                          medicion_neutro_tierra: payloadBase.medicion_neutro_tierra || '',
+                          hertz: payloadBase.hertz || '',
+                          descripcion_trabajo: payloadBase.descripcion_trabajo || '',
+                          evidencia_foto: payloadBase.evidencia_foto || '',
+                          checklist_equipos: payloadBase.checklist_equipos || '',
+                          cliente: actividadAsignadaActiva?.centro?.cliente || clientePermSel?.nombre || '',
+                          centro: actividadAsignadaActiva?.centro?.nombre || permCentroSel?.nombre || '',
+                        } as Permiso);
+                      } else if (permisoContexto === 'retiro') {
+                        const retiroId = Number(retiroEditandoId || 0) || null;
+                        const retiroPayload = retiroId
+                          ? {
+                              centro_id: permCentroId,
+                              fecha_retiro: permFecha,
+                              tipo_retiro: retiroTipo,
+                              estado_logistico: retiroEstadoPayload,
+                              observacion: permDescripcionTrabajo || null,
+                              tecnico_1: permTecnico1 || null,
+                              firma_tecnico_1: permFirmaTecnico1 || null,
+                              tecnico_2: permTecnico2 || null,
+                              firma_tecnico_2: permFirmaTecnico2 || null,
+                              recepciona_nombre: permRecepciona || null,
+                              recepciona_rut: permRecepcionaRut || null,
+                              firma_recepciona: permFirmaRecepciona || null,
+                              equipos: retiroEquiposPayload,
+                            }
+                          : {
+                              centro_id: permCentroId,
+                              fecha_retiro: permFecha,
+                              tipo_retiro: retiroTipo,
+                              estado_logistico: retiroEstadoPayload,
+                              observacion: permDescripcionTrabajo || null,
+                              tecnico_1: permTecnico1 || null,
+                              firma_tecnico_1: permFirmaTecnico1 || null,
+                              tecnico_2: permTecnico2 || null,
+                              firma_tecnico_2: permFirmaTecnico2 || null,
+                              recepciona_nombre: permRecepciona || null,
+                              recepciona_rut: permRecepcionaRut || null,
+                              firma_recepciona: permFirmaRecepciona || null,
+                              equipos: retiroEquiposPayload,
+                            };
+                        await enqueueOfflineOp(
+                          retiroId ? 'update_retiro' : 'create_retiro',
+                          retiroId ? { id: retiroId, data: retiroPayload } : { data: retiroPayload }
+                        );
+                        upsertRetiroTerrenoLocal({
+                          id_retiro_terreno: retiroId || offlineTempId(),
+                          centro_id: permCentroId || undefined,
+                          codigo_ponton:
+                            permCentroSel?.nombre_ponton ||
+                            actividadAsignadaActiva?.centro?.nombre_ponton ||
+                            '',
+                          fecha_retiro: permFecha,
+                          tipo_retiro: retiroTipo,
+                          estado_logistico: retiroEstadoPayload,
+                          observacion: permDescripcionTrabajo || '',
+                          tecnico_1: permTecnico1 || '',
+                          firma_tecnico_1: permFirmaTecnico1 || '',
+                          tecnico_2: permTecnico2 || '',
+                          firma_tecnico_2: permFirmaTecnico2 || '',
+                          recepciona_nombre: permRecepciona || '',
+                          recepciona_rut: permRecepcionaRut || '',
+                          firma_recepciona: permFirmaRecepciona || '',
+                          cliente: actividadAsignadaActiva?.centro?.cliente || clientePermSel?.nombre || '',
+                          centro: permCentroSel?.nombre || actividadAsignadaActiva?.centro?.nombre || '',
+                          equipos: retiroEquiposPayload,
+                        });
+                      }
+                      await removeCachedValue(informesDraftCacheKey);
+                      setShowPermisoModal(false);
+                      setShowRetiroChecklistModal(false);
+                      setPermisoContexto('instalacion');
+                      setMantencionEditandoId(null);
+                      setRetiroEditandoId(null);
+                      setActividadAsignadaActiva(null);
+                      setTecnicosAsignadosExtra([]);
+                      Alert.alert(titulo, 'Sin red. El informe quedo pendiente para sincronizar.');
+                      return;
+                    }
                     const backendMsg =
                       error?.response?.data?.error ||
                       error?.response?.data?.message ||

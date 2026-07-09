@@ -7,7 +7,7 @@ import { Colors } from '@/constants/theme';
 import { AuthContext } from '../_layout';
 import { useLocalSearchParams } from 'expo-router';
 import { getEquipos, getMaterialesArmado, saveMaterialesArmado, updateEquipo, createEquipo, updateArmado, validarSerieEquipo, getArmados } from '@/lib/api';
-import { enqueueOfflineOp, syncOfflineQueue } from '@/lib/offline-queue';
+import { enqueueOfflineOp, listPendingOfflineOps } from '@/lib/offline-queue';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as SecureStore from 'expo-secure-store';
 import { subscribeArmadoUpdated } from '@/lib/realtime';
@@ -338,6 +338,8 @@ export default function ArmadoScreen() {
   const [gruposColapsados, setGruposColapsados] = useState<Record<string, boolean>>({});
   const [cacheReady, setCacheReady] = useState(false);
   const [cajasEstado, setCajasEstado] = useState<Record<string, CajaEstado>>({});
+  const equiposStateRef = useRef<Equipo[]>(BASE_EQUIPOS);
+  const materialesStateRef = useRef<Material[]>([]);
   const [busquedaEquipo, setBusquedaEquipo] = useState('');
   const [busquedaMaterial, setBusquedaMaterial] = useState('');
   const [categoriaMaterial, setCategoriaMaterial] = useState<MaterialCategory>('Todas');
@@ -367,8 +369,8 @@ export default function ArmadoScreen() {
   const [totalCajas, setTotalCajas] = useState<number | undefined>(totalCajasParam);
   const centroId = params.centro_id ? Number(params.centro_id) : undefined;
   const cacheKey = useMemo(
-    () => `armado_cache_v1:${armadoId || 'sin-armado'}:${centroId || 'sin-centro'}`,
-    [armadoId, centroId]
+    () => `armado_cache_v2:${userId || 'anon'}:${armadoId || 'sin-armado'}:${centroId || 'sin-centro'}`,
+    [armadoId, centroId, userId]
   );
   const normalizeTechName = useCallback(
     (value: any) =>
@@ -795,6 +797,51 @@ export default function ArmadoScreen() {
     [cacheKey, readCache]
   );
 
+  const tienePendientesEquiposArmado = useCallback(async () => {
+    const armadoNum = Number(armadoId || 0) || 0;
+    const centroNum = Number(centroId || 0) || 0;
+    const queue = await listPendingOfflineOps();
+    return queue.some((op: any) => {
+      if (op?.type !== 'create_equipo' && op?.type !== 'update_equipo') return false;
+      const data = op?.payload?.data || {};
+      const opArmadoId = Number(data?.armado_id || 0) || 0;
+      const opCentroId = Number(data?.centro_id || 0) || 0;
+      return (armadoNum > 0 && opArmadoId === armadoNum) || (centroNum > 0 && opCentroId === centroNum);
+    });
+  }, [armadoId, centroId]);
+
+  const tienePendientesMaterialesArmado = useCallback(async () => {
+    const armadoNum = Number(armadoId || 0) || 0;
+    if (armadoNum <= 0) return false;
+    const queue = await listPendingOfflineOps();
+    return queue.some((op: any) => op?.type === 'save_materiales' && (Number(op?.payload?.armadoId || 0) || 0) === armadoNum);
+  }, [armadoId]);
+
+  const mergeEquiposConPendientesLocales = useCallback(
+    (backend: Equipo[], preservarLocales: boolean) => {
+      if (!preservarLocales) return backend;
+      const merged = [...backend];
+      equiposStateRef.current.forEach((local) => {
+        if (!equipoTieneContenido(local)) return;
+        const localId = String(local.id || '');
+        let idx = merged.findIndex((item) => String(item.id || '') === localId);
+        if (idx < 0) {
+          const localNombre = normalizarTextoBusqueda(local.nombre);
+          idx = merged.findIndex((item) => normalizarTextoBusqueda(item.nombre) === localNombre);
+        }
+        if (idx >= 0) {
+          if (hashEquipo(merged[idx]) === hashEquipo(local)) return;
+          const preservedId = /^\d+$/.test(localId) ? local.id : merged[idx].id;
+          merged[idx] = { ...merged[idx], ...local, id: preservedId };
+          return;
+        }
+        merged.push(local);
+      });
+      return merged;
+    },
+    [equipoTieneContenido, hashEquipo, normalizarTextoBusqueda]
+  );
+
   const mergeMateriales = useCallback((listaBackend: any[] = []): Material[] => {
     const normalizar = (v: any) => normalizarNombreMaterial(v);
     const mapa = new Map<string, any>();
@@ -831,6 +878,31 @@ export default function ArmadoScreen() {
 
     return [...base, ...extras];
   }, [normalizarCajaMaterialInicial]);
+
+  const mergeMaterialesConPendientesLocales = useCallback(
+    (backend: Material[], preservarLocales: boolean) => {
+      if (!preservarLocales) return backend;
+      const merged = [...backend];
+      materialesStateRef.current.forEach((local) => {
+        if (!materialTieneContenido(local)) return;
+        const localId = String(local.id || '');
+        let idx = merged.findIndex((item) => String(item.id || '') === localId);
+        if (idx < 0) {
+          const localNombre = normalizarNombreMaterial(local.nombre);
+          idx = merged.findIndex((item) => normalizarNombreMaterial(item.nombre) === localNombre);
+        }
+        if (idx >= 0) {
+          if (hashMaterial(merged[idx]) === hashMaterial(local)) return;
+          const preservedId = /^\d+$/.test(localId) ? local.id : merged[idx].id;
+          merged[idx] = { ...merged[idx], ...local, id: preservedId };
+          return;
+        }
+        merged.push(local);
+      });
+      return merged;
+    },
+    [hashMaterial, materialTieneContenido]
+  );
 
   useEffect(() => {
     let active = true;
@@ -892,6 +964,14 @@ export default function ArmadoScreen() {
   }, [cacheReady, equipos, materiales, cajas, cajasEstado, totalCajas, writeCache]);
 
   useEffect(() => {
+    equiposStateRef.current = equipos;
+  }, [equipos]);
+
+  useEffect(() => {
+    materialesStateRef.current = materiales;
+  }, [materiales]);
+
+  useEffect(() => {
     if (!cajas?.length) return;
     setCajasEstado((prev) => sincronizarEstadosCajas(cajas, prev));
   }, [cajas, sincronizarEstadosCajas]);
@@ -912,7 +992,7 @@ export default function ArmadoScreen() {
     try {
       const data = await getEquipos(centroId);
       if (Array.isArray(data)) {
-        const mapped = data
+        const mappedBase = data
           .filter((eq: any) => !esEquipoMigradoAMaterial(eq?.nombre))
           .map((eq: any) => ({
             id: String(eq.id_equipo || eq.id || `${eq.nombre}-${eq.ip || ''}`),
@@ -927,6 +1007,8 @@ export default function ArmadoScreen() {
             estadoRegistro: normalizarEstadoRegistroEquipo(eq.estado_registro || eq.estadoRegistro),
             observacionRegistro: String(eq.observacion_registro || eq.observacionRegistro || ''),
           }));
+        const preservarLocales = await tienePendientesEquiposArmado();
+        const mapped = mergeEquiposConPendientesLocales(mappedBase, preservarLocales);
         setEquipos(mapped);
         const snap: Record<string, string> = {};
         mapped.forEach((e) => {
@@ -967,7 +1049,7 @@ export default function ArmadoScreen() {
         setLoading(false);
       }
     }
-  }, [centroId, esEquipoMigradoAMaterial, hashEquipo, normalizarCajaEquipoInicial, readCache, writeCache, unificarCajas]);
+  }, [centroId, esEquipoMigradoAMaterial, hashEquipo, mergeEquiposConPendientesLocales, normalizarCajaEquipoInicial, readCache, tienePendientesEquiposArmado, writeCache, unificarCajas]);
 
   useEffect(() => {
     cargarEquipos();
@@ -989,7 +1071,9 @@ export default function ArmadoScreen() {
     try {
       const data = await getMaterialesArmado(armadoId);
       const lista = Array.isArray(data) ? data : Array.isArray(data?.items) ? data.items : [];
-      const mapped = mergeMateriales(lista);
+      const mappedBase = mergeMateriales(lista);
+      const preservarLocales = await tienePendientesMaterialesArmado();
+      const mapped = mergeMaterialesConPendientesLocales(mappedBase, preservarLocales);
       setMateriales(mapped);
       const snap: Record<string, string> = {};
       mapped.forEach((m) => {
@@ -1014,7 +1098,7 @@ export default function ArmadoScreen() {
         setLoadingMateriales(false);
       }
     }
-  }, [armadoId, hashMaterial, mergeMateriales, readCache, writeCache, unificarCajas]);
+  }, [armadoId, hashMaterial, mergeMateriales, mergeMaterialesConPendientesLocales, readCache, tienePendientesMaterialesArmado, writeCache, unificarCajas]);
 
   useEffect(() => {
     cargarMat();
@@ -2043,13 +2127,6 @@ export default function ArmadoScreen() {
     }
     setModalQuitarCajaVisible(false);
   };
-
-  useEffect(() => {
-    const timer = setInterval(() => {
-      syncOfflineQueue().catch(() => {});
-    }, 12000);
-    return () => clearInterval(timer);
-  }, []);
 
   useEffect(() => {
     if (!cajas?.length) {

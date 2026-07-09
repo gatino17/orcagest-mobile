@@ -255,8 +255,51 @@ export const deleteRetiroTerreno = async (idRetiro: string | number) => {
 
 // Informes centros - Levantamientos en terreno
 export const fetchLevantamientosTerreno = async (params?: Record<string, any>) => {
-  const res = await api.get('/levantamientos_terreno/', { params });
-  return res.data;
+  try {
+    const res = await api.get('/levantamientos_terreno/', { params });
+    return res.data;
+  } catch (error: any) {
+    const status = Number(error?.response?.status || 0) || 0;
+    const sinRespuesta = !error?.response;
+    const puedeProbarLegado = sinRespuesta || [404, 502, 503, 504].includes(status);
+    if (!puedeProbarLegado) throw error;
+
+    const legacyRes = await api.get('/levantamientos/', {
+      params: { centro_id: params?.centro_id || undefined },
+    });
+    const legacyRows = Array.isArray(legacyRes.data) ? legacyRes.data : [];
+    const fechaDesde = String(params?.fecha_desde || '').trim();
+    const fechaHasta = String(params?.fecha_hasta || '').trim();
+
+    return legacyRows
+      .map((item: any) => ({
+        id_levantamiento_terreno: Number(item?.id_levantamiento || 0) || 0,
+        centro_id: Number(item?.centro_id || 0) || 0,
+        actividad_id: null,
+        fecha_levantamiento: item?.fecha_levantamiento || null,
+        region: '',
+        localidad: '',
+        codigo_ponton: '',
+        resumen: '',
+        observaciones: '',
+        medicion_voltaje: '',
+        medicion_corriente: '',
+        medicion_potencia: '',
+        fotos: [],
+        estado: 'finalizado',
+        empresa: '',
+        cliente: '',
+        centro: '',
+        created_at: null,
+        updated_at: null,
+      }))
+      .filter((item: any) => {
+        const fecha = String(item?.fecha_levantamiento || '').trim();
+        if (fechaDesde && fecha && fecha < fechaDesde) return false;
+        if (fechaHasta && fecha && fecha > fechaHasta) return false;
+        return true;
+      });
+  }
 };
 
 export const createLevantamientoTerreno = async (payload: any) => {

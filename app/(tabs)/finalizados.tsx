@@ -60,6 +60,14 @@ export default function FinalizadosScreen() {
   }, [userId, readCache, writeCache]);
 
   useEffect(() => {
+    readCache().then((cached) => {
+      if (Array.isArray(cached) && cached.length) {
+        setItems(cached);
+      }
+    });
+  }, [readCache]);
+
+  useEffect(() => {
     cargarFinalizados(false);
   }, [cargarFinalizados]);
 
@@ -92,7 +100,7 @@ export default function FinalizadosScreen() {
   }, [items, search]);
 
   return (
-    <SafeAreaView style={styles.safe}>
+    <SafeAreaView edges={['top']} style={styles.safe}>
       <StatusBar style="dark" translucent={false} />
       <FlatList
         data={itemsFiltrados}
@@ -199,7 +207,7 @@ export default function FinalizadosScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: '#ffffff' },
-  container: { padding: 16, gap: 10, backgroundColor: '#ffffff' },
+  container: { flexGrow: 1, padding: 16, paddingTop: 12, paddingBottom: 18, gap: 10, backgroundColor: '#ffffff' },
   header: {
     borderWidth: 1,
     borderColor: '#dbeafe',

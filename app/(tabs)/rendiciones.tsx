@@ -21,8 +21,6 @@ import {
   enviarRendicion,
   fetchAbonosRendicion,
   fetchActasEntrega,
-  fetchActividades,
-  fetchActividadesMias,
   fetchClientes,
   fetchCentrosPorCliente,
   fetchMantencionesTerreno,
@@ -34,6 +32,16 @@ import {
   solicitarEdicionRendicion,
   updateRendicion,
 } from '@/lib/api';
+import {
+  fetchActividadesAsignadasUsuario,
+  matchActividadTecnicoNombre,
+  readCachedActividadesAsignadas,
+  tipoActividadProgramada,
+  writeCachedActividadesAsignadas,
+} from '@/lib/actividades';
+import { readCachedValue, removeCachedValue, writeCachedValue } from '@/lib/cache-store';
+import { enqueueOfflineOp, isOfflineQueueableError } from '@/lib/offline-queue';
+import { subscribeActividadUpdated } from '@/lib/realtime';
 
 type RendicionLinea = {
   fecha: string;
@@ -43,6 +51,25 @@ type RendicionLinea = {
   descripcion: string;
   valor: string;
   foto?: string;
+};
+
+type RendicionDraft = {
+  editingRendicionId: number | null;
+  editingActividadId: number | null;
+  editingClienteNombre: string;
+  editingCentroNombre: string;
+  selectedTrabajoId: string;
+  trabajoBloqueado: boolean;
+  trabajosExtraIds: string[];
+  formClienteId: string;
+  formCentroId: string;
+  actividadTipo: string;
+  fechaGasto: string;
+  tec1Nombre: string;
+  tecnicosAsociados: string[];
+  totalRendir: string;
+  actividadesTexto: string;
+  lineasRendicion: RendicionLinea[];
 };
 
 const CATEGORIAS_GASTO = ['colacion', 'transporte', 'traslados', 'fletes', 'estadia', 'combustible', 'materiales', 'otros'];
@@ -79,19 +106,6 @@ const normalizeText = (value: any) =>
     .toLowerCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '');
-
-const matchTecnicoNombre = (candidate: any, currentName: any) => {
-  const a = normalizeText(candidate);
-  const b = normalizeText(currentName);
-  if (!a || !b) return false;
-  if (a === b) return true;
-  if (a.includes(b) || b.includes(a)) return true;
-  const ta = a.split(/\s+/).filter(Boolean);
-  const tb = b.split(/\s+/).filter(Boolean);
-  if (!ta.length || !tb.length) return false;
-  const commons = ta.filter((t) => tb.includes(t));
-  return commons.length >= 2 || (commons.length >= 1 && (ta.length === 1 || tb.length === 1));
-};
 
 const parseFirmasAdicionales = (raw: any) => {
   if (!raw) return [];
@@ -167,6 +181,17 @@ const parseLineasDesdeDescripcion = (desc: string, adjuntos: any[] = []): Rendic
     : [{ fecha: hoyStr(), documento: '', categoria: '', otroNombre: '', descripcion: '', valor: '', foto: '' }];
 };
 
+const emptyRendicionLinea = (): RendicionLinea => ({
+  fecha: hoyStr(),
+  documento: '',
+  categoria: '',
+  otroNombre: '',
+  descripcion: '',
+  valor: '',
+  foto: '',
+});
+const offlineTempId = () => -Date.now();
+
 export default function RendicionesScreen() {
   const { userId, name } = useContext(AuthContext);
 
@@ -194,7 +219,7 @@ export default function RendicionesScreen() {
   const [totalRendir, setTotalRendir] = useState('');
   const [actividadesTexto, setActividadesTexto] = useState('');
   const [lineasRendicion, setLineasRendicion] = useState<RendicionLinea[]>([
-    { fecha: hoyStr(), documento: '', categoria: '', otroNombre: '', descripcion: '', valor: '', foto: '' },
+    emptyRendicionLinea(),
   ]);
 
   const [showCamera, setShowCamera] = useState(false);
@@ -221,6 +246,11 @@ export default function RendicionesScreen() {
   const [cameraFacing, setCameraFacing] = useState<'front' | 'back'>('back');
   const cameraRef = useRef<CameraView | null>(null);
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
+  const actividadesAsociadasCacheKey = useMemo(() => `rendiciones_v1_actividades_${userId || 'anon'}`, [userId]);
+  const rendicionesCacheKey = useMemo(() => `rendiciones_v1_historial_${userId || 'anon'}`, [userId]);
+  const saldosCacheKey = useMemo(() => `rendiciones_v1_saldos_${userId || name || 'anon'}`, [userId, name]);
+  const abonosCacheKey = useMemo(() => `rendiciones_v1_abonos_${userId || name || 'anon'}`, [userId, name]);
+  const draftCacheKey = useMemo(() => `rendiciones_v1_draft_${userId || 'anon'}`, [userId]);
 
   const cargarClientes = useCallback(async () => {
     try {
@@ -232,14 +262,8 @@ export default function RendicionesScreen() {
   }, []);
 
   const tipoTrabajoTexto = (areaRaw?: string, nombreRaw?: string) => {
-    const area = String(areaRaw || '').trim().toLowerCase();
-    const nombre = String(nombreRaw || '').trim().toLowerCase();
-    if (area.startsWith('reap') || nombre.includes('reap')) return 'instalacion';
-    if (area.startsWith('instal') || nombre.includes('instal')) return 'instalacion';
-    if (area.startsWith('manten') || nombre.includes('manten')) return 'mantencion';
-    if (area.startsWith('retir') || nombre.includes('retir')) return 'retiro';
-    if (area.startsWith('levant') || nombre.includes('levant')) return 'levantamiento';
-    return '';
+    const tipo = tipoActividadProgramada(areaRaw, nombreRaw);
+    return tipo === 'reapuntamiento' ? 'instalacion' : tipo;
   };
   const normalizarTipoActividad = (raw?: string) => {
     const v = String(raw || '').trim().toLowerCase();
@@ -269,44 +293,26 @@ export default function RendicionesScreen() {
           .map((x: any) => String(x?.nombre || '').trim())
           .filter(Boolean)
       : [];
-    return [...baseNames, ...adicionales].some((n) => matchTecnicoNombre(n, myName));
+    return [...baseNames, ...adicionales].some((n) => matchActividadTecnicoNombre(n, myName));
   };
 
   const cargarActividadesAsociadas = useCallback(async () => {
     if (!userId) return;
     setLoadingActividades(true);
-    try {
-      const filtrarUtiles = (items: any[]) =>
-        (Array.isArray(items) ? items : [])
-          .filter((item) => {
-            const tipo = tipoTrabajoTexto(item?.area, item?.nombre_actividad);
-            return tipo === 'instalacion' || tipo === 'mantencion' || tipo === 'retiro' || tipo === 'levantamiento';
-          })
-          .sort((a, b) => {
-            const da = new Date(a?.fecha_inicio || a?.created_at || 0).getTime();
-            const dbv = new Date(b?.fecha_inicio || b?.created_at || 0).getTime();
-            return dbv - da;
-          });
-
-      let lista = filtrarUtiles(await fetchActividadesMias());
-      if (!lista.length) {
-        const all = filtrarUtiles(await fetchActividades());
-        lista = all.filter((item: any) => {
-          const principalId = Number(item?.encargado_principal?.id_encargado || item?.tecnico_encargado || 0) || 0;
-          const ayudanteId = Number(item?.encargado_ayudante?.id_encargado || item?.tecnico_ayudante || 0) || 0;
-          const names = [
-            item?.encargado_principal?.nombre_encargado,
-            item?.encargado_ayudante?.nombre_encargado,
-            ...(Array.isArray(item?.tecnicos_asignados) ? item.tecnicos_asignados.map((t: any) => t?.nombre_encargado) : []),
-          ].map((v) => String(v || '').trim()).filter(Boolean);
-          const myName = String(name || '').trim();
-          return (
-            principalId === Number(userId || 0) ||
-            ayudanteId === Number(userId || 0) ||
-            (!!myName && names.some((n) => matchTecnicoNombre(n, myName)))
-          );
+    const filtrarUtiles = (items: any[]) =>
+      (Array.isArray(items) ? items : [])
+        .filter((item) => {
+          const tipo = tipoTrabajoTexto(item?.area, item?.nombre_actividad);
+          return tipo === 'instalacion' || tipo === 'mantencion' || tipo === 'retiro' || tipo === 'levantamiento';
+        })
+        .sort((a, b) => {
+          const da = new Date(a?.fecha_inicio || a?.created_at || 0).getTime();
+          const dbv = new Date(b?.fecha_inicio || b?.created_at || 0).getTime();
+          return dbv - da;
         });
-      }
+    try {
+      const listaRemota = await fetchActividadesAsignadasUsuario({ userId, name });
+      writeCachedActividadesAsignadas(userId, listaRemota).catch(() => {});
 
       const [actas, mantenciones, retiros, levantamientos, permisos] = await Promise.all([
         fetchActasEntrega().catch(() => []),
@@ -424,12 +430,20 @@ export default function RendicionesScreen() {
         return dbv - da;
       });
       setActividadesAsociadas(allTrabajos);
+      writeCachedValue(actividadesAsociadasCacheKey, allTrabajos).catch(() => {});
     } catch {
-      setActividadesAsociadas([]);
+      const cachedTrabajos = await readCachedValue<any[]>(actividadesAsociadasCacheKey, []);
+      if (Array.isArray(cachedTrabajos.value) && cachedTrabajos.value.length) {
+        setActividadesAsociadas(cachedTrabajos.value);
+        setLoadingActividades(false);
+        return;
+      }
+      const cached = await readCachedActividadesAsignadas(userId);
+      setActividadesAsociadas(filtrarUtiles(Array.isArray(cached) ? cached : []));
     } finally {
       setLoadingActividades(false);
     }
-  }, [userId, name]);
+  }, [userId, name, actividadesAsociadasCacheKey]);
 
   const cargarCentros = useCallback(async (clienteId: string, target: 'filtro' | 'form') => {
     if (!clienteId) {
@@ -455,13 +469,16 @@ export default function RendicionesScreen() {
     setLoading(true);
     try {
       const data = await fetchRendiciones({ tecnico_user_id: userId, top: 150 });
-      setRendiciones(Array.isArray(data) ? data : []);
+      const rows = Array.isArray(data) ? data : [];
+      setRendiciones(rows);
+      writeCachedValue(rendicionesCacheKey, rows).catch(() => {});
     } catch {
-      setRendiciones([]);
+      const cached = await readCachedValue<any[]>(rendicionesCacheKey, []);
+      setRendiciones(Array.isArray(cached.value) ? cached.value : []);
     } finally {
       setLoading(false);
     }
-  }, [userId]);
+  }, [userId, rendicionesCacheKey]);
 
   const cargarSaldos = useCallback(async () => {
     if (!userId && !name) {
@@ -474,11 +491,14 @@ export default function RendicionesScreen() {
           ? { tecnico_user_id: userId, top: 1000 }
           : { tecnico_nombre: name, top: 1000 };
       const data = await fetchSaldosRendicion(params);
-      setSaldosTecnicos(Array.isArray(data) ? data : []);
+      const rows = Array.isArray(data) ? data : [];
+      setSaldosTecnicos(rows);
+      writeCachedValue(saldosCacheKey, rows).catch(() => {});
     } catch {
-      setSaldosTecnicos([]);
+      const cached = await readCachedValue<any[]>(saldosCacheKey, []);
+      setSaldosTecnicos(Array.isArray(cached.value) ? cached.value : []);
     }
-  }, [userId, name]);
+  }, [userId, name, saldosCacheKey]);
 
   const cargarAbonos = useCallback(async () => {
     if (!userId && !name) {
@@ -491,11 +511,14 @@ export default function RendicionesScreen() {
           ? { tecnico_user_id: userId, top: 1000 }
           : { tecnico_nombre: name, top: 1000 };
       const data = await fetchAbonosRendicion(params);
-      setAbonosTecnico(Array.isArray(data) ? data : []);
+      const rows = Array.isArray(data) ? data : [];
+      setAbonosTecnico(rows);
+      writeCachedValue(abonosCacheKey, rows).catch(() => {});
     } catch {
-      setAbonosTecnico([]);
+      const cached = await readCachedValue<any[]>(abonosCacheKey, []);
+      setAbonosTecnico(Array.isArray(cached.value) ? cached.value : []);
     }
-  }, [userId, name]);
+  }, [userId, name, abonosCacheKey]);
 
   useEffect(() => {
     cargarClientes();
@@ -504,6 +527,62 @@ export default function RendicionesScreen() {
     cargarAbonos();
     cargarActividadesAsociadas();
   }, [cargarClientes, cargarRendiciones, cargarSaldos, cargarAbonos, cargarActividadesAsociadas]);
+
+  useEffect(() => {
+    readCachedValue<any[]>(actividadesAsociadasCacheKey, []).then((cached) => {
+      if (Array.isArray(cached.value) && cached.value.length) setActividadesAsociadas(cached.value);
+    });
+    readCachedValue<any[]>(rendicionesCacheKey, []).then((cached) => {
+      if (Array.isArray(cached.value) && cached.value.length) setRendiciones(cached.value);
+    });
+    readCachedValue<any[]>(saldosCacheKey, []).then((cached) => {
+      if (Array.isArray(cached.value) && cached.value.length) setSaldosTecnicos(cached.value);
+    });
+    readCachedValue<any[]>(abonosCacheKey, []).then((cached) => {
+      if (Array.isArray(cached.value) && cached.value.length) setAbonosTecnico(cached.value);
+    });
+  }, [actividadesAsociadasCacheKey, rendicionesCacheKey, saldosCacheKey, abonosCacheKey]);
+
+  useEffect(() => {
+    if (!userId) return;
+    readCachedActividadesAsignadas(userId).then((cached) => {
+      if (Array.isArray(cached) && cached.length) {
+        const lista = cached
+          .filter((item: any) => {
+            const tipo = tipoTrabajoTexto(item?.area, item?.nombre_actividad);
+            return tipo === 'instalacion' || tipo === 'mantencion' || tipo === 'retiro' || tipo === 'levantamiento';
+          })
+          .sort((a: any, b: any) => {
+            const da = new Date(a?.fecha_inicio || a?.created_at || 0).getTime();
+            const dbv = new Date(b?.fecha_inicio || b?.created_at || 0).getTime();
+            return dbv - da;
+          });
+        if (lista.length) setActividadesAsociadas(lista);
+      }
+    });
+  }, [userId]);
+
+  useEffect(() => {
+    if (!userId) return;
+    const onActividadUpdated = (actividad: any) => {
+      const nombres = [
+        actividad?.encargado_principal?.nombre_encargado,
+        actividad?.encargado_ayudante?.nombre_encargado,
+        ...(Array.isArray(actividad?.tecnicos_asignados) ? actividad.tecnicos_asignados.map((t: any) => t?.nombre_encargado) : []),
+      ]
+        .map((v) => String(v || '').trim())
+        .filter(Boolean);
+      const coincideNombre = String(name || '').trim()
+        ? nombres.some((n) => matchActividadTecnicoNombre(n, String(name || '').trim()))
+        : false;
+      const coincideId =
+        Number(actividad?.encargado_principal?.id_encargado || actividad?.tecnico_encargado || 0) === Number(userId || 0) ||
+        Number(actividad?.encargado_ayudante?.id_encargado || actividad?.tecnico_ayudante || 0) === Number(userId || 0);
+      if (!coincideNombre && !coincideId) return;
+      cargarActividadesAsociadas();
+    };
+    return subscribeActividadUpdated(onActividadUpdated);
+  }, [cargarActividadesAsociadas, userId, name]);
 
   useEffect(() => {
     cargarCentros(filtroClienteId, 'filtro');
@@ -745,12 +824,40 @@ export default function RendicionesScreen() {
   const abrirRendicionTrabajo = useCallback((t: any) => {
     const id = String(t?.id_actividad || '');
     if (!id) return;
-    setSelectedTrabajoId(id);
-    setTrabajoBloqueado(true);
-    setTrabajosExtraIds([]);
-    setShowTrabajosExtraModal(false);
-    setShowForm(true);
-  }, []);
+    void (async () => {
+      const cached = await readCachedValue<RendicionDraft | null>(draftCacheKey, null);
+      const draft = cached.value;
+      if (draft && String(draft.selectedTrabajoId || '') === id) {
+        setEditingRendicionId(Number(draft.editingRendicionId || 0) || null);
+        setEditingActividadId(Number(draft.editingActividadId || 0) || null);
+        setEditingClienteNombre(String(draft.editingClienteNombre || ''));
+        setEditingCentroNombre(String(draft.editingCentroNombre || ''));
+        setSelectedTrabajoId(String(draft.selectedTrabajoId || ''));
+        setTrabajoBloqueado(!!draft.trabajoBloqueado);
+        setTrabajosExtraIds(Array.isArray(draft.trabajosExtraIds) ? draft.trabajosExtraIds : []);
+        setFormClienteId(String(draft.formClienteId || ''));
+        setFormCentroId(String(draft.formCentroId || ''));
+        setActividadTipo(String(draft.actividadTipo || 'mantencion'));
+        setFechaGasto(String(draft.fechaGasto || hoyStr()));
+        setTec1Nombre(String(draft.tec1Nombre || name || ''));
+        setTecnicosAsociados(Array.isArray(draft.tecnicosAsociados) ? draft.tecnicosAsociados : []);
+        setTotalRendir(String(draft.totalRendir || ''));
+        setActividadesTexto(String(draft.actividadesTexto || ''));
+        setLineasRendicion(
+          Array.isArray(draft.lineasRendicion) && draft.lineasRendicion.length ? draft.lineasRendicion : [emptyRendicionLinea()]
+        );
+        setShowTrabajosExtraModal(false);
+        setShowForm(true);
+        return;
+      }
+      limpiarFormulario();
+      setSelectedTrabajoId(id);
+      setTrabajoBloqueado(true);
+      setTrabajosExtraIds([]);
+      setShowTrabajosExtraModal(false);
+      setShowForm(true);
+    })();
+  }, [draftCacheKey, name]);
 
   const toggleTrabajoExtra = (id: string) => {
     setTrabajosExtraIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
@@ -763,6 +870,24 @@ export default function RendicionesScreen() {
       return true;
     });
   }, [rendiciones, filtroClienteId, filtroCentroId]);
+
+  const upsertRendicionLocal = useCallback((rendicion: any) => {
+    if (!rendicion || !rendicion.id_rendicion) return;
+    setRendiciones((prev) => {
+      const next = Array.isArray(prev) ? [...prev] : [];
+      const idx = next.findIndex((item) => Number(item.id_rendicion || 0) === Number(rendicion.id_rendicion || 0));
+      if (idx >= 0) {
+        next[idx] = { ...next[idx], ...rendicion };
+      } else {
+        next.unshift(rendicion);
+      }
+      return next.sort((a: any, b: any) => {
+        const da = new Date(a?.fecha_gasto || a?.updated_at || a?.created_at || 0).getTime();
+        const dbv = new Date(b?.fecha_gasto || b?.updated_at || b?.created_at || 0).getTime();
+        return dbv - da;
+      });
+    });
+  }, []);
 
   const limpiarFormulario = () => {
     setEditingRendicionId(null);
@@ -779,7 +904,7 @@ export default function RendicionesScreen() {
     setTec1Nombre(String(name || ''));
     setTotalRendir(String(saldoTecnicoActual || 0));
     setActividadesTexto('');
-    setLineasRendicion([{ fecha: hoyStr(), documento: '', categoria: '', otroNombre: '', descripcion: '', valor: '', foto: '' }]);
+    setLineasRendicion([emptyRendicionLinea()]);
     setShowTrabajosExtraModal(false);
     setLineaFotoActivaIdx(null);
   };
@@ -824,7 +949,7 @@ export default function RendicionesScreen() {
   const agregarLinea = () => {
     setLineasRendicion((prev) => [
       ...prev,
-      { fecha: fechaGasto || hoyStr(), documento: '', categoria: '', otroNombre: '', descripcion: '', valor: '', foto: '' },
+      { ...emptyRendicionLinea(), fecha: fechaGasto || hoyStr() },
     ]);
   };
 
@@ -869,50 +994,50 @@ export default function RendicionesScreen() {
       Alert.alert('Rendiciones', error);
       return;
     }
+    const payload = {
+      tecnico_user_id: userId,
+      tecnico_nombre: tec1Nombre || name || '',
+      cliente_id:
+        (formClienteId ? Number(formClienteId) : 0) ||
+        Number(trabajoSeleccionado?.centro?.cliente_id || trabajoSeleccionado?.cliente_id || 0) ||
+        null,
+      centro_id:
+        Number(formCentroId || 0) ||
+        Number(trabajoSeleccionado?.centro?.id_centro || trabajoSeleccionado?.centro_id || 0) ||
+        null,
+      actividad_tipo: actividadTipo,
+      actividad_id: editingRendicionId
+        ? (Number(editingActividadId || 0) || Number(trabajoSeleccionado?.record_id || 0) || null)
+        : (Number(trabajoSeleccionado?.record_id || 0) || null),
+      categoria: 'rendicion_gastos',
+      medio_pago: null,
+      fecha_gasto: fechaGasto,
+      monto: Number(totalGastos || 0),
+      descripcion: [
+        `Rendido por: ${tec1Nombre || name || '-'}`,
+        `Tecnicos asociados: ${tecnicosAsociados.length ? tecnicosAsociados.join(', ') : tec1Nombre || name || '-'}`,
+        `Tecnicos asociados JSON: ${JSON.stringify(tecnicosAsociados.length ? tecnicosAsociados : [tec1Nombre || name || ''])}`,
+        `Total a rendir: ${totalRendir || 0}`,
+        `Total gastos: ${totalGastos}`,
+        `Saldo: ${saldoRendicion}`,
+        `Actividades: ${actividadesTexto || '-'}`,
+        `Trabajos compartidos: ${trabajosExtraIds.length ? trabajosExtraIds.join(', ') : 'ninguno'}`,
+        'Detalle:',
+        ...lineasRendicion.map((l) => {
+          const cat = l.categoria === 'otros' ? String(l.otroNombre || 'otros').trim() : String(l.categoria || 'otros').trim();
+          const detalle = String(l.descripcion || '').trim();
+          const etiqueta = detalle ? `${cat}: ${detalle}` : cat;
+          return `${l.fecha || '-'} | Doc:${l.documento || '-'} | ${etiqueta} | ${parseMontoCL(l.valor) || 0}`;
+        }),
+      ].join('\n'),
+      adjuntos: lineasRendicion
+        .map((l) => l.foto || '')
+        .filter(Boolean),
+      estado,
+    };
     const ejecutarGuardado = async () => {
       setGuardando(true);
       try {
-      const payload = {
-        tecnico_user_id: userId,
-        tecnico_nombre: tec1Nombre || name || '',
-        cliente_id:
-          (formClienteId ? Number(formClienteId) : 0) ||
-          Number(trabajoSeleccionado?.centro?.cliente_id || trabajoSeleccionado?.cliente_id || 0) ||
-          null,
-        centro_id:
-          Number(formCentroId || 0) ||
-          Number(trabajoSeleccionado?.centro?.id_centro || trabajoSeleccionado?.centro_id || 0) ||
-          null,
-        actividad_tipo: actividadTipo,
-        actividad_id: editingRendicionId
-          ? (Number(editingActividadId || 0) || Number(trabajoSeleccionado?.record_id || 0) || null)
-          : (Number(trabajoSeleccionado?.record_id || 0) || null),
-        categoria: 'rendicion_gastos',
-        medio_pago: null,
-        fecha_gasto: fechaGasto,
-        monto: Number(totalGastos || 0),
-        descripcion: [
-          `Rendido por: ${tec1Nombre || name || '-'}`,
-          `Tecnicos asociados: ${tecnicosAsociados.length ? tecnicosAsociados.join(', ') : tec1Nombre || name || '-'}`,
-          `Tecnicos asociados JSON: ${JSON.stringify(tecnicosAsociados.length ? tecnicosAsociados : [tec1Nombre || name || ''])}`,
-          `Total a rendir: ${totalRendir || 0}`,
-          `Total gastos: ${totalGastos}`,
-          `Saldo: ${saldoRendicion}`,
-          `Actividades: ${actividadesTexto || '-'}`,
-          `Trabajos compartidos: ${trabajosExtraIds.length ? trabajosExtraIds.join(', ') : 'ninguno'}`,
-          'Detalle:',
-          ...lineasRendicion.map((l) => {
-            const cat = l.categoria === 'otros' ? String(l.otroNombre || 'otros').trim() : String(l.categoria || 'otros').trim();
-            const detalle = String(l.descripcion || '').trim();
-            const etiqueta = detalle ? `${cat}: ${detalle}` : cat;
-            return `${l.fecha || '-'} | Doc:${l.documento || '-'} | ${etiqueta} | ${parseMontoCL(l.valor) || 0}`;
-          }),
-        ].join('\n'),
-        adjuntos: lineasRendicion
-          .map((l) => l.foto || '')
-          .filter(Boolean),
-        estado,
-      };
       let id = Number(editingRendicionId || 0) || 0;
       if (id > 0) {
         await updateRendicion(id, payload);
@@ -924,10 +1049,41 @@ export default function RendicionesScreen() {
       Alert.alert('Rendiciones', estado === 'enviado' ? 'Rendicion enviada.' : 'Rendicion guardada.');
       limpiarFormulario();
       setShowForm(false);
+      await removeCachedValue(draftCacheKey);
       await cargarRendiciones();
       await cargarSaldos();
       await cargarAbonos();
-      } catch {
+      } catch (error: any) {
+        if (isOfflineQueueableError(error)) {
+          const offlineId = Number(editingRendicionId || 0) || offlineTempId();
+          await enqueueOfflineOp(
+            editingRendicionId ? 'update_rendicion' : 'create_rendicion',
+            editingRendicionId
+              ? { id: offlineId, data: payload, sendAfter: estado === 'enviado' }
+              : { data: payload, sendAfter: estado === 'enviado' }
+          );
+          upsertRendicionLocal({
+            id_rendicion: offlineId,
+            actividad_id: payload.actividad_id,
+            cliente_id: payload.cliente_id,
+            centro_id: payload.centro_id,
+            cliente_nombre: trabajoSeleccionado?.centro?.cliente || editingClienteNombre || '',
+            centro_nombre: trabajoSeleccionado?.centro?.nombre || editingCentroNombre || '',
+            actividad_tipo: payload.actividad_tipo,
+            tecnico_nombre: payload.tecnico_nombre,
+            fecha_gasto: payload.fecha_gasto,
+            monto: payload.monto,
+            descripcion: payload.descripcion,
+            adjuntos: payload.adjuntos,
+            estado: estado === 'enviado' ? 'enviado' : 'borrador',
+            updated_at: new Date().toISOString(),
+          });
+          limpiarFormulario();
+          setShowForm(false);
+          await removeCachedValue(draftCacheKey);
+          Alert.alert('Rendiciones', 'Sin red. La rendicion quedo pendiente para sincronizar.');
+          return;
+        }
         Alert.alert('Rendiciones', 'No se pudo guardar.');
       } finally {
         setGuardando(false);
@@ -975,9 +1131,10 @@ export default function RendicionesScreen() {
     );
   };
 
-  const abrirEdicionAutorizada = (rendicion: any) => {
+  const abrirEdicionAutorizada = async (rendicion: any) => {
     const idR = Number(rendicion?.id_rendicion || 0);
     if (!(idR > 0)) return;
+    await removeCachedValue(draftCacheKey);
     const actividadId = String(Number(rendicion?.actividad_id || 0) || '');
     setEditingRendicionId(idR);
     setEditingActividadId(Number(rendicion?.actividad_id || 0) || null);
@@ -1000,6 +1157,68 @@ export default function RendicionesScreen() {
     setLineasRendicion(parseLineasDesdeDescripcion(desc, Array.isArray(rendicion?.adjuntos) ? rendicion.adjuntos : []));
     setShowForm(true);
   };
+
+  useEffect(() => {
+    if (!showForm) return;
+    const draft: RendicionDraft = {
+      editingRendicionId,
+      editingActividadId,
+      editingClienteNombre,
+      editingCentroNombre,
+      selectedTrabajoId,
+      trabajoBloqueado,
+      trabajosExtraIds,
+      formClienteId,
+      formCentroId,
+      actividadTipo,
+      fechaGasto,
+      tec1Nombre,
+      tecnicosAsociados,
+      totalRendir,
+      actividadesTexto,
+      lineasRendicion,
+    };
+    const hasContent =
+      !!String(selectedTrabajoId || '').trim() ||
+      !!String(formCentroId || '').trim() ||
+      !!String(actividadesTexto || '').trim() ||
+      lineasRendicion.some(
+        (linea) =>
+          !!String(linea.documento || '').trim() ||
+          !!String(linea.categoria || '').trim() ||
+          !!String(linea.otroNombre || '').trim() ||
+          !!String(linea.descripcion || '').trim() ||
+          !!String(linea.valor || '').trim() ||
+          !!String(linea.foto || '').trim()
+      );
+    const timer = setTimeout(() => {
+      if (!hasContent) {
+        removeCachedValue(draftCacheKey).catch(() => {});
+        return;
+      }
+      writeCachedValue(draftCacheKey, draft).catch(() => {});
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [
+    showForm,
+    editingRendicionId,
+    editingActividadId,
+    editingClienteNombre,
+    editingCentroNombre,
+    selectedTrabajoId,
+    trabajoBloqueado,
+    trabajosExtraIds,
+    formClienteId,
+    formCentroId,
+    actividadTipo,
+    fechaGasto,
+    tec1Nombre,
+    tecnicosAsociados,
+    totalRendir,
+    actividadesTexto,
+    lineasRendicion,
+    draftCacheKey,
+  ]);
 
   const abrirCamaraLinea = async (idx: number) => {
     if (!cameraPermission?.granted) {
@@ -1868,10 +2087,38 @@ export default function RendicionesScreen() {
       <Pressable
         style={styles.fabBtn}
         onPress={() => {
-          setTrabajoBloqueado(false);
-          setTrabajosExtraIds([]);
-          setShowTrabajosExtraModal(false);
-          setShowForm(true);
+          void (async () => {
+            const cached = await readCachedValue<RendicionDraft | null>(draftCacheKey, null);
+            const draft = cached.value;
+            if (draft) {
+              setEditingRendicionId(Number(draft.editingRendicionId || 0) || null);
+              setEditingActividadId(Number(draft.editingActividadId || 0) || null);
+              setEditingClienteNombre(String(draft.editingClienteNombre || ''));
+              setEditingCentroNombre(String(draft.editingCentroNombre || ''));
+              setSelectedTrabajoId(String(draft.selectedTrabajoId || ''));
+              setTrabajoBloqueado(!!draft.trabajoBloqueado);
+              setTrabajosExtraIds(Array.isArray(draft.trabajosExtraIds) ? draft.trabajosExtraIds : []);
+              setFormClienteId(String(draft.formClienteId || ''));
+              setFormCentroId(String(draft.formCentroId || ''));
+              setActividadTipo(String(draft.actividadTipo || 'mantencion'));
+              setFechaGasto(String(draft.fechaGasto || hoyStr()));
+              setTec1Nombre(String(draft.tec1Nombre || name || ''));
+              setTecnicosAsociados(Array.isArray(draft.tecnicosAsociados) ? draft.tecnicosAsociados : []);
+              setTotalRendir(String(draft.totalRendir || ''));
+              setActividadesTexto(String(draft.actividadesTexto || ''));
+              setLineasRendicion(
+                Array.isArray(draft.lineasRendicion) && draft.lineasRendicion.length ? draft.lineasRendicion : [emptyRendicionLinea()]
+              );
+              setShowTrabajosExtraModal(false);
+              setShowForm(true);
+              return;
+            }
+            limpiarFormulario();
+            setTrabajoBloqueado(false);
+            setTrabajosExtraIds([]);
+            setShowTrabajosExtraModal(false);
+            setShowForm(true);
+          })();
         }}
       >
         <Ionicons name="add" size={24} color="#fff" />

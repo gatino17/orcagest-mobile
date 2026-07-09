@@ -1,5 +1,6 @@
 import React, { useContext } from 'react';
-import { SafeAreaView, StyleSheet, Pressable, View, StatusBar as RNStatusBar } from 'react-native';
+import { StyleSheet, Pressable, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 
@@ -19,7 +20,7 @@ export default function PerfilScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView edges={['top']} style={styles.container}>
       <ThemedView style={styles.heroCard}>
         <View style={styles.headerRow}>
           <View style={styles.avatarWrap}>
@@ -71,7 +72,8 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#ffffff',
     padding: 16,
-    paddingTop: (RNStatusBar.currentHeight || 24) + 12,
+    paddingTop: 12,
+    paddingBottom: 18,
     gap: 14,
   },
   heroCard: {
