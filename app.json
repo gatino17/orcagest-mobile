@@ -23,6 +23,7 @@
         "foregroundImage": "./assets/images/android-icon-foreground.png",
         "backgroundColor": "#ffffff"
       },
+      "usesCleartextTraffic": true,
       "package": "com.orcagest.app",
       "permissions": [
         "android.permission.CAMERA"
