@@ -19,7 +19,7 @@ export default function LoginScreen() {
 
   const handleLogin = async () => {
     if (!email || !password) {
-      Alert.alert('Datos incompletos', 'Ingresa tu correo y contraseÃ±a');
+      Alert.alert('Datos incompletos', 'Ingresa tu correo y contraseña');
       return;
     }
     setLoading(true);
@@ -27,16 +27,32 @@ export default function LoginScreen() {
       const data = await login(email.trim(), password);
       const access = data.access_token || data.token;
       if (!access) throw new Error('Token no recibido');
-      await setToken(access);
-      router.replace('(tabs)');
+      try {
+        await setToken(access);
+        router.replace('(tabs)');
+      } catch (localErr: any) {
+        console.error('Login post-auth error', localErr);
+        Alert.alert(
+          'Error',
+          localErr?.message || 'El login respondió correctamente, pero no se pudo guardar la sesión en el dispositivo.'
+        );
+      }
     } catch (err: any) {
       console.error('Login error', err);
-      const msg =
+      const status = Number(err?.response?.status || 0) || 0;
+      const backendMsg =
         err?.response?.data?.message ||
         err?.response?.data?.detail ||
-        (err?.response?.status === 401
-          ? 'Credenciales invÃ¡lidas (email/contraseÃ±a).'
-          : 'Servidor no disponible.');
+        err?.response?.data?.error ||
+        '';
+      const msg =
+        status === 401
+          ? 'Credenciales inválidas (email/contraseña).'
+          : err?.code === 'ECONNABORTED'
+            ? 'El servidor tardó demasiado en responder. Intenta nuevamente.'
+            : backendMsg ||
+              err?.message ||
+              ('Servidor no disponible' + (status ? ' (HTTP ' + status + ')' : '') + '.');
       Alert.alert('Error', msg);
     } finally {
       setLoading(false);

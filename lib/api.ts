@@ -21,7 +21,7 @@ export const SOCKET_TRANSPORTS =
 
 export const api = axios.create({
   baseURL: BASE_URL,
-  timeout: 15000,
+  timeout: 30000,
 });
 
 // Adjunta token si existe (excepto en /auth/login)
@@ -374,3 +374,4 @@ export const fetchAbonosRendicion = async (params?: Record<string, any>) => {
   const res = await api.get('/rendiciones/abonos', { params });
   return res.data;
 };
+
