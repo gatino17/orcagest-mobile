@@ -67,12 +67,12 @@ export const getMovimientosArmado = async (armadoId: string | number) => {
 
 // Equipos por centro (misma ruta que frontend web)
 export const getEquipos = async (centro_id?: string | number) => {
-  const res = await api.get('/equipos', { params: { centro_id } });
+  const res = await api.get('/equipos/', { params: { centro_id } });
   return res.data;
 };
 
 export const createEquipo = async (payload: any) => {
-  const res = await api.post('/equipos', payload);
+  const res = await api.post('/equipos/', payload);
   return res.data;
 };
 
