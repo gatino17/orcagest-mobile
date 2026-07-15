@@ -112,22 +112,35 @@ export default function FinalizadosScreen() {
         ListHeaderComponent={
           <>
             <ThemedView style={styles.header}>
-              <View style={styles.headerGlow} />
-              <View>
+              <View pointerEvents="none" style={styles.headerGlowPrimary} />
+              <View pointerEvents="none" style={styles.headerGlowSecondary} />
+              <View style={{ flex: 1 }}>
                 <View style={styles.titleRow}>
-                  <Ionicons name="checkmark-circle" size={18} color="#16a34a" />
+                  <View style={styles.titleIcon}>
+                    <Ionicons name="checkmark-done-outline" size={18} color="#d8ffe7" />
+                  </View>
                   <ThemedText style={styles.title}>Armados finalizados</ThemedText>
                 </View>
-                <ThemedText style={styles.subtitle}>Historial cerrado y solo lectura</ThemedText>
+                <ThemedText style={styles.subtitle}>Historial cerrado y planillas disponibles</ThemedText>
+                <View style={styles.headerMetaRow}>
+                  <View style={styles.headerMetaPill}>
+                    <Ionicons name="archive-outline" size={12} color="#9fd7ff" />
+                    <ThemedText style={styles.headerMetaText}>{items.length} total</ThemedText>
+                  </View>
+                  <View style={styles.headerMetaPill}>
+                    <Ionicons name="eye-outline" size={12} color="#9fd7ff" />
+                    <ThemedText style={styles.headerMetaText}>{itemsFiltrados.length} visibles</ThemedText>
+                  </View>
+                </View>
               </View>
               <View style={styles.kpi}>
                 <ThemedText style={styles.kpiNumber}>{itemsFiltrados.length}</ThemedText>
-                <ThemedText style={styles.kpiLabel}>visibles</ThemedText>
+                <ThemedText style={styles.kpiLabel}>cerrados</ThemedText>
               </View>
             </ThemedView>
 
             <ThemedView style={styles.searchWrap}>
-              <Ionicons name="search-outline" size={16} color="#64748b" />
+              <Ionicons name="search-outline" size={16} color="#164e9c" />
               <TextInput
                 value={search}
                 onChangeText={setSearch}
@@ -155,7 +168,7 @@ export default function FinalizadosScreen() {
         }
         renderItem={({ item: a }) => (
           <View style={styles.card}>
-            <View style={styles.cardAccent} />
+            <View pointerEvents="none" style={styles.cardGlow} />
             <View style={styles.cardHead}>
               <View style={{ flex: 1 }}>
                 <ThemedText style={styles.centro}>{a.centro?.nombre || a.centro_nombre || '-'}</ThemedText>
@@ -171,9 +184,18 @@ export default function FinalizadosScreen() {
             </View>
 
             <View style={styles.rowWrap}>
-              <ThemedText style={styles.meta}>Asignado: {formatFecha(a.fecha_asignacion || a.created_at)}</ThemedText>
-              <ThemedText style={styles.meta}>Cierre: {formatFecha(a.fecha_cierre)}</ThemedText>
-              <ThemedText style={styles.meta}>Bultos: {a.total_cajas ?? 0}</ThemedText>
+              <View style={styles.metaChip}>
+                <Ionicons name="calendar-outline" size={12} color="#164e9c" />
+                <ThemedText style={styles.meta}>Asignado: {formatFecha(a.fecha_asignacion || a.created_at)}</ThemedText>
+              </View>
+              <View style={styles.metaChip}>
+                <Ionicons name="flag-outline" size={12} color="#15803d" />
+                <ThemedText style={styles.meta}>Cierre: {formatFecha(a.fecha_cierre)}</ThemedText>
+              </View>
+              <View style={styles.metaChip}>
+                <Ionicons name="cube-outline" size={12} color="#164e9c" />
+                <ThemedText style={styles.meta}>Bultos: {a.total_cajas ?? 0}</ThemedText>
+              </View>
             </View>
 
             <View style={styles.actions}>
@@ -206,44 +228,100 @@ export default function FinalizadosScreen() {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: '#ffffff' },
-  container: { flexGrow: 1, padding: 16, paddingTop: 12, paddingBottom: 18, gap: 10, backgroundColor: '#ffffff' },
+  safe: { flex: 1, backgroundColor: '#eef3f6' },
+  container: { flexGrow: 1, padding: 16, paddingTop: 12, paddingBottom: 18, gap: 12, backgroundColor: '#eef3f6' },
   header: {
     borderWidth: 1,
-    borderColor: '#dbeafe',
-    backgroundColor: '#f8fbff',
-    borderRadius: 14,
-    padding: 12,
+    borderColor: 'rgba(45, 165, 255, 0.14)',
+    backgroundColor: '#06141d',
+    borderRadius: 22,
+    padding: 16,
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
+    alignItems: 'flex-start',
+    gap: 12,
     overflow: 'hidden',
+    shadowColor: '#06141d',
+    shadowOpacity: 0.22,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 4,
   },
-  headerGlow: {
+  headerGlowPrimary: {
     position: 'absolute',
-    right: -26,
-    top: -26,
-    width: 120,
-    height: 120,
-    borderRadius: 60,
-    backgroundColor: 'rgba(37,99,235,0.16)',
+    right: -54,
+    top: -74,
+    width: 160,
+    height: 160,
+    borderRadius: 80,
+    backgroundColor: 'rgba(45, 165, 255, 0.20)',
+  },
+  headerGlowSecondary: {
+    position: 'absolute',
+    left: -48,
+    bottom: -62,
+    width: 130,
+    height: 130,
+    borderRadius: 65,
+    backgroundColor: 'rgba(34, 197, 94, 0.10)',
   },
   titleRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: 9,
   },
-  title: { fontSize: 20, fontWeight: '900', color: '#0f172a' },
-  subtitle: { marginTop: 2, fontSize: 12, color: '#475569', fontWeight: '600' },
-  kpi: { alignItems: 'center' },
-  kpiNumber: { fontSize: 28, fontWeight: '900', color: '#0b3b8c', lineHeight: 28 },
-  kpiLabel: { fontSize: 11, color: '#475569', fontWeight: '700' },
+  titleIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(34, 197, 94, 0.18)',
+    backgroundColor: 'rgba(22, 163, 74, 0.10)',
+  },
+  title: { fontSize: 20, fontWeight: '900', color: '#ffffff', flexShrink: 1 },
+  subtitle: { marginTop: 7, fontSize: 12.5, color: '#98c7e8', fontWeight: '700' },
+  headerMetaRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 12,
+  },
+  headerMetaPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderWidth: 1,
+    borderColor: 'rgba(159, 215, 255, 0.15)',
+    backgroundColor: 'rgba(255, 255, 255, 0.07)',
+  },
+  headerMetaText: {
+    color: '#f8fbff',
+    fontWeight: '800',
+    fontSize: 11,
+  },
+  kpi: {
+    minWidth: 68,
+    alignItems: 'center',
+    borderRadius: 18,
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(159, 215, 255, 0.14)',
+  },
+  kpiNumber: { fontSize: 28, fontWeight: '900', color: '#ffffff', lineHeight: 28 },
+  kpiLabel: { fontSize: 10.5, color: '#98c7e8', fontWeight: '800', marginTop: 2 },
   searchWrap: {
     borderWidth: 1,
-    borderColor: '#dbeafe',
-    backgroundColor: '#f8fbff',
-    borderRadius: 12,
-    paddingHorizontal: 10,
+    borderColor: '#d4e0ea',
+    backgroundColor: '#fbfdff',
+    borderRadius: 16,
+    paddingHorizontal: 12,
     paddingVertical: 11,
     marginTop: 2,
     marginBottom: 4,
@@ -253,36 +331,63 @@ const styles = StyleSheet.create({
   },
   searchInput: {
     flex: 1,
-    color: '#0f172a',
+    color: '#163041',
     fontSize: 14,
-    fontWeight: '600',
+    fontWeight: '800',
     padding: 0,
     margin: 0,
   },
-  empty: { textAlign: 'center', color: '#64748b', marginTop: 14 },
+  empty: {
+    textAlign: 'center',
+    color: '#64748b',
+    marginTop: 14,
+    fontWeight: '800',
+    backgroundColor: '#fbfdff',
+    borderWidth: 1,
+    borderColor: '#d7e3ec',
+    borderRadius: 16,
+    padding: 14,
+  },
   card: {
     borderWidth: 1,
-    borderColor: '#bbf7d0',
-    backgroundColor: '#f0fdf4',
-    borderRadius: 12,
+    borderColor: '#cdeedd',
+    backgroundColor: '#f7fffb',
+    borderRadius: 18,
     padding: 12,
     gap: 8,
     position: 'relative',
     overflow: 'hidden',
+    shadowColor: '#9db7ca',
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 2,
   },
-  cardAccent: {
+  cardGlow: {
     position: 'absolute',
-    left: 0,
-    right: 0,
-    top: 0,
-    height: 3,
-    backgroundColor: '#16a34a',
+    right: -34,
+    top: -34,
+    width: 110,
+    height: 110,
+    borderRadius: 55,
+    backgroundColor: 'rgba(34, 197, 94, 0.12)',
   },
   cardHead: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
-  centro: { fontSize: 17, fontWeight: '900', color: '#0f172a' },
+  centro: { fontSize: 17, fontWeight: '900', color: '#163041' },
   row: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 2 },
-  rowWrap: { gap: 2 },
-  meta: { fontSize: 12, color: '#334155', fontWeight: '700' },
+  rowWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  metaChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#d7e3ec',
+    backgroundColor: 'rgba(255,255,255,0.72)',
+  },
+  meta: { fontSize: 12, color: '#334155', fontWeight: '800' },
   badge: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -299,10 +404,15 @@ const styles = StyleSheet.create({
   btn: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#0b3b8c',
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+    backgroundColor: '#0d4a8c',
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    shadowColor: '#0b3b8c',
+    shadowOpacity: 0.16,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 3,
   },
-  btnText: { color: '#fff', fontWeight: '700', fontSize: 12 },
+  btnText: { color: '#fff', fontWeight: '800', fontSize: 12 },
 });

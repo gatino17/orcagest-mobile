@@ -1251,9 +1251,19 @@ export default function RendicionesScreen() {
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.scrollContent}>
         <View style={styles.headerCard}>
+          <View pointerEvents="none" style={styles.headerGlowPrimary} />
+          <View pointerEvents="none" style={styles.headerGlowSecondary} />
           <View style={styles.headerTop}>
-            <ThemedText style={styles.title}>Rendiciones</ThemedText>
-            <ThemedText style={styles.subtitle}>Registro de gastos por tecnico</ThemedText>
+            <View style={styles.headerIcon}>
+              <Ionicons name="wallet-outline" size={20} color="#fff" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <ThemedText style={styles.title}>Rendiciones</ThemedText>
+              <ThemedText style={styles.subtitle}>Registro de gastos por tecnico</ThemedText>
+            </View>
+            <View style={styles.headerStatusPill}>
+              <Ionicons name="shield-checkmark-outline" size={14} color="#d8ffe7" />
+            </View>
           </View>
           <View style={styles.kpiGroup}>
             <View style={styles.kpiChip}>
@@ -1271,28 +1281,50 @@ export default function RendicionesScreen() {
           </View>
         </View>
         <View style={[styles.pendingCard, styles.pendingJobsCard]}>
+          <View pointerEvents="none" style={styles.pendingJobsGlowBlue} />
+          <View pointerEvents="none" style={styles.pendingJobsGlowGreen} />
           <View style={styles.pendingJobsHeader}>
             <View style={styles.pendingJobsTitleWrap}>
-              <Ionicons name="document-text-outline" size={16} color="#0f3a8c" />
-            <ThemedText style={styles.pendingJobsTitle}>Pendiente de rendicion</ThemedText>
-          </View>
-            <ThemedText style={styles.pendingJobsCount}>{trabajosPendientesRendicion.all.length}</ThemedText>
+              <View style={styles.pendingJobsIcon}>
+                <Ionicons name="document-text-outline" size={16} color="#9fd7ff" />
+              </View>
+              <View style={styles.pendingJobsTitleBlock}>
+                <ThemedText style={styles.pendingJobsTitle}>Pendiente de rendicion</ThemedText>
+                <ThemedText style={styles.pendingJobsSubtitle}>Trabajos con gasto por cerrar</ThemedText>
+              </View>
+            </View>
+            <View style={styles.pendingJobsCountPill}>
+              <ThemedText style={styles.pendingJobsCount}>{trabajosPendientesRendicion.all.length}</ThemedText>
+              <ThemedText style={styles.pendingJobsCountLabel}>pend.</ThemedText>
+            </View>
           </View>
           <View style={styles.pendingByTypeCards}>
             <View style={[styles.pendingTypeCard, styles.pendingTypeCardInst]}>
-              <ThemedText style={styles.pendingTypeLabel}>Instalacion</ThemedText>
+              <View style={styles.pendingTypeTop}>
+                <Ionicons name="construct-outline" size={13} color="#1d4ed8" />
+                <ThemedText style={styles.pendingTypeLabel}>Instalacion</ThemedText>
+              </View>
               <ThemedText style={styles.pendingTypeValue}>{trabajosPendientesRendicion.instalacion.length}</ThemedText>
             </View>
             <View style={[styles.pendingTypeCard, styles.pendingTypeCardMant]}>
-              <ThemedText style={styles.pendingTypeLabel}>Mantencion</ThemedText>
+              <View style={styles.pendingTypeTop}>
+                <Ionicons name="build-outline" size={13} color="#15803d" />
+                <ThemedText style={styles.pendingTypeLabel}>Mantencion</ThemedText>
+              </View>
               <ThemedText style={styles.pendingTypeValue}>{trabajosPendientesRendicion.mantencion.length}</ThemedText>
             </View>
             <View style={[styles.pendingTypeCard, styles.pendingTypeCardRet]}>
-              <ThemedText style={styles.pendingTypeLabel}>Retiro</ThemedText>
+              <View style={styles.pendingTypeTop}>
+                <Ionicons name="exit-outline" size={13} color="#c2410c" />
+                <ThemedText style={styles.pendingTypeLabel}>Retiro</ThemedText>
+              </View>
               <ThemedText style={styles.pendingTypeValue}>{trabajosPendientesRendicion.retiro.length}</ThemedText>
             </View>
             <View style={[styles.pendingTypeCard, styles.pendingTypeCardLev]}>
-              <ThemedText style={styles.pendingTypeLabel}>Visitas</ThemedText>
+              <View style={styles.pendingTypeTop}>
+                <Ionicons name="map-outline" size={13} color="#0284c7" />
+                <ThemedText style={styles.pendingTypeLabel}>Visitas</ThemedText>
+              </View>
               <ThemedText style={styles.pendingTypeValue}>{trabajosPendientesRendicion.levantamiento.length}</ThemedText>
             </View>
           </View>
@@ -2177,34 +2209,74 @@ export default function RendicionesScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f1f5f9', paddingTop: (RNStatusBar.currentHeight || 24) + 6 },
-  scrollContent: { padding: 12, gap: 12, paddingBottom: 32 },
+  container: { flex: 1, backgroundColor: '#eef3f6', paddingTop: (RNStatusBar.currentHeight || 24) + 6 },
+  scrollContent: { padding: 16, gap: 12, paddingBottom: 32 },
   headerCard: {
-    backgroundColor: '#0b3b8f',
-    borderRadius: 16,
-    padding: 14,
-    gap: 10,
+    backgroundColor: '#06141d',
+    borderRadius: 22,
+    padding: 16,
+    gap: 14,
     borderWidth: 1,
-    borderColor: '#1d4ed8',
-    shadowColor: '#0f172a',
-    shadowOpacity: 0.18,
-    shadowOffset: { width: 0, height: 7 },
-    shadowRadius: 12,
-    elevation: 5,
+    borderColor: 'rgba(45, 165, 255, 0.14)',
+    shadowColor: '#06141d',
+    shadowOpacity: 0.22,
+    shadowOffset: { width: 0, height: 8 },
+    shadowRadius: 16,
+    elevation: 4,
+    overflow: 'hidden',
+    position: 'relative',
   },
-  headerTop: { gap: 2 },
-  title: { color: '#fff', fontSize: 20, fontWeight: '800' },
-  subtitle: { color: '#dbeafe', fontSize: 12, fontWeight: '600' },
-  kpiGroup: { flexDirection: 'row', gap: 6, flexWrap: 'wrap' },
-  kpiChip: { backgroundColor: '#fef2f2', borderRadius: 12, paddingHorizontal: 11, paddingVertical: 7, borderWidth: 1, borderColor: '#fecaca' },
-  kpiLabel: { color: '#991b1b', fontSize: 11, fontWeight: '700' },
-  kpiValue: { color: '#b91c1c', fontSize: 12, fontWeight: '900' },
-  kpiChipAbono: { backgroundColor: '#ecfdf5', borderRadius: 12, paddingHorizontal: 11, paddingVertical: 7, borderWidth: 1, borderColor: '#a7f3d0' },
-  kpiLabelAbono: { color: '#166534', fontSize: 11, fontWeight: '700' },
-  kpiValueAbono: { color: '#15803d', fontSize: 12, fontWeight: '900' },
-  kpiChipSaldo: { backgroundColor: '#eff6ff', borderRadius: 12, paddingHorizontal: 11, paddingVertical: 7, borderWidth: 1, borderColor: '#bfdbfe' },
-  kpiLabelSaldo: { color: '#1e3a8a', fontSize: 11, fontWeight: '700' },
-  kpiValueSaldo: { color: '#1d4ed8', fontSize: 12, fontWeight: '900' },
+  headerGlowPrimary: {
+    position: 'absolute',
+    width: 160,
+    height: 160,
+    borderRadius: 80,
+    backgroundColor: 'rgba(45, 165, 255, 0.20)',
+    right: -54,
+    top: -74,
+  },
+  headerGlowSecondary: {
+    position: 'absolute',
+    width: 130,
+    height: 130,
+    borderRadius: 65,
+    backgroundColor: 'rgba(34, 197, 94, 0.10)',
+    left: -48,
+    bottom: -62,
+  },
+  headerTop: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  headerIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: 'rgba(255,255,255,0.10)',
+    borderWidth: 1,
+    borderColor: 'rgba(159, 215, 255, 0.18)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  headerStatusPill: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(34, 197, 94, 0.18)',
+    backgroundColor: 'rgba(22, 163, 74, 0.10)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  title: { color: '#fff', fontSize: 20, fontWeight: '900' },
+  subtitle: { color: '#98c7e8', fontSize: 12.5, fontWeight: '700', marginTop: 2 },
+  kpiGroup: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
+  kpiChip: { backgroundColor: 'rgba(255, 255, 255, 0.07)', borderRadius: 14, paddingHorizontal: 11, paddingVertical: 8, borderWidth: 1, borderColor: 'rgba(248, 113, 113, 0.28)' },
+  kpiLabel: { color: '#fecaca', fontSize: 11, fontWeight: '800' },
+  kpiValue: { color: '#fff7f7', fontSize: 12, fontWeight: '900' },
+  kpiChipAbono: { backgroundColor: 'rgba(255, 255, 255, 0.07)', borderRadius: 14, paddingHorizontal: 11, paddingVertical: 8, borderWidth: 1, borderColor: 'rgba(34, 197, 94, 0.24)' },
+  kpiLabelAbono: { color: '#d8ffe7', fontSize: 11, fontWeight: '800' },
+  kpiValueAbono: { color: '#f7fffb', fontSize: 12, fontWeight: '900' },
+  kpiChipSaldo: { backgroundColor: 'rgba(255, 255, 255, 0.07)', borderRadius: 14, paddingHorizontal: 11, paddingVertical: 8, borderWidth: 1, borderColor: 'rgba(159, 215, 255, 0.20)' },
+  kpiLabelSaldo: { color: '#9fd7ff', fontSize: 11, fontWeight: '800' },
+  kpiValueSaldo: { color: '#f8fbff', fontSize: 12, fontWeight: '900' },
   pendingCard: {
     backgroundColor: '#fffbeb',
     borderColor: '#fcd34d',
@@ -2217,62 +2289,111 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   pendingJobsCard: {
-    backgroundColor: '#fff7f7',
-    borderColor: '#fca5a5',
-    borderLeftWidth: 4,
-    borderLeftColor: '#dc2626',
+    backgroundColor: '#f4f9ff',
+    borderColor: '#b8dff6',
+    borderLeftWidth: 0,
     flexDirection: 'column',
     alignItems: 'stretch',
-    gap: 8,
+    gap: 11,
+    borderRadius: 18,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    shadowColor: '#9db7ca',
+    shadowOpacity: 0.08,
+    shadowOffset: { width: 0, height: 6 },
+    shadowRadius: 12,
+    elevation: 2,
+    overflow: 'hidden',
+    position: 'relative',
   },
-  pendingJobsHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  pendingJobsTitleWrap: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  pendingJobsTitle: { color: '#991b1b', fontWeight: '900', fontSize: 13 },
-  pendingJobsCount: {
-    color: '#991b1b',
-    fontWeight: '900',
-    fontSize: 12,
+  pendingJobsGlowBlue: {
+    position: 'absolute',
+    width: 150,
+    height: 150,
+    borderRadius: 75,
+    backgroundColor: 'rgba(45, 165, 255, 0.16)',
+    right: -58,
+    top: -74,
+  },
+  pendingJobsGlowGreen: {
+    position: 'absolute',
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    backgroundColor: 'rgba(34, 197, 94, 0.10)',
+    left: -52,
+    bottom: -70,
+  },
+  pendingJobsHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 10 },
+  pendingJobsTitleWrap: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 9 },
+  pendingJobsIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#06141d',
+    borderWidth: 1,
+    borderColor: 'rgba(45, 165, 255, 0.28)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  pendingJobsTitleBlock: { flex: 1 },
+  pendingJobsTitle: { color: '#102a3d', fontWeight: '900', fontSize: 14 },
+  pendingJobsSubtitle: { color: '#2b6b93', fontWeight: '800', fontSize: 11.5, marginTop: 1 },
+  pendingJobsCountPill: {
+    minWidth: 48,
+    borderRadius: 18,
     backgroundColor: '#fee2e2',
     borderWidth: 1,
-    borderColor: '#fecaca',
+    borderColor: '#fca5a5',
+    alignItems: 'center',
+    justifyContent: 'center',
     paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 999,
+    paddingVertical: 5,
   },
+  pendingJobsCount: {
+    color: '#b91c1c',
+    fontWeight: '900',
+    fontSize: 15,
+  },
+  pendingJobsCountLabel: { color: '#be123c', fontWeight: '800', fontSize: 9, marginTop: -2 },
   pendingJobsEmpty: { color: '#64748b', fontSize: 12, fontWeight: '700' },
   pendingByTypeCards: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
   pendingTypeCard: {
-    flex: 1,
-    borderRadius: 10,
+    flexBasis: '48%',
+    flexGrow: 1,
+    borderRadius: 16,
     borderWidth: 1,
-    paddingHorizontal: 8,
-    paddingVertical: 7,
-    minHeight: 52,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    minHeight: 62,
     justifyContent: 'space-between',
   },
   pendingTypeCardInst: { backgroundColor: '#dbeafe', borderColor: '#93c5fd' },
   pendingTypeCardMant: { backgroundColor: '#dcfce7', borderColor: '#86efac' },
   pendingTypeCardRet: { backgroundColor: '#ffedd5', borderColor: '#fdba74' },
-  pendingTypeCardLev: { backgroundColor: '#ede9fe', borderColor: '#c4b5fd' },
-  pendingTypeLabel: { color: '#334155', fontSize: 11, fontWeight: '700' },
-  pendingTypeValue: { color: '#0f172a', fontSize: 18, fontWeight: '900' },
+  pendingTypeCardLev: { backgroundColor: '#e0f2fe', borderColor: '#7dd3fc' },
+  pendingTypeTop: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  pendingTypeLabel: { color: '#17324a', fontSize: 11, fontWeight: '900' },
+  pendingTypeValue: { color: '#06141d', fontSize: 21, fontWeight: '900', marginTop: 4 },
   pendingInstCard: {
     borderWidth: 1,
-    borderColor: '#93c5fd',
-    backgroundColor: '#f8fbff',
-    borderRadius: 10,
-    padding: 8,
-    gap: 6,
+    borderColor: '#bfdbfe',
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    padding: 10,
+    gap: 8,
+    borderLeftWidth: 4,
+    borderLeftColor: '#2da5ff',
   },
-  pendingInstTitle: { color: '#1e3a8a', fontWeight: '800', fontSize: 12 },
+  pendingInstTitle: { color: '#1e3a8a', fontWeight: '900', fontSize: 12.5 },
   pendingInstRow: {
     borderWidth: 1,
     borderColor: '#dbeafe',
-    backgroundColor: '#fff',
-    borderRadius: 8,
-    paddingHorizontal: 8,
-    paddingVertical: 6,
-    gap: 2,
+    backgroundColor: '#f8fbff',
+    borderRadius: 12,
+    paddingHorizontal: 9,
+    paddingVertical: 8,
+    gap: 3,
   },
   pendingInstTopRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   stepIconsWrap: { flexDirection: 'row', alignItems: 'center', gap: 7 },
@@ -2306,75 +2427,81 @@ const styles = StyleSheet.create({
   pendingInstText: { color: '#334155', fontWeight: '700', fontSize: 12 },
   pendingMantCard: {
     borderWidth: 1,
-    borderColor: '#86efac',
-    backgroundColor: '#f0fdf4',
-    borderRadius: 10,
-    padding: 8,
-    gap: 6,
+    borderColor: '#bbf7d0',
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    padding: 10,
+    gap: 8,
+    borderLeftWidth: 4,
+    borderLeftColor: '#22c55e',
   },
-  pendingMantTitle: { color: '#166534', fontWeight: '800', fontSize: 12 },
+  pendingMantTitle: { color: '#166534', fontWeight: '900', fontSize: 12.5 },
   pendingMantRow: {
     borderWidth: 1,
     borderColor: '#bbf7d0',
-    backgroundColor: '#fff',
-    borderRadius: 8,
-    paddingHorizontal: 8,
-    paddingVertical: 6,
-    gap: 2,
+    backgroundColor: '#f8fffb',
+    borderRadius: 12,
+    paddingHorizontal: 9,
+    paddingVertical: 8,
+    gap: 3,
   },
   pendingMantType: { color: '#15803d', fontWeight: '900', fontSize: 11 },
   pendingMantText: { color: '#334155', fontWeight: '700', fontSize: 12 },
   pendingRetCard: {
     borderWidth: 1,
-    borderColor: '#fdba74',
-    backgroundColor: '#fff7ed',
-    borderRadius: 10,
-    padding: 8,
-    gap: 6,
+    borderColor: '#fed7aa',
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    padding: 10,
+    gap: 8,
+    borderLeftWidth: 4,
+    borderLeftColor: '#f97316',
   },
-  pendingRetTitle: { color: '#9a3412', fontWeight: '800', fontSize: 12 },
+  pendingRetTitle: { color: '#9a3412', fontWeight: '900', fontSize: 12.5 },
   pendingRetRow: {
     borderWidth: 1,
     borderColor: '#fed7aa',
-    backgroundColor: '#fff',
-    borderRadius: 8,
-    paddingHorizontal: 8,
-    paddingVertical: 6,
-    gap: 2,
+    backgroundColor: '#fffaf4',
+    borderRadius: 12,
+    paddingHorizontal: 9,
+    paddingVertical: 8,
+    gap: 3,
   },
   pendingRetType: { color: '#c2410c', fontWeight: '900', fontSize: 11 },
   pendingRetText: { color: '#334155', fontWeight: '700', fontSize: 12 },
   pendingLevCard: {
     borderWidth: 1,
-    borderColor: '#c4b5fd',
-    backgroundColor: '#f5f3ff',
-    borderRadius: 10,
-    padding: 8,
-    gap: 6,
-  },
-  pendingLevTitle: { color: '#5b21b6', fontWeight: '800', fontSize: 12 },
-  pendingLevRow: {
-    borderWidth: 1,
-    borderColor: '#ddd6fe',
-    backgroundColor: '#fff',
-    borderRadius: 8,
-    paddingHorizontal: 8,
-    paddingVertical: 6,
-    gap: 2,
-  },
-  pendingLevType: { color: '#6d28d9', fontWeight: '900', fontSize: 11 },
-  pendingLevText: { color: '#334155', fontWeight: '700', fontSize: 12 },
-  card: {
+    borderColor: '#bae6fd',
     backgroundColor: '#ffffff',
     borderRadius: 16,
+    padding: 10,
+    gap: 8,
+    borderLeftWidth: 4,
+    borderLeftColor: '#0ea5e9',
+  },
+  pendingLevTitle: { color: '#075985', fontWeight: '900', fontSize: 12.5 },
+  pendingLevRow: {
     borderWidth: 1,
-    borderColor: '#dbe5f1',
-    padding: 12,
-    gap: 9,
-    shadowColor: '#0f172a',
-    shadowOpacity: 0.07,
-    shadowOffset: { width: 0, height: 4 },
-    shadowRadius: 10,
+    borderColor: '#bae6fd',
+    backgroundColor: '#f0f9ff',
+    borderRadius: 12,
+    paddingHorizontal: 9,
+    paddingVertical: 8,
+    gap: 3,
+  },
+  pendingLevType: { color: '#0284c7', fontWeight: '900', fontSize: 11 },
+  pendingLevText: { color: '#334155', fontWeight: '700', fontSize: 12 },
+  card: {
+    backgroundColor: '#fbfdff',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#d7e3ec',
+    padding: 14,
+    gap: 10,
+    shadowColor: '#9db7ca',
+    shadowOpacity: 0.08,
+    shadowOffset: { width: 0, height: 6 },
+    shadowRadius: 12,
     elevation: 2,
   },
   rendicionModalCard: {
@@ -2395,7 +2522,7 @@ const styles = StyleSheet.create({
   },
   modalHeaderRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   filterHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  sectionTitle: { color: '#0f172a', fontSize: 15, fontWeight: '900', marginBottom: 1 },
+  sectionTitle: { color: '#163041', fontSize: 15, fontWeight: '900', marginBottom: 1 },
   sectionTitleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   sectionActionsRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   historialOpenBtn: {
@@ -2410,7 +2537,7 @@ const styles = StyleSheet.create({
     paddingVertical: 5,
   },
   historialOpenBtnText: { color: '#0f766e', fontSize: 11.5, fontWeight: '800' },
-  newBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#1d4ed8', borderRadius: 9, paddingHorizontal: 10, paddingVertical: 8 },
+  newBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#0d4a8c', borderRadius: 14, paddingHorizontal: 12, paddingVertical: 9 },
   newBtnText: { color: '#fff', fontWeight: '800', fontSize: 12 },
   label: { color: '#475569', fontWeight: '700', fontSize: 11 },
   labelSaldoDisponible: { color: '#166534', fontWeight: '800', fontSize: 11 },
@@ -2722,14 +2849,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 6,
     borderWidth: 1,
-    borderColor: '#bfdbfe',
-    backgroundColor: '#eff6ff',
-    borderRadius: 8,
+    borderColor: '#d4e0ea',
+    backgroundColor: '#ffffff',
+    borderRadius: 14,
     paddingHorizontal: 10,
     paddingVertical: 8,
     alignSelf: 'flex-start',
   },
-  extraOpenBtnText: { color: '#1d4ed8', fontWeight: '800', fontSize: 12 },
+  extraOpenBtnText: { color: '#164e9c', fontWeight: '800', fontSize: 12 },
   extraCountText: { color: '#475569', fontWeight: '700', fontSize: 12 },
   extraModalCard: {
     width: '100%',
@@ -2759,26 +2886,26 @@ const styles = StyleSheet.create({
   extraItemSub: { color: '#64748b', fontWeight: '600', fontSize: 11 },
   extraCloseBtn: {
     alignSelf: 'flex-end',
-    backgroundColor: '#1d4ed8',
-    borderRadius: 9,
+    backgroundColor: '#0d4a8c',
+    borderRadius: 14,
     paddingHorizontal: 14,
     paddingVertical: 9,
   },
   extraCloseBtnText: { color: '#fff', fontWeight: '800' },
   actionsRow: { flexDirection: 'row', gap: 8, marginTop: 4 },
-  actionBtn: { flex: 1, alignItems: 'center', justifyContent: 'center', borderRadius: 10, paddingVertical: 10 },
+  actionBtn: { flex: 1, alignItems: 'center', justifyContent: 'center', borderRadius: 14, paddingVertical: 10 },
   draftBtn: { backgroundColor: '#e2e8f0' },
   sendBtn: { backgroundColor: '#16a34a' },
   draftText: { color: '#0f172a', fontWeight: '800' },
   sendText: { color: '#fff', fontWeight: '800' },
-  itemRow: { flexDirection: 'row', alignItems: 'center', gap: 8, borderBottomWidth: 1, borderBottomColor: '#f1f5f9', paddingVertical: 7 },
-  itemTitle: { color: '#0f172a', fontWeight: '700', fontSize: 13 },
-  itemSub: { color: '#64748b', fontSize: 11 },
-  badge: { borderRadius: 999, paddingHorizontal: 8, paddingVertical: 4 },
-  badgeOk: { backgroundColor: '#dcfce7' },
-  badgeWarn: { backgroundColor: '#fef3c7' },
-  badgeInfo: { backgroundColor: '#dbeafe' },
-  badgeGray: { backgroundColor: '#e2e8f0' },
+  itemRow: { flexDirection: 'row', alignItems: 'center', gap: 8, borderBottomWidth: 1, borderBottomColor: '#eef2f7', paddingVertical: 10 },
+  itemTitle: { color: '#163041', fontWeight: '800', fontSize: 13 },
+  itemSub: { color: '#64748b', fontSize: 11, fontWeight: '700' },
+  badge: { borderRadius: 999, paddingHorizontal: 8, paddingVertical: 4, borderWidth: 1 },
+  badgeOk: { backgroundColor: '#dcfce7', borderColor: '#86efac' },
+  badgeWarn: { backgroundColor: '#fef3c7', borderColor: '#fde68a' },
+  badgeInfo: { backgroundColor: '#dbeafe', borderColor: '#93c5fd' },
+  badgeGray: { backgroundColor: '#e2e8f0', borderColor: '#cbd5e1' },
   badgeText: { color: '#0f172a', fontWeight: '800', fontSize: 11, textTransform: 'capitalize' },
   requestEditBtn: {
     flexDirection: 'row',

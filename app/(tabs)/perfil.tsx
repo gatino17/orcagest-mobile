@@ -1,5 +1,5 @@
 import React, { useContext } from 'react';
-import { StyleSheet, Pressable, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -12,8 +12,6 @@ export default function PerfilScreen() {
   const { name, role, userId, setToken } = useContext(AuthContext);
   const router = useRouter();
 
-  const initial = (name || 'U').trim()[0]?.toUpperCase() || 'U';
-
   const logout = async () => {
     await setToken(null);
     router.replace('login');
@@ -22,46 +20,75 @@ export default function PerfilScreen() {
   return (
     <SafeAreaView edges={['top']} style={styles.container}>
       <ThemedView style={styles.heroCard}>
+        <View pointerEvents="none" style={styles.heroGlowPrimary} />
+        <View pointerEvents="none" style={styles.heroGlowSecondary} />
+
         <View style={styles.headerRow}>
-          <View style={styles.avatarWrap}>
-            <View style={styles.avatarGlow} />
-            <View style={styles.avatar}>
-              <ThemedText style={styles.avatarText}>{initial}</ThemedText>
+          <View style={styles.logoWrap}>
+            <View style={styles.logoMark}>
+              <View style={[styles.logoOrbit, styles.logoOrbitBack]} />
+              <View style={[styles.logoOrbit, styles.logoOrbitFront]} />
+              <View style={styles.logoCore} />
             </View>
           </View>
+
           <View style={{ flex: 1 }}>
-            <ThemedText style={styles.hello}>MI PERFIL</ThemedText>
-            <ThemedText style={styles.name}>{name || 'Sin nombre'}</ThemedText>
-            <View style={styles.roleChip}>
-              <ThemedText style={styles.roleChipText}>{role || 'Rol no asignado'}</ThemedText>
+            <ThemedText style={styles.brandTitle}>ORCAGEST</ThemedText>
+            <ThemedText style={styles.brandSub}>GMS</ThemedText>
+          </View>
+
+          <View style={styles.secureBtn}>
+            <Ionicons name="shield-checkmark-outline" size={18} color="#d8ffe7" />
+          </View>
+        </View>
+
+        <View style={styles.profileBlock}>
+          <ThemedText style={styles.hello}>MI PERFIL</ThemedText>
+          <ThemedText style={styles.name} numberOfLines={2}>
+            {name || 'Sin nombre'}
+          </ThemedText>
+        </View>
+
+        <View style={styles.heroInfoPanel}>
+          <View style={styles.heroInfoItem}>
+            <View style={styles.heroInfoIcon}>
+              <Ionicons name="id-card-outline" size={14} color="#9fd7ff" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <ThemedText style={styles.heroInfoLabel}>ID usuario</ThemedText>
+              <ThemedText style={styles.heroInfoText}>{userId ?? '-'}</ThemedText>
             </View>
           </View>
-          <View style={styles.bellBtn}>
-            <Ionicons name="shield-checkmark-outline" size={18} color="#0b3b8c" />
+
+          <View style={styles.heroInfoDivider} />
+
+          <View style={styles.heroInfoItem}>
+            <View style={styles.heroInfoIcon}>
+              <Ionicons name="person-circle-outline" size={14} color="#d8ffe7" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <ThemedText style={styles.heroInfoLabel}>Rol</ThemedText>
+              <ThemedText style={styles.heroInfoText}>{role || 'No asignado'}</ThemedText>
+            </View>
           </View>
         </View>
       </ThemedView>
 
-      <View style={styles.sectionHeaderRow}>
-        <ThemedText type="subtitle" style={styles.sectionTitleLine}>Datos de usuario</ThemedText>
-        <View style={styles.sectionLine} />
-      </View>
-
-      <ThemedView style={styles.card}>
-        <View style={styles.infoRow}>
-          <View style={styles.infoIcon}>
-            <Ionicons name="id-card-outline" size={14} color="#ffffff" />
+      <ThemedView style={styles.sessionCard}>
+        <View style={styles.sessionInfo}>
+          <View style={styles.sessionIcon}>
+            <Ionicons name="lock-closed-outline" size={15} color="#0f766e" />
           </View>
-          <View>
-            <ThemedText style={styles.infoLabel}>Identificador</ThemedText>
-            <ThemedText style={styles.infoText}>ID usuario: {userId ?? '-'}</ThemedText>
+          <View style={{ flex: 1 }}>
+            <ThemedText style={styles.sessionTitle}>Sesión activa</ThemedText>
+            <ThemedText style={styles.sessionText}>Acceso seguro a Orcagest Mobile</ThemedText>
           </View>
         </View>
       </ThemedView>
 
       <Pressable style={styles.logoutBtn} onPress={logout}>
-        <Ionicons name="log-out-outline" size={18} color="#fff" style={{ marginRight: 8 }} />
-        <ThemedText style={styles.logoutText}>Cerrar sesion</ThemedText>
+        <Ionicons name="log-out-outline" size={18} color="#dc2626" style={{ marginRight: 8 }} />
+        <ThemedText style={styles.logoutText}>Cerrar sesión</ThemedText>
       </Pressable>
     </SafeAreaView>
   );
@@ -70,159 +97,219 @@ export default function PerfilScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#ffffff',
+    backgroundColor: '#eef3f6',
     padding: 16,
     paddingTop: 12,
     paddingBottom: 18,
     gap: 14,
   },
   heroCard: {
-    backgroundColor: '#f8fbff',
-    borderRadius: 16,
-    padding: 14,
+    backgroundColor: '#06141d',
+    borderRadius: 22,
+    padding: 16,
     borderWidth: 1,
-    borderColor: '#dbeafe',
-    shadowColor: '#1d4ed8',
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 3 },
-    elevation: 3,
+    borderColor: 'rgba(45, 165, 255, 0.14)',
+    shadowColor: '#06141d',
+    shadowOpacity: 0.22,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 4,
+    overflow: 'hidden',
+    position: 'relative',
   },
-  card: {
-    backgroundColor: '#ffffff',
-    borderRadius: 14,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    gap: 10,
-    shadowColor: '#0f172a',
-    shadowOpacity: 0.03,
-    shadowRadius: 4,
-    shadowOffset: { width: 0, height: 1 },
-    elevation: 1,
+  heroGlowPrimary: {
+    position: 'absolute',
+    width: 160,
+    height: 160,
+    borderRadius: 80,
+    backgroundColor: 'rgba(45, 165, 255, 0.20)',
+    right: -54,
+    top: -74,
+  },
+  heroGlowSecondary: {
+    position: 'absolute',
+    width: 130,
+    height: 130,
+    borderRadius: 65,
+    backgroundColor: 'rgba(34, 197, 94, 0.10)',
+    left: -48,
+    bottom: -62,
   },
   headerRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
   },
-  avatarWrap: {
-    width: 58,
-    height: 58,
-    justifyContent: 'center',
-    alignItems: 'center',
-    position: 'relative',
-  },
-  avatarGlow: {
-    position: 'absolute',
-    width: 58,
-    height: 58,
-    borderRadius: 29,
-    backgroundColor: 'rgba(37, 99, 235, 0.16)',
-  },
-  avatar: {
+  logoWrap: {
     width: 48,
     height: 48,
     borderRadius: 24,
-    backgroundColor: '#1d4ed8',
+    backgroundColor: '#edf6fd',
     justifyContent: 'center',
     alignItems: 'center',
+    shadowColor: '#67c1ff',
+    shadowOpacity: 0.18,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 3,
   },
-  avatarText: {
-    color: '#ffffff',
-    fontWeight: '800',
-    fontSize: 19,
+  logoMark: {
+    width: 28,
+    height: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
   },
-  hello: {
-    color: '#64748b',
-    fontWeight: '700',
-    fontSize: 11,
-    letterSpacing: 0.6,
-  },
-  name: {
-    color: '#0f172a',
-    fontWeight: '900',
-    fontSize: 24,
-    lineHeight: 26,
-  },
-  roleChip: {
-    marginTop: 4,
-    alignSelf: 'flex-start',
-    backgroundColor: '#dbeafe',
+  logoOrbit: {
+    position: 'absolute',
     borderRadius: 999,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
+    borderWidth: 4,
   },
-  roleChipText: {
-    color: '#0b3b8c',
-    fontWeight: '700',
-    fontSize: 10,
-    textTransform: 'capitalize',
+  logoOrbitBack: {
+    width: 22,
+    height: 10,
+    borderColor: '#206892',
+    transform: [{ rotate: '-22deg' }, { translateY: -2 }],
   },
-  bellBtn: {
+  logoOrbitFront: {
+    width: 24,
+    height: 12,
+    borderColor: '#2da5ff',
+    transform: [{ rotate: '20deg' }, { translateY: 3 }],
+  },
+  logoCore: {
+    width: 11,
+    height: 11,
+    borderRadius: 6,
+    backgroundColor: '#9fd7ff',
+  },
+  brandTitle: {
+    color: '#ffffff',
+    fontWeight: '900',
+    fontSize: 18,
+    letterSpacing: 1.2,
+  },
+  brandSub: {
+    color: '#8acbfa',
+    fontWeight: '800',
+    fontSize: 11,
+    marginTop: -2,
+  },
+  secureBtn: {
     width: 36,
     height: 36,
     borderRadius: 18,
     borderWidth: 1,
-    borderColor: '#bfdbfe',
-    backgroundColor: '#eff6ff',
+    borderColor: 'rgba(34, 197, 94, 0.18)',
+    backgroundColor: 'rgba(22, 163, 74, 0.10)',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  sectionHeaderRow: {
+  profileBlock: {
+    marginTop: 18,
+    gap: 5,
+  },
+  hello: {
+    color: '#98c7e8',
+    fontWeight: '800',
+    fontSize: 11,
+    letterSpacing: 0.8,
+  },
+  name: {
+    color: '#ffffff',
+    fontWeight: '900',
+    fontSize: 25,
+    lineHeight: 29,
+  },
+  heroInfoPanel: {
+    marginTop: 14,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(159, 215, 255, 0.15)',
+    backgroundColor: 'rgba(255, 255, 255, 0.07)',
+    padding: 12,
+    gap: 10,
+  },
+  heroInfoItem: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
-    marginTop: 2,
   },
-  sectionTitleLine: {
-    color: '#0f172a',
-    fontWeight: '900',
-  },
-  sectionLine: {
-    flex: 1,
-    height: 1,
-    backgroundColor: '#d1d5db',
-  },
-  infoRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 8,
-  },
-  infoIcon: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: '#2563eb',
+  heroInfoIcon: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(159, 215, 255, 0.13)',
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: 2,
   },
-  infoLabel: {
-    color: '#64748b',
-    fontWeight: '700',
-    fontSize: 11,
+  heroInfoLabel: {
+    color: '#9bb4c4',
+    fontWeight: '800',
+    fontSize: 10.5,
+    textTransform: 'uppercase',
   },
-  infoText: {
-    color: '#0f172a',
+  heroInfoText: {
+    color: '#f8fbff',
+    fontWeight: '800',
+    fontSize: 13,
+    marginTop: 1,
+    textTransform: 'capitalize',
+  },
+  heroInfoDivider: {
+    height: 1,
+    backgroundColor: 'rgba(159, 215, 255, 0.12)',
+  },
+  sessionCard: {
+    backgroundColor: '#f7fffb',
+    borderRadius: 18,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#cdeedd',
+  },
+  sessionInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  sessionIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: '#dff8e8',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sessionTitle: {
+    color: '#0f766e',
+    fontWeight: '900',
+    fontSize: 13,
+  },
+  sessionText: {
+    color: '#5d766e',
     fontWeight: '700',
-    fontSize: 14,
+    fontSize: 11.5,
+    marginTop: 1,
   },
   logoutBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 12,
-    borderRadius: 12,
-    backgroundColor: '#e11d48',
+    paddingVertical: 13,
+    borderRadius: 16,
+    backgroundColor: '#fff7f7',
+    borderWidth: 1,
+    borderColor: '#fecaca',
     shadowColor: '#e11d48',
-    shadowOpacity: 0.16,
+    shadowOpacity: 0.08,
     shadowRadius: 8,
     shadowOffset: { width: 0, height: 3 },
-    elevation: 2,
+    elevation: 1,
   },
   logoutText: {
-    color: '#ffffff',
+    color: '#dc2626',
     fontWeight: '800',
     fontSize: 14,
   },

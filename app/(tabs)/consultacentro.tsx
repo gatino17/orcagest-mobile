@@ -138,7 +138,7 @@ export default function ConsultaCentroScreen() {
         } else {
           const centroLocal =
             centros.find((x) => (x.id_centro ?? x.id) === centroSel) ||
-            centroIndex.find((x) => (x.id_centro ?? x.id) === centroSel) ||
+            centroIndex.find((x) => x.id === centroSel) ||
             null;
           setHistorial(centroLocal ? { centro: centroLocal, equipos_ip: [], historial: {} } : null);
           setError(null);
@@ -216,16 +216,28 @@ export default function ConsultaCentroScreen() {
     <SafeAreaView edges={['top']} style={styles.safe}>
       <ScrollView style={styles.scroll} contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
         <View style={styles.hero}>
+          <View pointerEvents="none" style={styles.heroGlowPrimary} />
+          <View pointerEvents="none" style={styles.heroGlowSecondary} />
           <View style={styles.heroRow}>
             <View style={styles.heroIcon}>
               <Ionicons name="search-outline" size={20} color="#ffffff" />
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.heroTitle}>Consulta de centro</Text>
-              <Text style={styles.heroSubtitle}>Selecciona cliente y centro para ver detalles</Text>
+              <Text style={styles.heroSubtitle}>Cliente, centro, IP e historial operativo</Text>
             </View>
             <View style={styles.heroBadge}>
-              <Ionicons name="location-outline" size={14} color="#0b3b8c" />
+              <Ionicons name="location-outline" size={14} color="#d8ffe7" />
+            </View>
+          </View>
+          <View style={styles.heroMetaRow}>
+            <View style={styles.heroMetaPill}>
+              <Ionicons name="business-outline" size={12} color="#9fd7ff" />
+              <Text style={styles.heroMetaText}>{clientes.length} clientes</Text>
+            </View>
+            <View style={styles.heroMetaPill}>
+              <Ionicons name="pin-outline" size={12} color="#9fd7ff" />
+              <Text style={styles.heroMetaText}>{centroIndex.length || centros.length} centros</Text>
             </View>
           </View>
         </View>
@@ -234,7 +246,7 @@ export default function ConsultaCentroScreen() {
         {error && <Text style={styles.alert}>{error}</Text>}
 
         <View style={styles.sectionHeaderRow}>
-          <Text style={styles.sectionTitleLine}>Busqueda rapida</Text>
+          <Text style={styles.sectionTitleLine}>BUSQUEDA RAPIDA</Text>
           <View style={styles.sectionLine} />
         </View>
         <View style={styles.card}>
@@ -264,7 +276,7 @@ export default function ConsultaCentroScreen() {
         {!!search.trim() && (
           <>
             <View style={styles.sectionHeaderRow}>
-              <Text style={styles.sectionTitleLine}>Resultados por centro</Text>
+              <Text style={styles.sectionTitleLine}>RESULTADOS POR CENTRO</Text>
               <View style={styles.sectionLine} />
             </View>
             <View style={styles.card}>
@@ -298,7 +310,7 @@ export default function ConsultaCentroScreen() {
         )}
 
         <View style={styles.sectionHeaderRow}>
-          <Text style={styles.sectionTitleLine}>Clientes</Text>
+          <Text style={styles.sectionTitleLine}>CLIENTES</Text>
           <View style={styles.sectionLine} />
         </View>
         <View style={styles.card}>
@@ -328,7 +340,7 @@ export default function ConsultaCentroScreen() {
         {clienteSel ? (
           <>
             <View style={styles.sectionHeaderRow}>
-              <Text style={styles.sectionTitleLine}>Centros de {clienteNombre}</Text>
+              <Text style={styles.sectionTitleLine}>CENTROS DE {clienteNombre}</Text>
               <View style={styles.sectionLine} />
             </View>
             <View style={styles.card}>
@@ -350,7 +362,7 @@ export default function ConsultaCentroScreen() {
         {centroSel ? (
           <>
             <View style={styles.sectionHeaderRow}>
-              <Text style={styles.sectionTitleLine}>Que quieres consultar</Text>
+              <Text style={styles.sectionTitleLine}>QUE QUIERES CONSULTAR</Text>
               <View style={styles.sectionLine} />
             </View>
             <View style={styles.queryTabs}>
@@ -541,79 +553,133 @@ export default function ConsultaCentroScreen() {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: '#ffffff' },
-  scroll: { flex: 1, backgroundColor: '#ffffff' },
+  safe: { flex: 1, backgroundColor: '#eef3f6' },
+  scroll: { flex: 1, backgroundColor: '#eef3f6' },
   container: {
     flexGrow: 1,
     padding: 16,
     paddingTop: 12,
     paddingBottom: 18,
     gap: 12,
-    backgroundColor: '#ffffff',
+    backgroundColor: '#eef3f6',
   },
   hero: {
-    backgroundColor: '#1d4ed8',
+    backgroundColor: '#06141d',
     borderWidth: 1,
-    borderColor: '#1e40af',
-    borderRadius: 14,
-    padding: 14,
-    shadowColor: '#0b3b8c',
-    shadowOpacity: 0.08,
-    shadowRadius: 6,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 2,
+    borderColor: 'rgba(45, 165, 255, 0.14)',
+    borderRadius: 22,
+    padding: 16,
+    shadowColor: '#06141d',
+    shadowOpacity: 0.22,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 4,
+    overflow: 'hidden',
+    position: 'relative',
+    gap: 14,
   },
-  heroRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  heroGlowPrimary: {
+    position: 'absolute',
+    width: 160,
+    height: 160,
+    borderRadius: 80,
+    backgroundColor: 'rgba(45, 165, 255, 0.20)',
+    right: -54,
+    top: -74,
+  },
+  heroGlowSecondary: {
+    position: 'absolute',
+    width: 130,
+    height: 130,
+    borderRadius: 65,
+    backgroundColor: 'rgba(34, 197, 94, 0.10)',
+    left: -48,
+    bottom: -62,
+  },
+  heroRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   heroIcon: {
-    width: 42,
-    height: 42,
-    borderRadius: 10,
-    backgroundColor: 'rgba(255,255,255,0.18)',
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: 'rgba(255,255,255,0.10)',
+    borderWidth: 1,
+    borderColor: 'rgba(159, 215, 255, 0.18)',
     justifyContent: 'center',
     alignItems: 'center',
   },
-  heroTitle: { fontSize: 18, fontWeight: '800', color: '#ffffff' },
-  heroSubtitle: { fontSize: 13, color: '#dbeafe', marginTop: 2 },
+  heroTitle: { fontSize: 20, fontWeight: '900', color: '#ffffff' },
+  heroSubtitle: { fontSize: 12.5, color: '#98c7e8', marginTop: 2, fontWeight: '700' },
   heroBadge: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: '#dbeafe',
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(34, 197, 94, 0.18)',
+    backgroundColor: 'rgba(22, 163, 74, 0.10)',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  heroMetaRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  heroMetaPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderWidth: 1,
+    borderColor: 'rgba(159, 215, 255, 0.15)',
+    backgroundColor: 'rgba(255, 255, 255, 0.07)',
+  },
+  heroMetaText: {
+    color: '#f8fbff',
+    fontWeight: '800',
+    fontSize: 11,
   },
   sectionHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 2 },
-  sectionTitleLine: { color: '#0f172a', fontWeight: '900', fontSize: 16 },
-  sectionLine: { flex: 1, height: 1, backgroundColor: '#d1d5db' },
-  alert: { color: '#dc2626', fontWeight: '600' },
+  sectionTitleLine: { color: '#7a8b98', fontWeight: '700', fontSize: 15 },
+  sectionLine: { flex: 1, height: 1, backgroundColor: '#d8e3eb' },
+  alert: {
+    color: '#dc2626',
+    fontWeight: '800',
+    backgroundColor: '#fff7f7',
+    borderWidth: 1,
+    borderColor: '#fecaca',
+    borderRadius: 12,
+    padding: 10,
+  },
   card: {
-    backgroundColor: '#ffffff',
-    borderRadius: 14,
+    backgroundColor: '#fbfdff',
+    borderRadius: 18,
     padding: 14,
     borderWidth: 1,
-    borderColor: '#e2e8f0',
+    borderColor: '#d7e3ec',
     gap: 10,
-    shadowColor: '#0f172a',
-    shadowOpacity: 0.03,
-    shadowRadius: 4,
-    shadowOffset: { width: 0, height: 1 },
-    elevation: 1,
+    shadowColor: '#9db7ca',
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 2,
   },
   searchBox: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
     borderWidth: 1,
-    borderColor: '#bfdbfe',
-    borderRadius: 10,
-    backgroundColor: '#eff6ff',
-    paddingHorizontal: 10,
-    paddingVertical: 8,
+    borderColor: '#d4e0ea',
+    borderRadius: 16,
+    backgroundColor: '#ffffff',
+    paddingHorizontal: 12,
+    paddingVertical: 11,
   },
   searchInput: {
     flex: 1,
-    color: '#0f172a',
-    fontWeight: '600',
+    color: '#163041',
+    fontWeight: '800',
     paddingVertical: 0,
   },
   pillRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
@@ -622,46 +688,46 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     borderRadius: 999,
     borderWidth: 1,
-    borderColor: '#bfdbfe',
-    backgroundColor: '#eff6ff',
+    borderColor: '#d4e0ea',
+    backgroundColor: '#ffffff',
     flexDirection: 'row',
     alignItems: 'center',
   },
-  pillActive: { borderColor: '#1d4ed8', backgroundColor: '#1d4ed8' },
-  pillText: { color: '#0b3b8c', fontWeight: '700' },
+  pillActive: { borderColor: '#0d4a8c', backgroundColor: '#0d4a8c' },
+  pillText: { color: '#154766', fontWeight: '800' },
   pillTextActive: { color: '#ffffff' },
   selectBox: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     borderWidth: 1,
-    borderColor: '#bfdbfe',
-    borderRadius: 10,
-    backgroundColor: '#eff6ff',
+    borderColor: '#d4e0ea',
+    borderRadius: 16,
+    backgroundColor: '#ffffff',
     paddingHorizontal: 12,
     paddingVertical: 11,
   },
-  selectText: { color: '#0b3b8c', fontWeight: '700' },
+  selectText: { color: '#154766', fontWeight: '800' },
   queryTabs: { flexDirection: 'row', gap: 8, marginTop: -2 },
   queryTabBtn: {
     flex: 1,
     minHeight: 40,
-    borderRadius: 10,
+    borderRadius: 14,
     borderWidth: 1,
-    borderColor: '#bfdbfe',
-    backgroundColor: '#eff6ff',
+    borderColor: '#d4e0ea',
+    backgroundColor: '#ffffff',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
   },
-  queryTabBtnActive: { backgroundColor: '#1d4ed8', borderColor: '#1d4ed8' },
-  queryTabText: { color: '#1d4ed8', fontWeight: '700', fontSize: 12.5 },
+  queryTabBtnActive: { backgroundColor: '#0d4a8c', borderColor: '#0d4a8c' },
+  queryTabText: { color: '#164e9c', fontWeight: '800', fontSize: 12.5 },
   queryTabTextActive: { color: '#ffffff' },
-  muted: { color: '#64748b' },
+  muted: { color: '#64748b', fontWeight: '700' },
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(15,23,42,0.45)',
+    backgroundColor: 'rgba(6,20,29,0.58)',
     justifyContent: 'center',
     alignItems: 'center',
     padding: 16,
@@ -669,62 +735,65 @@ const styles = StyleSheet.create({
   modalBox: {
     width: '100%',
     maxWidth: 440,
-    borderRadius: 14,
-    backgroundColor: '#ffffff',
+    borderRadius: 20,
+    backgroundColor: '#fbfdff',
     borderWidth: 1,
-    borderColor: '#dbeafe',
-    padding: 14,
+    borderColor: '#d7e3ec',
+    padding: 16,
     gap: 10,
   },
-  modalTitle: { fontSize: 16, fontWeight: '800', color: '#0f172a' },
+  modalTitle: { fontSize: 16, fontWeight: '900', color: '#163041' },
   modalItem: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
     paddingHorizontal: 10,
     paddingVertical: 10,
-    borderRadius: 10,
+    borderRadius: 14,
     borderWidth: 1,
-    borderColor: '#e2e8f0',
+    borderColor: '#d7e3ec',
+    backgroundColor: '#ffffff',
     marginBottom: 8,
   },
-  modalItemActive: { backgroundColor: '#1d4ed8', borderColor: '#1d4ed8' },
-  modalItemText: { color: '#0f172a', fontWeight: '700' },
+  modalItemActive: { backgroundColor: '#0d4a8c', borderColor: '#0d4a8c' },
+  modalItemText: { color: '#163041', fontWeight: '800' },
   modalItemTextActive: { color: '#ffffff' },
   modalCloseBtn: {
     alignSelf: 'flex-end',
     paddingHorizontal: 12,
     paddingVertical: 8,
-    borderRadius: 10,
-    backgroundColor: '#e2e8f0',
+    borderRadius: 12,
+    backgroundColor: '#e8eef3',
   },
-  modalCloseText: { color: '#334155', fontWeight: '700' },
+  modalCloseText: { color: '#334155', fontWeight: '800' },
   itemRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    gap: 8,
-    paddingVertical: 7,
+    gap: 10,
+    paddingVertical: 9,
     borderBottomWidth: 1,
     borderBottomColor: '#eef2f7',
   },
   itemIcon: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    backgroundColor: '#e0ecff',
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#eef6ff',
+    borderWidth: 1,
+    borderColor: '#d4e0ea',
     alignItems: 'center',
     justifyContent: 'center',
     marginTop: 1,
   },
-  itemPrimary: { color: '#0f172a', fontWeight: '700' },
-  itemPrimarySoft: { fontWeight: '500', color: '#64748b' },
+  itemPrimary: { color: '#163041', fontWeight: '800' },
+  itemPrimarySoft: { fontWeight: '800', color: '#708494', textTransform: 'uppercase', fontSize: 10.5 },
   itemSecondary: { color: '#64748b', fontSize: 12, marginTop: 2 },
-  itemValueStrong: { color: '#0f172a', fontWeight: '800', fontSize: 13.5, marginTop: 1 },
-  centerNameValue: { color: '#0f172a', fontWeight: '900', fontSize: 14, marginTop: 1 },
+  itemValueStrong: { color: '#163041', fontWeight: '800', fontSize: 13.5, marginTop: 1 },
+  centerNameValue: { color: '#163041', fontWeight: '900', fontSize: 14.5, marginTop: 1 },
   dataInfoCard: {
     borderWidth: 1,
-    borderColor: '#e2e8f0',
-    borderRadius: 12,
+    borderColor: '#d7e3ec',
+    borderRadius: 18,
     backgroundColor: '#ffffff',
     paddingHorizontal: 10,
     paddingTop: 2,
@@ -737,10 +806,15 @@ const styles = StyleSheet.create({
   statCard: {
     flex: 1,
     borderWidth: 1,
-    borderRadius: 14,
+    borderRadius: 18,
     paddingVertical: 10,
     paddingHorizontal: 10,
     alignItems: 'center',
+    shadowColor: '#9db7ca',
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 1,
   },
   statIcon: {
     width: 26,
@@ -758,13 +832,13 @@ const styles = StyleSheet.create({
   statLabel: {
     marginTop: 3,
     color: '#334155',
-    fontWeight: '700',
+    fontWeight: '800',
     fontSize: 12,
   },
   timelineSection: {
     borderWidth: 1,
-    borderColor: '#e2e8f0',
-    borderRadius: 12,
+    borderColor: '#d7e3ec',
+    borderRadius: 18,
     backgroundColor: '#ffffff',
     marginBottom: 10,
     overflow: 'hidden',
@@ -779,9 +853,9 @@ const styles = StyleSheet.create({
     gap: 8,
     paddingHorizontal: 10,
     paddingVertical: 8,
-    backgroundColor: '#eff6ff',
+    backgroundColor: '#eef6ff',
     borderBottomWidth: 1,
-    borderBottomColor: '#dbeafe',
+    borderBottomColor: '#d7e3ec',
   },
   timelineHeaderRetiro: {
     backgroundColor: '#fee2e2',
@@ -800,7 +874,7 @@ const styles = StyleSheet.create({
   },
   timelineTitle: {
     flex: 1,
-    color: '#0f172a',
+    color: '#163041',
     fontWeight: '800',
     fontSize: 13,
   },
@@ -822,8 +896,8 @@ const styles = StyleSheet.create({
     borderBottomColor: '#eef2f7',
   },
   timelineItemText: {
-    color: '#0f172a',
-    fontWeight: '600',
+    color: '#163041',
+    fontWeight: '700',
     fontSize: 12.5,
   },
   timelineItemDate: {
@@ -861,12 +935,12 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#1d4ed8',
+    backgroundColor: '#0d4a8c',
     borderRadius: 999,
     paddingHorizontal: 10,
     paddingVertical: 5,
     borderWidth: 1,
-    borderColor: '#1e40af',
+    borderColor: '#0d4a8c',
   },
   ipBadgeEmpty: {
     backgroundColor: '#94a3b8',
@@ -882,16 +956,17 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    paddingVertical: 9,
+    paddingVertical: 10,
     borderBottomWidth: 1,
     borderBottomColor: '#eef2f7',
   },
   resultPrimary: {
-    color: '#0f172a',
-    fontWeight: '700',
+    color: '#163041',
+    fontWeight: '800',
   },
   resultSecondary: {
     color: '#64748b',
     fontSize: 12,
+    fontWeight: '700',
   },
 });
