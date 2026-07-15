@@ -1450,6 +1450,11 @@ export default function InformesScreen() {
   );
   const mostrarAsignadasEnProceso =
     moduloInforme !== 'instalacion' || actividadesEnProceso.length > 0;
+  const mostrarTrabajosTerreno =
+    loadingActividadesAsignadas ||
+    actividadesProgramadas.length > 0 ||
+    totalActividadesEnProcesoVisible > 0 ||
+    (mostrarAsignadasCompletadas && actividadesCompletadas.length > 0);
 
   const cargarClientes = async () => {
     if (!token) return;
@@ -3498,7 +3503,7 @@ export default function InformesScreen() {
         </View>
 
         <View style={styles.card}>
-          <Text style={styles.label}>CATEGORIAS</Text>
+          <Text style={styles.categoryLabel}>CATEGORIAS</Text>
           <View style={styles.categoryRow}>
             <Pressable style={[styles.tabBtn, styles.categoryTabBtn, moduloInforme === 'instalacion' && styles.tabBtnActive]} onPress={() => setModuloInforme('instalacion')}>
               <Ionicons name="construct-outline" size={14} color={moduloInforme === 'instalacion' ? '#fff' : '#1d4ed8'} />
@@ -3519,109 +3524,102 @@ export default function InformesScreen() {
           </View>
         </View>
 
-        <View style={styles.card}>
-          <View style={styles.assignedHeader}>
-            <Text style={styles.sectionTitle}>Trabajos de terreno</Text>
-            {loadingActividadesAsignadas ? <ActivityIndicator size="small" color="#1d4ed8" /> : null}
-          </View>
-          <Text style={styles.rowMeta}>
-            {mostrarAsignadasCompletadas
-              ? `Programados: ${actividadesProgramadas.length} | En proceso: ${totalActividadesEnProcesoVisible} | Completados: ${actividadesCompletadas.length}`
-              : `Programados: ${actividadesProgramadas.length} | En proceso: ${totalActividadesEnProcesoVisible}`}
-          </Text>
-
-          {!loadingActividadesAsignadas && !actividadesAsignadasFiltradas.length ? (
-            <Text style={styles.rowMeta}>No hay actividades asignadas para este modulo.</Text>
-          ) : null}
-          {!loadingActividadesAsignadas && !actividadesAsignadasFiltradas.length && !!actividadesAsignadas.length ? (
+        {mostrarTrabajosTerreno ? (
+          <View style={styles.card}>
+            <View style={styles.assignedHeader}>
+              <Text style={styles.sectionTitle}>Trabajos de terreno</Text>
+              {loadingActividadesAsignadas ? <ActivityIndicator size="small" color="#1d4ed8" /> : null}
+            </View>
             <Text style={styles.rowMeta}>
-              Tienes {actividadesAsignadas.length} actividad(es) asignada(s) en otro modulo.
+              {mostrarAsignadasCompletadas
+                ? `Programados: ${actividadesProgramadas.length} | En proceso: ${totalActividadesEnProcesoVisible} | Completados: ${actividadesCompletadas.length}`
+                : `Programados: ${actividadesProgramadas.length} | En proceso: ${totalActividadesEnProcesoVisible}`}
             </Text>
-          ) : null}
 
-          {!!actividadesProgramadas.length ? (
-            <Text style={styles.assignedSectionTitle}>Programados</Text>
-          ) : null}
-          {actividadesProgramadas.map((actividad, idx) => {
-            const id = Number(actividad.id_actividad || 0);
-            const centroNombre = String(actividad.centro?.nombre || `Centro ${actividad.centro_id || '-'}`);
-            const clienteNombre = String(actividad.centro?.cliente || '-');
-            const esActiva = Number(actividadAsignadaActiva?.id_actividad || 0) === id;
-            return (
-              <Pressable
-                key={`prog-${id || idx}`}
-                style={[styles.assignedItem, esActiva && styles.assignedItemActive]}
-                onPress={() => aplicarActividadAsignada(actividad)}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.assignedItemTitle}>{centroNombre}</Text>
-                  <Text style={styles.assignedItemMeta}>
-                    {String(actividad.area || '-')} | {clienteNombre} | {formatDate(actividad.fecha_inicio)}
-                  </Text>
-                </View>
-                <View style={[styles.assignedActionPill, esActiva && styles.assignedActionPillActive]}>
-                  <Ionicons
-                    name={esActiva ? 'checkmark-circle' : 'play-circle-outline'}
-                    size={14}
-                    color={esActiva ? '#166534' : '#1d4ed8'}
-                  />
-                  <Text style={[styles.assignedActionText, esActiva && styles.assignedActionTextActive]}>
-                    {esActiva ? 'Seleccionado' : 'Usar'}
-                  </Text>
-                </View>
-              </Pressable>
-            );
-          })}
+            {!!actividadesProgramadas.length ? (
+              <Text style={styles.assignedSectionTitle}>Programados</Text>
+            ) : null}
+            {actividadesProgramadas.map((actividad, idx) => {
+              const id = Number(actividad.id_actividad || 0);
+              const centroNombre = String(actividad.centro?.nombre || `Centro ${actividad.centro_id || '-'}`);
+              const clienteNombre = String(actividad.centro?.cliente || '-');
+              const esActiva = Number(actividadAsignadaActiva?.id_actividad || 0) === id;
+              return (
+                <Pressable
+                  key={`prog-${id || idx}`}
+                  style={[styles.assignedItem, esActiva && styles.assignedItemActive]}
+                  onPress={() => aplicarActividadAsignada(actividad)}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.assignedItemTitle}>{centroNombre}</Text>
+                    <Text style={styles.assignedItemMeta}>
+                      {String(actividad.area || '-')} | {clienteNombre} | {formatDate(actividad.fecha_inicio)}
+                    </Text>
+                  </View>
+                  <View style={[styles.assignedActionPill, esActiva && styles.assignedActionPillActive]}>
+                    <Ionicons
+                      name={esActiva ? 'checkmark-circle' : 'play-circle-outline'}
+                      size={14}
+                      color={esActiva ? '#166534' : '#1d4ed8'}
+                    />
+                    <Text style={[styles.assignedActionText, esActiva && styles.assignedActionTextActive]}>
+                      {esActiva ? 'Seleccionado' : 'Usar'}
+                    </Text>
+                  </View>
+                </Pressable>
+              );
+            })}
 
-	          {mostrarAsignadasEnProceso && !!actividadesEnProceso.length ? (
-	            <Text style={styles.assignedSectionTitle}>En proceso</Text>
-	          ) : null}
-	          {mostrarAsignadasEnProceso && actividadesEnProceso.map((actividad, idx) => {
-            const id = Number(actividad.id_actividad || 0);
-            const centroNombre = String(actividad.centro?.nombre || `Centro ${actividad.centro_id || '-'}`);
-            const clienteNombre = String(actividad.centro?.cliente || '-');
-            const esActiva = Number(actividadAsignadaActiva?.id_actividad || 0) === id;
-            return (
-              <Pressable
-                key={`proc-${id || idx}`}
-                style={[styles.assignedItem, styles.assignedItemProgress, esActiva && styles.assignedItemActive]}
-                onPress={() => aplicarActividadAsignada(actividad)}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.assignedItemTitle}>{centroNombre}</Text>
-                  <Text style={styles.assignedItemMeta}>
-                    {String(actividad.area || '-')} | {clienteNombre} | {formatDate(actividad.fecha_inicio)}
-                  </Text>
-                </View>
-                <View style={[styles.assignedActionPill, styles.assignedActionPillProgress]}>
-                  <Ionicons name="sync-outline" size={14} color="#92400e" />
-                  <Text style={[styles.assignedActionText, styles.assignedActionTextProgress]}>Continuar</Text>
-                </View>
-              </Pressable>
-            );
-          })}
+            {mostrarAsignadasEnProceso && !!actividadesEnProceso.length ? (
+              <Text style={styles.assignedSectionTitle}>En proceso</Text>
+            ) : null}
+            {mostrarAsignadasEnProceso && actividadesEnProceso.map((actividad, idx) => {
+              const id = Number(actividad.id_actividad || 0);
+              const centroNombre = String(actividad.centro?.nombre || `Centro ${actividad.centro_id || '-'}`);
+              const clienteNombre = String(actividad.centro?.cliente || '-');
+              const esActiva = Number(actividadAsignadaActiva?.id_actividad || 0) === id;
+              return (
+                <Pressable
+                  key={`proc-${id || idx}`}
+                  style={[styles.assignedItem, styles.assignedItemProgress, esActiva && styles.assignedItemActive]}
+                  onPress={() => aplicarActividadAsignada(actividad)}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.assignedItemTitle}>{centroNombre}</Text>
+                    <Text style={styles.assignedItemMeta}>
+                      {String(actividad.area || '-')} | {clienteNombre} | {formatDate(actividad.fecha_inicio)}
+                    </Text>
+                  </View>
+                  <View style={[styles.assignedActionPill, styles.assignedActionPillProgress]}>
+                    <Ionicons name="sync-outline" size={14} color="#92400e" />
+                    <Text style={[styles.assignedActionText, styles.assignedActionTextProgress]}>Continuar</Text>
+                  </View>
+                </Pressable>
+              );
+            })}
 
-	          {mostrarAsignadasCompletadas && !!actividadesCompletadas.length ? (
-	            <Text style={styles.assignedSectionTitle}>Completados</Text>
-	          ) : null}
-          {mostrarAsignadasCompletadas && actividadesCompletadas.slice(0, 4).map((actividad, idx) => {
-            const id = Number(actividad.id_actividad || 0);
-            const centroNombre = String(actividad.centro?.nombre || `Centro ${actividad.centro_id || '-'}`);
-            const clienteNombre = String(actividad.centro?.cliente || '-');
-            return (
-              <View key={`done-${id || idx}`} style={[styles.assignedItem, styles.assignedItemDone]}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.assignedItemTitle}>{centroNombre}</Text>
-                  <Text style={styles.assignedItemMeta}>
-                    {String(actividad.area || '-')} | {clienteNombre} | {formatDate(actividad.fecha_inicio)}
-                  </Text>
+            {mostrarAsignadasCompletadas && !!actividadesCompletadas.length ? (
+              <Text style={styles.assignedSectionTitle}>Completados</Text>
+            ) : null}
+            {mostrarAsignadasCompletadas && actividadesCompletadas.slice(0, 4).map((actividad, idx) => {
+              const id = Number(actividad.id_actividad || 0);
+              const centroNombre = String(actividad.centro?.nombre || `Centro ${actividad.centro_id || '-'}`);
+              const clienteNombre = String(actividad.centro?.cliente || '-');
+              return (
+                <View key={`done-${id || idx}`} style={[styles.assignedItem, styles.assignedItemDone]}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.assignedItemTitle}>{centroNombre}</Text>
+                    <Text style={styles.assignedItemMeta}>
+                      {String(actividad.area || '-')} | {clienteNombre} | {formatDate(actividad.fecha_inicio)}
+                    </Text>
+                  </View>
+                  <View style={[styles.assignedActionPill, styles.assignedActionPillDone]}>
+                    <Ionicons name="checkmark-circle" size={14} color="#166534" />
+                    <Text style={[styles.assignedActionText, styles.assignedActionTextDone]}>Finalizado</Text>
+                  </View>
                 </View>
-                <View style={[styles.assignedActionPill, styles.assignedActionPillDone]}>
-                  <Ionicons name="checkmark-circle" size={14} color="#166534" />
-                  <Text style={[styles.assignedActionText, styles.assignedActionTextDone]}>Finalizado</Text>
-                </View>
-              </View>
-            );
-          })}
-        </View>
+              );
+            })}
+          </View>
+        ) : null}
 
         {moduloInforme === 'levantamiento' && (actividadAsignadaActiva || levantamientoEditandoId) ? (
           <View style={styles.card}>
@@ -4162,34 +4160,39 @@ export default function InformesScreen() {
           <View style={styles.card}>
             <Text style={styles.sectionTitle}>Instalaciones completadas</Text>
             {instalacionesCompletadas.map((item) => (
-                <View key={item.centroId} style={styles.installDoneCard}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.rowTitle}>{item.centro}</Text>
-                    <Text style={styles.rowSubtitle}>{item.cliente}</Text>
-                    <View style={styles.installTypeBadgeRow}>
-                      <View
+                <View key={item.centroId} style={[styles.installDoneCard, styles.installCompletedCard]}>
+                  <View pointerEvents="none" style={styles.installCompletedTopAccent} />
+                  <View pointerEvents="none" style={styles.installCompletedGlowStrong} />
+                  <View pointerEvents="none" style={styles.installCompletedGlowSoft} />
+                  <View style={[styles.installTypeBadgeRow, styles.installCompletedTypeBadgeRow]}>
+                    <View
+                      style={[
+                        styles.installTypeBadge,
+                        item.tipoInstalacion === 'reapuntamiento'
+                          ? styles.installTypeBadgeReap
+                          : styles.installTypeBadgeInstalacion,
+                      ]}>
+                      <Ionicons
+                        name={item.tipoInstalacion === 'reapuntamiento' ? 'locate-outline' : 'construct-outline'}
+                        size={11}
+                        color={item.tipoInstalacion === 'reapuntamiento' ? '#7c2d12' : '#1e3a8a'}
+                      />
+                      <Text
                         style={[
-                          styles.installTypeBadge,
+                          styles.installTypeBadgeText,
                           item.tipoInstalacion === 'reapuntamiento'
-                            ? styles.installTypeBadgeReap
-                            : styles.installTypeBadgeInstalacion,
+                            ? styles.installTypeBadgeTextReap
+                            : styles.installTypeBadgeTextInstalacion,
                         ]}>
-                        <Ionicons
-                          name={item.tipoInstalacion === 'reapuntamiento' ? 'locate-outline' : 'construct-outline'}
-                          size={11}
-                          color={item.tipoInstalacion === 'reapuntamiento' ? '#7c2d12' : '#1e3a8a'}
-                        />
-                        <Text
-                          style={[
-                            styles.installTypeBadgeText,
-                            item.tipoInstalacion === 'reapuntamiento'
-                              ? styles.installTypeBadgeTextReap
-                              : styles.installTypeBadgeTextInstalacion,
-                          ]}>
-                          {item.tipoInstalacion === 'reapuntamiento' ? 'Reapuntamiento' : 'Instalacion'}
-                        </Text>
-                      </View>
+                        {item.tipoInstalacion === 'reapuntamiento' ? 'Reapuntamiento' : 'Instalacion'}
+                      </Text>
                     </View>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.rowTitle, styles.installCompletedTitle]} numberOfLines={1} ellipsizeMode="tail">
+                      {item.centro}
+                    </Text>
+                    <Text style={styles.rowSubtitle}>{item.cliente}</Text>
                     <Text style={styles.rowMeta}>
                       {item.tipoInstalacion === 'reapuntamiento' ? 'Reapuntamiento' : 'Instalacion'} | Acta: {formatDate(item.fechaActa)} | Permiso: {formatDate(item.fechaPermiso)}
                     </Text>
@@ -7256,6 +7259,12 @@ const styles = StyleSheet.create({
   stepText: { color: '#64748b', fontWeight: '700', fontSize: 11.5 },
   stepTextDone: { color: '#166534' },
   stepLine: { flex: 1, height: 1, backgroundColor: '#e2e8f0', marginHorizontal: 6 },
+  categoryLabel: {
+    color: '#7a8b98',
+    fontWeight: '800',
+    fontSize: 12,
+    letterSpacing: 0.7,
+  },
   installSummaryBox: {
     borderWidth: 1,
     borderColor: '#dbeafe',
@@ -7591,6 +7600,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     position: 'relative',
+    overflow: 'hidden',
     gap: 8,
     borderWidth: 1,
     borderColor: '#cdeedd',
@@ -7604,6 +7614,40 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     shadowOffset: { width: 0, height: 3 },
     elevation: 1,
+  },
+  installCompletedCard: {
+    borderColor: '#638da3',
+    backgroundColor: '#dbe8ef',
+    borderRadius: 16,
+    paddingHorizontal: 10,
+    paddingTop: 34,
+    paddingBottom: 10,
+  },
+  installCompletedTopAccent: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: 0,
+    height: 4,
+    backgroundColor: '#16a34a',
+  },
+  installCompletedGlowStrong: {
+    position: 'absolute',
+    right: -42,
+    top: -42,
+    width: 122,
+    height: 122,
+    borderRadius: 61,
+    backgroundColor: 'rgba(22, 163, 74, 0.34)',
+  },
+  installCompletedGlowSoft: {
+    position: 'absolute',
+    right: -78,
+    top: -78,
+    width: 178,
+    height: 178,
+    borderRadius: 89,
+    backgroundColor: 'rgba(34, 197, 94, 0.18)',
   },
   installInProgressCard: {
     borderColor: '#fcd34d',
@@ -7620,6 +7664,14 @@ const styles = StyleSheet.create({
     marginTop: 6,
     marginBottom: 2,
     alignItems: 'flex-start',
+  },
+  installCompletedTypeBadgeRow: {
+    position: 'absolute',
+    top: 6,
+    right: 2,
+    zIndex: 3,
+    marginTop: 0,
+    marginBottom: 0,
   },
   installTypeBadgeCorner: {
     position: 'absolute',
@@ -7838,6 +7890,11 @@ const styles = StyleSheet.create({
   newBtnText: { color: '#fff', fontWeight: '800', fontSize: 12.5 },
   rowItem: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#eef2f7' },
   rowTitle: { color: '#163041', fontWeight: '900' },
+  installCompletedTitle: {
+    paddingRight: 12,
+    fontSize: 14.5,
+    lineHeight: 17,
+  },
   rowSubtitle: { color: '#334155', fontWeight: '800', marginTop: 2 },
   rowMeta: { color: '#64748b', fontSize: 12, marginTop: 1, fontWeight: '700' },
   rowActions: { flexDirection: 'row', gap: 6, marginTop: 14, alignSelf: 'flex-end' },

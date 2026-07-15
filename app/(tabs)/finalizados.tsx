@@ -125,11 +125,7 @@ export default function FinalizadosScreen() {
                 <View style={styles.headerMetaRow}>
                   <View style={styles.headerMetaPill}>
                     <Ionicons name="archive-outline" size={12} color="#9fd7ff" />
-                    <ThemedText style={styles.headerMetaText}>{items.length} total</ThemedText>
-                  </View>
-                  <View style={styles.headerMetaPill}>
-                    <Ionicons name="eye-outline" size={12} color="#9fd7ff" />
-                    <ThemedText style={styles.headerMetaText}>{itemsFiltrados.length} visibles</ThemedText>
+                    <ThemedText style={styles.headerMetaText}>{itemsFiltrados.length} finalizados</ThemedText>
                   </View>
                 </View>
               </View>
@@ -168,12 +164,13 @@ export default function FinalizadosScreen() {
         }
         renderItem={({ item: a }) => (
           <View style={styles.card}>
-            <View pointerEvents="none" style={styles.cardGlow} />
+            <View pointerEvents="none" style={styles.cardTopAccent} />
+            <View pointerEvents="none" style={styles.cardGlowStrong} />
+            <View pointerEvents="none" style={styles.cardGlowSoft} />
             <View style={styles.cardHead}>
               <View style={{ flex: 1 }}>
                 <ThemedText style={styles.centro}>{a.centro?.nombre || a.centro_nombre || '-'}</ThemedText>
                 <View style={styles.row}>
-                  <Ionicons name="business-outline" size={12} color="#0b3b8c" />
                   <ThemedText style={styles.meta}>{a.centro?.cliente || a.cliente || '-'}</ThemedText>
                 </View>
               </View>
@@ -184,17 +181,28 @@ export default function FinalizadosScreen() {
             </View>
 
             <View style={styles.rowWrap}>
-              <View style={styles.metaChip}>
-                <Ionicons name="calendar-outline" size={12} color="#164e9c" />
-                <ThemedText style={styles.meta}>Asignado: {formatFecha(a.fecha_asignacion || a.created_at)}</ThemedText>
+              <View style={styles.fechaStack}>
+                <View style={styles.fechaInline}>
+                  <View style={styles.fechaInlineIcon}>
+                    <Ionicons name="calendar-outline" size={10} color="#9fd7ff" />
+                  </View>
+                  <ThemedText style={styles.fechaInlineLabel}>Asignado</ThemedText>
+                  <ThemedText style={styles.fechaInlineDate}>{formatFecha(a.fecha_asignacion || a.created_at)}</ThemedText>
+                </View>
+                <View style={styles.fechaInline}>
+                  <View style={styles.fechaInlineIcon}>
+                    <Ionicons name="flag-outline" size={10} color="#9fd7ff" />
+                  </View>
+                  <ThemedText style={styles.fechaInlineLabel}>Cierre</ThemedText>
+                  <ThemedText style={styles.fechaInlineDate}>{formatFecha(a.fecha_cierre)}</ThemedText>
+                </View>
               </View>
-              <View style={styles.metaChip}>
-                <Ionicons name="flag-outline" size={12} color="#15803d" />
-                <ThemedText style={styles.meta}>Cierre: {formatFecha(a.fecha_cierre)}</ThemedText>
-              </View>
-              <View style={styles.metaChip}>
-                <Ionicons name="cube-outline" size={12} color="#164e9c" />
-                <ThemedText style={styles.meta}>Bultos: {a.total_cajas ?? 0}</ThemedText>
+              <View style={styles.bultosChip}>
+                <ThemedText style={styles.bultosLabel}>Bultos</ThemedText>
+                <View style={styles.bultosPill}>
+                  <Ionicons name="cube-outline" size={13} color="#9fd7ff" />
+                  <ThemedText style={styles.bultosNumber}>{a.total_cajas ?? 0}</ThemedText>
+                </View>
               </View>
             </View>
 
@@ -350,11 +358,11 @@ const styles = StyleSheet.create({
   },
   card: {
     borderWidth: 1,
-    borderColor: '#cdeedd',
-    backgroundColor: '#f7fffb',
-    borderRadius: 18,
-    padding: 12,
-    gap: 8,
+    borderColor: '#638da3',
+    backgroundColor: '#dbe8ef',
+    borderRadius: 16,
+    padding: 10,
+    gap: 7,
     position: 'relative',
     overflow: 'hidden',
     shadowColor: '#9db7ca',
@@ -363,31 +371,109 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 6 },
     elevation: 2,
   },
-  cardGlow: {
+  cardTopAccent: {
     position: 'absolute',
-    right: -34,
-    top: -34,
-    width: 110,
-    height: 110,
-    borderRadius: 55,
-    backgroundColor: 'rgba(34, 197, 94, 0.12)',
+    left: 0,
+    right: 0,
+    top: 0,
+    height: 4,
+    backgroundColor: '#16a34a',
+  },
+  cardGlowStrong: {
+    position: 'absolute',
+    right: -42,
+    top: -42,
+    width: 122,
+    height: 122,
+    borderRadius: 61,
+    backgroundColor: 'rgba(22, 163, 74, 0.34)',
+  },
+  cardGlowSoft: {
+    position: 'absolute',
+    right: -78,
+    top: -78,
+    width: 178,
+    height: 178,
+    borderRadius: 89,
+    backgroundColor: 'rgba(34, 197, 94, 0.18)',
   },
   cardHead: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
-  centro: { fontSize: 17, fontWeight: '900', color: '#163041' },
-  row: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 2 },
-  rowWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
-  metaChip: {
+  centro: { fontSize: 15.5, fontWeight: '900', color: '#0f172a' },
+  row: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 1 },
+  rowWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 7, alignItems: 'center' },
+  fechaStack: {
+    gap: 5,
+    flex: 1,
+    minWidth: 170,
+  },
+  fechaInline: {
+    alignSelf: 'flex-start',
     flexDirection: 'row',
     alignItems: 'center',
     gap: 5,
     paddingHorizontal: 8,
-    paddingVertical: 5,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#d7e3ec',
+    paddingVertical: 4,
+    borderRadius: 999,
     backgroundColor: 'rgba(255,255,255,0.72)',
+    borderWidth: 1,
+    borderColor: '#c9d9e4',
   },
-  meta: { fontSize: 12, color: '#334155', fontWeight: '800' },
+  fechaInlineIcon: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: '#0d2436',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  fechaInlineLabel: {
+    color: '#567083',
+    fontSize: 9,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+    letterSpacing: 0.3,
+  },
+  fechaInlineDate: {
+    color: '#102a3d',
+    fontSize: 10.4,
+    fontWeight: '900',
+  },
+  meta: { fontSize: 11.3, color: '#243746', fontWeight: '800' },
+  bultosChip: {
+    marginLeft: 'auto',
+    alignItems: 'flex-end',
+    gap: 5,
+  },
+  bultosLabel: {
+    color: '#0f172a',
+    fontSize: 9.2,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  bultosPill: {
+    minWidth: 58,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: '#0d2436',
+    borderWidth: 1,
+    borderColor: 'rgba(45, 165, 255, 0.26)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 6,
+    paddingHorizontal: 10,
+    shadowColor: '#0d2436',
+    shadowOpacity: 0.14,
+    shadowRadius: 7,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 2,
+  },
+  bultosNumber: {
+    color: '#ffffff',
+    fontWeight: '900',
+    fontSize: 14,
+  },
   badge: {
     flexDirection: 'row',
     alignItems: 'center',
