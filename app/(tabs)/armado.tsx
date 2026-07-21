@@ -2172,6 +2172,8 @@ export default function ArmadoScreen() {
           </Text>
         ) : null}
         <View style={styles.hero}>
+          <View pointerEvents="none" style={styles.heroGlowPrimary} />
+          <View pointerEvents="none" style={styles.heroGlowSecondary} />
           <View style={styles.heroRow}>
             <View style={styles.heroIcon}>
               <Ionicons name="layers-outline" size={22} color="#ffffff" />
@@ -2181,7 +2183,7 @@ export default function ArmadoScreen() {
               <Text style={styles.heroSubtitle}>Completa serie y bultos para este armado</Text>
             </View>
             <View style={styles.heroBadge}>
-              <Ionicons name="checkmark-done-outline" size={14} color="#0b3b8c" />
+              <Ionicons name="checkmark-done-outline" size={14} color="#d8ffe7" />
             </View>
           </View>
         </View>
@@ -2190,7 +2192,10 @@ export default function ArmadoScreen() {
           <Text style={styles.sectionTitleLine}>Asignacion</Text>
           <View style={styles.sectionLine} />
         </View>
-        <View style={[styles.metaCard, { borderColor: '#dbeafe', backgroundColor: '#f8fbff' }]}>
+        <View style={styles.metaCard}>
+          <View pointerEvents="none" style={styles.metaCardTopAccent} />
+          <View pointerEvents="none" style={styles.metaCardGlowStrong} />
+          <View pointerEvents="none" style={styles.metaCardGlowSoft} />
           <View style={styles.metaTopRow}>
             <View style={{ flex: 1 }}>
               <View style={styles.metaCenterRow}>
@@ -3515,11 +3520,41 @@ const styles = StyleSheet.create({
     padding: 14,
     gap: 10,
     marginBottom: 6,
-    shadowColor: '#1d4ed8',
-    shadowOpacity: 0.06,
-    shadowRadius: 6,
-    shadowOffset: { width: 0, height: 2 },
+    borderColor: '#638da3',
+    backgroundColor: '#dbe8ef',
+    shadowColor: '#9db7ca',
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
     elevation: 2,
+    position: 'relative',
+    overflow: 'hidden',
+  },
+  metaCardTopAccent: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: 0,
+    height: 4,
+    backgroundColor: '#16a34a',
+  },
+  metaCardGlowStrong: {
+    position: 'absolute',
+    right: -42,
+    top: -42,
+    width: 122,
+    height: 122,
+    borderRadius: 61,
+    backgroundColor: 'rgba(22, 163, 74, 0.34)',
+  },
+  metaCardGlowSoft: {
+    position: 'absolute',
+    right: -78,
+    top: -78,
+    width: 178,
+    height: 178,
+    borderRadius: 89,
+    backgroundColor: 'rgba(34, 197, 94, 0.18)',
   },
   metaTopRow: {
     flexDirection: 'row',
@@ -3535,7 +3570,7 @@ const styles = StyleSheet.create({
   metaCenterValue: {
     color: '#0f172a',
     fontWeight: '900',
-    fontSize: 18,
+    fontSize: 16,
     lineHeight: 20,
     flex: 1,
   },
@@ -3546,15 +3581,15 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   metaClientValue: {
-    color: '#0b3b8c',
-    fontWeight: '700',
-    fontSize: 13,
+    color: '#154766',
+    fontWeight: '800',
+    fontSize: 12.2,
     flex: 1,
   },
   metaCompanionValue: {
-    color: '#64748b',
+    color: '#617487',
     fontWeight: '700',
-    fontSize: 12,
+    fontSize: 11.2,
     flex: 1,
   },
   metaObsBox: {
@@ -3563,10 +3598,10 @@ const styles = StyleSheet.create({
     gap: 6,
     paddingHorizontal: 9,
     paddingVertical: 7,
-    borderRadius: 10,
-    backgroundColor: '#f1f5f9',
+    borderRadius: 12,
+    backgroundColor: 'rgba(255,255,255,0.74)',
     borderWidth: 1,
-    borderColor: '#e2e8f0',
+    borderColor: '#c9d9e4',
   },
   metaObsText: {
     color: '#334155',
@@ -3583,9 +3618,11 @@ const styles = StyleSheet.create({
   },
   cajasLabel: {
     color: '#0f172a',
-    fontSize: 10,
-    fontWeight: '700',
-    marginBottom: 3,
+    fontSize: 9.5,
+    fontWeight: '900',
+    marginBottom: 5,
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
   },
   cajasOrbit: {
     width: 62,
@@ -3599,22 +3636,22 @@ const styles = StyleSheet.create({
     width: 62,
     height: 62,
     borderRadius: 31,
-    backgroundColor: 'rgba(37, 99, 235, 0.12)',
+    backgroundColor: 'rgba(34, 197, 94, 0.18)',
   },
   cajasRingInner: {
     position: 'absolute',
     width: 50,
     height: 50,
     borderRadius: 25,
-    backgroundColor: 'rgba(37, 99, 235, 0.2)',
+    backgroundColor: 'rgba(22, 163, 74, 0.34)',
   },
   cajasCore: {
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: '#2563eb',
+    backgroundColor: '#0d2436',
     borderWidth: 1,
-    borderColor: '#1d4ed8',
+    borderColor: 'rgba(45, 165, 255, 0.26)',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -4364,9 +4401,11 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   metaLabel: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#475569',
+    fontSize: 10,
+    fontWeight: '900',
+    color: '#567083',
+    textTransform: 'uppercase',
+    letterSpacing: 0.35,
   },
   metaValue: {
     fontSize: 14,
@@ -4424,12 +4463,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     alignSelf: 'flex-start',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
     borderRadius: 999,
     borderWidth: 1,
-    borderColor: '#dbeafe',
-    backgroundColor: '#eff6ff',
+    borderColor: '#c9d9e4',
+    backgroundColor: 'rgba(255,255,255,0.72)',
     gap: 6,
   },
   metaSimpleText: {
@@ -4438,8 +4477,8 @@ const styles = StyleSheet.create({
     color: '#0f172a',
   },
   metaChipTermino: {
-    backgroundColor: '#fef2f2',
-    borderColor: '#fecaca',
+    backgroundColor: 'rgba(254, 226, 226, 0.86)',
+    borderColor: '#fca5a5',
   },
   metaTerminoText: {
     color: '#b91c1c',
@@ -4754,36 +4793,60 @@ const styles = StyleSheet.create({
     color: '#6b7280',
   },
   hero: {
-    backgroundColor: '#1d4ed8',
+    backgroundColor: '#06141d',
     borderWidth: 1,
-    borderColor: '#1e40af',
-    borderRadius: 14,
-    padding: 14,
+    borderColor: 'rgba(45, 165, 255, 0.14)',
+    borderRadius: 22,
+    padding: 16,
     marginBottom: 4,
-    shadowColor: '#0b3b8c',
-    shadowOpacity: 0.06,
-    shadowRadius: 6,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 2,
+    shadowColor: '#06141d',
+    shadowOpacity: 0.22,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 4,
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  heroGlowPrimary: {
+    position: 'absolute',
+    width: 160,
+    height: 160,
+    borderRadius: 80,
+    backgroundColor: 'rgba(45, 165, 255, 0.20)',
+    right: -54,
+    top: -74,
+  },
+  heroGlowSecondary: {
+    position: 'absolute',
+    width: 130,
+    height: 130,
+    borderRadius: 65,
+    backgroundColor: 'rgba(34, 197, 94, 0.10)',
+    left: -48,
+    bottom: -62,
   },
   heroRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    gap: 12,
   },
   heroIcon: {
-    width: 42,
-    height: 42,
-    borderRadius: 10,
-    backgroundColor: 'rgba(255,255,255,0.18)',
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: 'rgba(255,255,255,0.10)',
+    borderWidth: 1,
+    borderColor: 'rgba(159, 215, 255, 0.18)',
     justifyContent: 'center',
     alignItems: 'center',
   },
   heroBadge: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: '#dbeafe',
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(22, 163, 74, 0.10)',
+    borderWidth: 1,
+    borderColor: 'rgba(34, 197, 94, 0.18)',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -4793,8 +4856,9 @@ const styles = StyleSheet.create({
     color: '#ffffff',
   },
   heroSubtitle: {
-    fontSize: 13,
-    color: '#dbeafe',
+    fontSize: 12.5,
+    color: '#98c7e8',
+    fontWeight: '700',
     marginTop: 2,
   },
   planillaBtn: {

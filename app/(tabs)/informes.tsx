@@ -3937,9 +3937,22 @@ export default function InformesScreen() {
           <View style={styles.card}>
             <Text style={styles.sectionTitle}>Levantamientos realizados</Text>
             {levantamientosRecientesVisibles.map((item, idx) => (
-              <View key={`lev-realizado-${item.id_levantamiento_terreno || idx}`} style={[styles.assignedItem, styles.assignedItemDone]}>
+              <View
+                key={`lev-realizado-${item.id_levantamiento_terreno || idx}`}
+                style={[styles.installDoneCard, styles.levantamientoCompletedCard]}>
+                <View pointerEvents="none" style={styles.installCompletedTopAccent} />
+                <View pointerEvents="none" style={styles.installCompletedGlowStrong} />
+                <View pointerEvents="none" style={styles.installCompletedGlowSoft} />
+                <View style={[styles.installTypeBadgeRow, styles.installCompletedTypeBadgeRow]}>
+                  <View style={[styles.installTypeBadge, styles.levantamientoTypeBadge]}>
+                    <Ionicons name="map-outline" size={11} color="#1e3a8a" />
+                    <Text style={[styles.installTypeBadgeText, styles.levantamientoTypeBadgeText]}>Levantamiento</Text>
+                  </View>
+                </View>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.assignedItemTitle}>{item.centro || `Centro ${item.centro_id || '-'}`}</Text>
+                  <Text style={[styles.rowTitle, styles.levantamientoCompletedTitle]} numberOfLines={1} ellipsizeMode="tail">
+                    {item.centro || `Centro ${item.centro_id || '-'}`}
+                  </Text>
                   <Text style={styles.assignedItemMeta}>
                     {item.cliente || '-'} | {formatDate(item.fecha_levantamiento)}
                   </Text>
@@ -4564,9 +4577,22 @@ export default function InformesScreen() {
           <View style={styles.card}>
             <Text style={styles.sectionTitle}>Mantenciones recientes</Text>
             {mantencionesRecientesVisibles.map((item) => (
-              <View key={`mant-${item.id_mantencion_terreno || item.id_permiso_trabajo || item.centro_id}`} style={styles.installDoneCard}>
+              <View
+                key={`mant-${item.id_mantencion_terreno || item.id_permiso_trabajo || item.centro_id}`}
+                style={[styles.installDoneCard, styles.mantCompletedCard]}>
+                <View pointerEvents="none" style={styles.installCompletedTopAccent} />
+                <View pointerEvents="none" style={styles.installCompletedGlowStrong} />
+                <View pointerEvents="none" style={styles.installCompletedGlowSoft} />
+                <View style={[styles.installTypeBadgeRow, styles.installCompletedTypeBadgeRow]}>
+                  <View style={[styles.installTypeBadge, styles.mantTypeBadge]}>
+                    <Ionicons name="build-outline" size={11} color="#1e3a8a" />
+                    <Text style={[styles.installTypeBadgeText, styles.mantTypeBadgeText]}>Mantencion</Text>
+                  </View>
+                </View>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.rowTitle}>{item.centro || `Centro ${item.centro_id}`}</Text>
+                  <Text style={[styles.rowTitle, styles.mantCompletedTitle]} numberOfLines={1} ellipsizeMode="tail">
+                    {item.centro || `Centro ${item.centro_id}`}
+                  </Text>
                   <Text style={styles.rowSubtitle}>{item.empresa || item.cliente || '-'}</Text>
                   <Text style={styles.rowMeta}>Fecha: {formatDate(item.fecha_ingreso)}</Text>
                 </View>
@@ -4642,9 +4668,20 @@ export default function InformesScreen() {
           <View style={styles.card}>
             <Text style={styles.sectionTitle}>Retiros recientes</Text>
             {retirosRecientesVisibles.map((item) => (
-              <View key={`ret-${item.id_retiro_terreno || item.centro_id}`} style={styles.installDoneCard}>
+              <View key={`ret-${item.id_retiro_terreno || item.centro_id}`} style={[styles.installDoneCard, styles.retiroCompletedCard]}>
+                <View pointerEvents="none" style={styles.installCompletedTopAccent} />
+                <View pointerEvents="none" style={styles.installCompletedGlowStrong} />
+                <View pointerEvents="none" style={styles.installCompletedGlowSoft} />
+                <View style={[styles.installTypeBadgeRow, styles.installCompletedTypeBadgeRow]}>
+                  <View style={[styles.installTypeBadge, styles.retiroTypeBadge]}>
+                    <Ionicons name="exit-outline" size={11} color="#1e3a8a" />
+                    <Text style={[styles.installTypeBadgeText, styles.retiroTypeBadgeText]}>Retiro</Text>
+                  </View>
+                </View>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.rowTitle}>{item.centro || `Centro ${item.centro_id}`}</Text>
+                  <Text style={[styles.rowTitle, styles.retiroCompletedTitle]} numberOfLines={1} ellipsizeMode="tail">
+                    {item.centro || `Centro ${item.centro_id}`}
+                  </Text>
                   <Text style={styles.rowSubtitle}>{item.empresa || item.cliente || '-'}</Text>
                   <Text style={styles.rowMeta}>
                     Fecha: {formatDate(item.fecha_retiro)} | Tipo: {item.tipo_retiro === 'completo' ? 'Completo' : 'Parcial'}
@@ -7623,6 +7660,45 @@ const styles = StyleSheet.create({
     paddingTop: 34,
     paddingBottom: 10,
   },
+  mantCompletedCard: {
+    borderColor: '#638da3',
+    backgroundColor: '#dbe8ef',
+    borderRadius: 16,
+    paddingHorizontal: 10,
+    paddingTop: 34,
+    paddingBottom: 10,
+  },
+  mantCompletedTitle: {
+    paddingRight: 12,
+    fontSize: 14.5,
+    lineHeight: 17,
+  },
+  retiroCompletedCard: {
+    borderColor: '#638da3',
+    backgroundColor: '#dbe8ef',
+    borderRadius: 16,
+    paddingHorizontal: 10,
+    paddingTop: 34,
+    paddingBottom: 10,
+  },
+  retiroCompletedTitle: {
+    paddingRight: 12,
+    fontSize: 14.5,
+    lineHeight: 17,
+  },
+  levantamientoCompletedCard: {
+    borderColor: '#638da3',
+    backgroundColor: '#dbe8ef',
+    borderRadius: 16,
+    paddingHorizontal: 10,
+    paddingTop: 34,
+    paddingBottom: 10,
+  },
+  levantamientoCompletedTitle: {
+    paddingRight: 12,
+    fontSize: 14.5,
+    lineHeight: 17,
+  },
   installCompletedTopAccent: {
     position: 'absolute',
     left: 0,
@@ -7700,6 +7776,18 @@ const styles = StyleSheet.create({
     borderColor: '#fed7aa',
     backgroundColor: '#fff7ed',
   },
+  mantTypeBadge: {
+    borderColor: '#bfdbfe',
+    backgroundColor: '#eff6ff',
+  },
+  retiroTypeBadge: {
+    borderColor: '#bfdbfe',
+    backgroundColor: '#eff6ff',
+  },
+  levantamientoTypeBadge: {
+    borderColor: '#bfdbfe',
+    backgroundColor: '#eff6ff',
+  },
   installTypeBadgeText: {
     fontWeight: '800',
     fontSize: 11.5,
@@ -7709,6 +7797,15 @@ const styles = StyleSheet.create({
   },
   installTypeBadgeTextReap: {
     color: '#7c2d12',
+  },
+  mantTypeBadgeText: {
+    color: '#1e3a8a',
+  },
+  retiroTypeBadgeText: {
+    color: '#1e3a8a',
+  },
+  levantamientoTypeBadgeText: {
+    color: '#1e3a8a',
   },
   flowHint: { marginTop: 8, fontSize: 12.5, fontWeight: '700' },
   flowHintOk: { color: '#166534' },

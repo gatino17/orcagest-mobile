@@ -1301,28 +1301,36 @@ export default function RendicionesScreen() {
           <View style={styles.pendingByTypeCards}>
             <View style={[styles.pendingTypeCard, styles.pendingTypeCardInst]}>
               <View style={styles.pendingTypeTop}>
-                <Ionicons name="construct-outline" size={13} color="#1d4ed8" />
+                <View style={[styles.pendingTypeIcon, styles.pendingTypeIconInst]}>
+                  <Ionicons name="construct-outline" size={12} color="#1d4ed8" />
+                </View>
                 <ThemedText style={styles.pendingTypeLabel}>Instalacion</ThemedText>
               </View>
               <ThemedText style={styles.pendingTypeValue}>{trabajosPendientesRendicion.instalacion.length}</ThemedText>
             </View>
             <View style={[styles.pendingTypeCard, styles.pendingTypeCardMant]}>
               <View style={styles.pendingTypeTop}>
-                <Ionicons name="build-outline" size={13} color="#15803d" />
+                <View style={[styles.pendingTypeIcon, styles.pendingTypeIconMant]}>
+                  <Ionicons name="build-outline" size={12} color="#15803d" />
+                </View>
                 <ThemedText style={styles.pendingTypeLabel}>Mantencion</ThemedText>
               </View>
               <ThemedText style={styles.pendingTypeValue}>{trabajosPendientesRendicion.mantencion.length}</ThemedText>
             </View>
             <View style={[styles.pendingTypeCard, styles.pendingTypeCardRet]}>
               <View style={styles.pendingTypeTop}>
-                <Ionicons name="exit-outline" size={13} color="#c2410c" />
+                <View style={[styles.pendingTypeIcon, styles.pendingTypeIconRet]}>
+                  <Ionicons name="exit-outline" size={12} color="#c2410c" />
+                </View>
                 <ThemedText style={styles.pendingTypeLabel}>Retiro</ThemedText>
               </View>
               <ThemedText style={styles.pendingTypeValue}>{trabajosPendientesRendicion.retiro.length}</ThemedText>
             </View>
             <View style={[styles.pendingTypeCard, styles.pendingTypeCardLev]}>
               <View style={styles.pendingTypeTop}>
-                <Ionicons name="map-outline" size={13} color="#0284c7" />
+                <View style={[styles.pendingTypeIcon, styles.pendingTypeIconLev]}>
+                  <Ionicons name="map-outline" size={12} color="#0284c7" />
+                </View>
                 <ThemedText style={styles.pendingTypeLabel}>Visitas</ThemedText>
               </View>
               <ThemedText style={styles.pendingTypeValue}>{trabajosPendientesRendicion.levantamiento.length}</ThemedText>
@@ -1600,9 +1608,12 @@ export default function RendicionesScreen() {
           </View>
           {!!rendicionesCompletadasRecientes.length &&
             rendicionesCompletadasRecientes.map((r: any) => (
-              <View key={`rend-ok-${r.id_rendicion}`} style={styles.itemRow}>
+              <View key={`rend-ok-${r.id_rendicion}`} style={[styles.itemRow, styles.rendicionDoneItem]}>
+                <View pointerEvents="none" style={styles.rendicionDoneTopAccent} />
+                <View pointerEvents="none" style={styles.rendicionDoneGlowStrong} />
+                <View pointerEvents="none" style={styles.rendicionDoneGlowSoft} />
                 <View style={{ flex: 1 }}>
-                  <ThemedText style={styles.itemTitle}>
+                  <ThemedText style={[styles.itemTitle, styles.rendicionDoneTitle]} numberOfLines={1} ellipsizeMode="tail">
                     {r.centro_nombre || 'Sin centro'} - {money(r.monto)}
                   </ThemedText>
                   <ThemedText style={styles.itemSub}>
@@ -1610,7 +1621,11 @@ export default function RendicionesScreen() {
                   </ThemedText>
                 </View>
                 <View style={{ alignItems: 'flex-end', gap: 6 }}>
-                  <View style={[styles.badge, String(r?.estado || '').toLowerCase() === 'edicion_solicitada' ? styles.badgeWarn : styles.badgeOk]}>
+                  <View style={[
+                    styles.badge,
+                    styles.rendicionDoneBadge,
+                    String(r?.estado || '').toLowerCase() === 'edicion_solicitada' ? styles.badgeWarn : styles.badgeOk,
+                  ]}>
                     <ThemedText style={styles.badgeText}>
                       {String(r?.estado || '').toLowerCase() === 'edicion_solicitada' ? 'Edicion solicitada' : 'Completada'}
                     </ThemedText>
@@ -2289,7 +2304,7 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   pendingJobsCard: {
-    backgroundColor: '#f4f9ff',
+    backgroundColor: '#e8f1f6',
     borderColor: '#b8dff6',
     borderLeftWidth: 0,
     flexDirection: 'column',
@@ -2357,24 +2372,39 @@ const styles = StyleSheet.create({
   },
   pendingJobsCountLabel: { color: '#be123c', fontWeight: '800', fontSize: 9, marginTop: -2 },
   pendingJobsEmpty: { color: '#64748b', fontSize: 12, fontWeight: '700' },
-  pendingByTypeCards: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
+  pendingByTypeCards: { flexDirection: 'row', gap: 7, flexWrap: 'wrap' },
   pendingTypeCard: {
     flexBasis: '48%',
     flexGrow: 1,
-    borderRadius: 16,
+    borderRadius: 14,
     borderWidth: 1,
-    paddingHorizontal: 10,
-    paddingVertical: 9,
-    minHeight: 62,
+    paddingHorizontal: 8,
+    paddingVertical: 7,
+    minHeight: 42,
+    flexDirection: 'row',
+    alignItems: 'center',
     justifyContent: 'space-between',
+    backgroundColor: 'rgba(255,255,255,0.72)',
   },
-  pendingTypeCardInst: { backgroundColor: '#dbeafe', borderColor: '#93c5fd' },
-  pendingTypeCardMant: { backgroundColor: '#dcfce7', borderColor: '#86efac' },
-  pendingTypeCardRet: { backgroundColor: '#ffedd5', borderColor: '#fdba74' },
-  pendingTypeCardLev: { backgroundColor: '#e0f2fe', borderColor: '#7dd3fc' },
-  pendingTypeTop: { flexDirection: 'row', alignItems: 'center', gap: 5 },
-  pendingTypeLabel: { color: '#17324a', fontSize: 11, fontWeight: '900' },
-  pendingTypeValue: { color: '#06141d', fontSize: 21, fontWeight: '900', marginTop: 4 },
+  pendingTypeCardInst: { borderColor: '#bfdbfe' },
+  pendingTypeCardMant: { borderColor: '#bbf7d0' },
+  pendingTypeCardRet: { borderColor: '#fed7aa' },
+  pendingTypeCardLev: { borderColor: '#bae6fd' },
+  pendingTypeTop: { flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 },
+  pendingTypeIcon: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+  },
+  pendingTypeIconInst: { backgroundColor: '#dbeafe', borderColor: '#93c5fd' },
+  pendingTypeIconMant: { backgroundColor: '#dcfce7', borderColor: '#86efac' },
+  pendingTypeIconRet: { backgroundColor: '#ffedd5', borderColor: '#fdba74' },
+  pendingTypeIconLev: { backgroundColor: '#e0f2fe', borderColor: '#7dd3fc' },
+  pendingTypeLabel: { color: '#17324a', fontSize: 10.3, fontWeight: '900', flexShrink: 1 },
+  pendingTypeValue: { color: '#06141d', fontSize: 16, fontWeight: '900', marginLeft: 6 },
   pendingInstCard: {
     borderWidth: 1,
     borderColor: '#bfdbfe',
@@ -2899,6 +2929,58 @@ const styles = StyleSheet.create({
   draftText: { color: '#0f172a', fontWeight: '800' },
   sendText: { color: '#fff', fontWeight: '800' },
   itemRow: { flexDirection: 'row', alignItems: 'center', gap: 8, borderBottomWidth: 1, borderBottomColor: '#eef2f7', paddingVertical: 10 },
+  rendicionDoneItem: {
+    borderBottomWidth: 0,
+    borderWidth: 1,
+    borderColor: '#638da3',
+    backgroundColor: '#dbe8ef',
+    borderRadius: 16,
+    paddingHorizontal: 10,
+    paddingTop: 34,
+    paddingBottom: 10,
+    marginTop: 8,
+    overflow: 'hidden',
+    position: 'relative',
+    shadowColor: '#9db7ca',
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 2,
+  },
+  rendicionDoneTopAccent: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: 0,
+    height: 4,
+    backgroundColor: '#16a34a',
+  },
+  rendicionDoneGlowStrong: {
+    position: 'absolute',
+    right: -42,
+    top: -42,
+    width: 122,
+    height: 122,
+    borderRadius: 61,
+    backgroundColor: 'rgba(22, 163, 74, 0.34)',
+  },
+  rendicionDoneGlowSoft: {
+    position: 'absolute',
+    right: -78,
+    top: -78,
+    width: 178,
+    height: 178,
+    borderRadius: 89,
+    backgroundColor: 'rgba(34, 197, 94, 0.18)',
+  },
+  rendicionDoneTitle: {
+    paddingRight: 12,
+    fontSize: 13,
+    lineHeight: 16,
+  },
+  rendicionDoneBadge: {
+    zIndex: 2,
+  },
   itemTitle: { color: '#163041', fontWeight: '800', fontSize: 13 },
   itemSub: { color: '#64748b', fontSize: 11, fontWeight: '700' },
   badge: { borderRadius: 999, paddingHorizontal: 8, paddingVertical: 4, borderWidth: 1 },
