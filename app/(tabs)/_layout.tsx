@@ -1,14 +1,29 @@
-import { Tabs } from 'expo-router';
-import React from 'react';
+import { Redirect, Tabs } from 'expo-router';
+import React, { useContext } from 'react';
+import { ActivityIndicator, StyleSheet, View } from 'react-native';
 
 import { HapticTab } from '@/components/haptic-tab';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { Ionicons } from '@expo/vector-icons';
+import { AuthContext } from '../_layout';
 
 export default function TabLayout() {
   const colorScheme = useColorScheme();
+  const { token, ready } = useContext(AuthContext);
+
+  if (!ready) {
+    return (
+      <View style={styles.loadingScreen}>
+        <ActivityIndicator color="#0f6fae" />
+      </View>
+    );
+  }
+
+  if (!token) {
+    return <Redirect href="/login" />;
+  }
 
   return (
     <Tabs
@@ -68,3 +83,12 @@ export default function TabLayout() {
     </Tabs>
   );
 }
+
+const styles = StyleSheet.create({
+  loadingScreen: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#eef3f6',
+  },
+});

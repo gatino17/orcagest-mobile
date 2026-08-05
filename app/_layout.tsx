@@ -19,6 +19,7 @@ type AuthContextType = {
   role: string | null;
   name: string | null;
   userId: number | null;
+  ready: boolean;
   setToken: (t: string | null) => void;
 };
 
@@ -27,6 +28,7 @@ export const AuthContext = createContext<AuthContextType>({
   role: null,
   name: null,
   userId: null,
+  ready: false,
   setToken: () => {},
 });
 
@@ -100,7 +102,7 @@ export default function RootLayout() {
     }
   };
 
-  const ctx = useMemo(() => ({ token, role, name, userId, setToken }), [token, role, name, userId]);
+  const ctx = useMemo(() => ({ token, role, name, userId, ready, setToken }), [token, role, name, userId, ready]);
 
   return (
     <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
