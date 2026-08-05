@@ -1110,25 +1110,26 @@ export default function ArmadoScreen() {
     setFechaTerminoVista(fechaTerminoArmado || '');
   }, [estado, fechaInicioArmado, fechaTerminoArmado]);
 
+  const cargarDetalleArmado = useCallback(async () => {
+    if (!armadoId) return;
+    try {
+      const lista = await getArmados({ per_page: 0 });
+      const row = (Array.isArray(lista) ? lista : []).find(
+        (x: any) => Number(x?.id_armado || x?.id || 0) === Number(armadoId)
+      );
+      if (!row) return;
+      setArmadoActual(row);
+      setEstadoVista(String(row?.estado || estado || ''));
+      setFechaInicioVista(String(row?.fecha_inicio || row?.fecha_asignacion || ''));
+      setFechaTerminoVista(String(row?.fecha_cierre || ''));
+    } catch {
+      // fallback a params si falla la consulta
+    }
+  }, [armadoId, estado]);
+
   useEffect(() => {
-    const cargarFechasArmado = async () => {
-      if (!armadoId) return;
-      try {
-        const lista = await getArmados({ per_page: 0 });
-        const row = (Array.isArray(lista) ? lista : []).find(
-          (x: any) => Number(x?.id_armado || x?.id || 0) === Number(armadoId)
-        );
-        if (!row) return;
-        setArmadoActual(row);
-        setEstadoVista(String(row?.estado || estado || ''));
-        setFechaInicioVista(String(row?.fecha_inicio || row?.fecha_asignacion || ''));
-        setFechaTerminoVista(String(row?.fecha_cierre || ''));
-      } catch {
-        // fallback a params si falla la consulta
-      }
-    };
-    cargarFechasArmado();
-  }, [armadoId]);
+    cargarDetalleArmado();
+  }, [cargarDetalleArmado]);
 
   useEffect(() => {
     if (!armadoActual?.cajas_estado) return;
@@ -1178,11 +1179,12 @@ export default function ArmadoScreen() {
         ignoreNextRealtimeRefreshRef.current = false;
         return;
       }
+      cargarDetalleArmado();
       cargarEquipos({ silent: true });
       cargarMat({ silent: true });
     };
     return subscribeArmadoUpdated(onArmadoUpdated);
-  }, [token, armadoId, cargarEquipos, cargarMat]);
+  }, [token, armadoId, cargarDetalleArmado, cargarEquipos, cargarMat]);
 
   const actualizarEquipo = (id: string, cambios: Partial<Equipo>) => {
     if (esSoloLectura) return;
