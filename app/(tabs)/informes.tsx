@@ -51,6 +51,8 @@ import {
 import { subscribeActividadUpdated } from '@/lib/realtime';
 import {
   fetchActividadesAsignadasUsuario,
+  matchActividadTecnicoNombre,
+  normalizeActividadText,
   readCachedActividadesAsignadas,
   writeCachedActividadesAsignadas,
 } from '@/lib/actividades';
@@ -955,6 +957,53 @@ export default function InformesScreen() {
       `informes_v1_${userId || 'anon'}_${Number(filtroCentroId || 0) || 0}_${filtroFechaDesde || 'na'}_${filtroFechaHasta || 'na'}`,
     [userId, filtroCentroId, filtroFechaDesde, filtroFechaHasta]
   );
+
+  const actividadIdsUsuario = useMemo(() => {
+    const ids = new Set<number>();
+    (Array.isArray(actividadesAsignadas) ? actividadesAsignadas : []).forEach((actividad: any) => {
+      const id = Number(actividad?.id_actividad || actividad?.id || 0) || 0;
+      if (id > 0) ids.add(id);
+    });
+    return ids;
+  }, [actividadesAsignadas]);
+
+  const filtrarInformesDelUsuario = useCallback(
+    <T extends Record<string, any>>(items: T[]): T[] => {
+      const rows = Array.isArray(items) ? items : [];
+      const rol = normalizeActividadText(role);
+      if (rol === 'admin') return rows;
+
+      const nombresUsuario = [name, (name || '').split(/\s+/).slice(0, 2).join(' ')]
+        .map((value) => String(value || '').trim())
+        .filter(Boolean);
+
+      if (!nombresUsuario.length && !actividadIdsUsuario.size) return [];
+
+      return rows.filter((item: any) => {
+        const actividadId = Number(item?.actividad_id || 0) || 0;
+        if (actividadId > 0 && actividadIdsUsuario.has(actividadId)) return true;
+
+        const firmasAdicionales = Array.isArray(item?.firmas_tecnicos_adicionales)
+          ? item.firmas_tecnicos_adicionales
+          : [];
+        const nombresInforme = [
+          item?.tecnico_1,
+          item?.tecnico_2,
+          item?.tecnico,
+          item?.usuario,
+          item?.creado_por_nombre,
+          ...firmasAdicionales.map((firma: any) => firma?.nombre || firma?.tecnico || firma?.name),
+        ]
+          .map((value) => String(value || '').trim())
+          .filter(Boolean);
+
+        return nombresUsuario.some((usuario) =>
+          nombresInforme.some((tecnicoInforme) => matchActividadTecnicoNombre(tecnicoInforme, usuario))
+        );
+      });
+    },
+    [actividadIdsUsuario, name, role]
+  );
   const instalacionSeleccionada = !!(permClienteId && permCentroId);
   const instalacionesCompletadas = useMemo(() => {
     const ids = permisosInstalacion
@@ -1529,12 +1578,12 @@ export default function InformesScreen() {
     const cached = actasCacheRef.current[informesFiltroCacheKey];
     const persistentCacheKey = `${informesPersistentCacheBaseKey}_actas`;
     if (cached) {
-      setActas(cached.data);
+      setActas(filtrarInformesDelUsuario(cached.data));
       if (!options?.force && Date.now() - cached.fetchedAt < INFORMES_CACHE_TTL_MS) return;
     } else {
       const persisted = await readCachedValue<Acta[]>(persistentCacheKey, []);
       if (Array.isArray(persisted.value) && persisted.value.length) {
-        const entry = { data: persisted.value, fetchedAt: persisted.updatedAt || 0 };
+        const entry = { data: filtrarInformesDelUsuario(persisted.value), fetchedAt: persisted.updatedAt || 0 };
         actasCacheRef.current[informesFiltroCacheKey] = entry;
         setActas(entry.data);
         if (!options?.force && Date.now() - entry.fetchedAt < INFORMES_CACHE_TTL_MS) return;
@@ -1547,7 +1596,7 @@ export default function InformesScreen() {
         fecha_desde: filtroFechaDesde || undefined,
         fecha_hasta: filtroFechaHasta || undefined,
       });
-      const rows = Array.isArray(data) ? data : [];
+      const rows = filtrarInformesDelUsuario(Array.isArray(data) ? data : []);
       actasCacheRef.current[informesFiltroCacheKey] = {
         data: rows,
         fetchedAt: Date.now(),
@@ -1568,12 +1617,12 @@ export default function InformesScreen() {
     const cached = permisosCacheRef.current[informesFiltroCacheKey];
     const persistentCacheKey = `${informesPersistentCacheBaseKey}_permisos`;
     if (cached) {
-      setPermisos(cached.data);
+      setPermisos(filtrarInformesDelUsuario(cached.data));
       if (!options?.force && Date.now() - cached.fetchedAt < INFORMES_CACHE_TTL_MS) return;
     } else {
       const persisted = await readCachedValue<Permiso[]>(persistentCacheKey, []);
       if (Array.isArray(persisted.value) && persisted.value.length) {
-        const entry = { data: persisted.value, fetchedAt: persisted.updatedAt || 0 };
+        const entry = { data: filtrarInformesDelUsuario(persisted.value), fetchedAt: persisted.updatedAt || 0 };
         permisosCacheRef.current[informesFiltroCacheKey] = entry;
         setPermisos(entry.data);
         if (!options?.force && Date.now() - entry.fetchedAt < INFORMES_CACHE_TTL_MS) return;
@@ -1586,7 +1635,7 @@ export default function InformesScreen() {
         fecha_desde: filtroFechaDesde || undefined,
         fecha_hasta: filtroFechaHasta || undefined,
       });
-      const rows = Array.isArray(data) ? data : [];
+      const rows = filtrarInformesDelUsuario(Array.isArray(data) ? data : []);
       permisosCacheRef.current[informesFiltroCacheKey] = {
         data: rows,
         fetchedAt: Date.now(),
@@ -1612,12 +1661,12 @@ export default function InformesScreen() {
     const persistentCacheKey = `${informesPersistentCacheBaseKey}_mantenciones`;
     const cached = mantencionesCacheRef.current[informesFiltroCacheKey];
     if (cached) {
-      setMantencionesTerreno(cached.data);
+      setMantencionesTerreno(filtrarInformesDelUsuario(cached.data));
       if (Date.now() - cached.fetchedAt < INFORMES_CACHE_TTL_MS) return;
     } else {
       const persisted = await readCachedValue<Permiso[]>(persistentCacheKey, []);
       if (Array.isArray(persisted.value) && persisted.value.length) {
-        const entry = { data: persisted.value, fetchedAt: persisted.updatedAt || 0 };
+        const entry = { data: filtrarInformesDelUsuario(persisted.value), fetchedAt: persisted.updatedAt || 0 };
         mantencionesCacheRef.current[informesFiltroCacheKey] = entry;
         setMantencionesTerreno(entry.data);
         if (Date.now() - entry.fetchedAt < INFORMES_CACHE_TTL_MS) return;
@@ -1629,7 +1678,7 @@ export default function InformesScreen() {
         fecha_desde: filtroFechaDesde || undefined,
         fecha_hasta: filtroFechaHasta || undefined,
       });
-      const rows = Array.isArray(data) ? data : [];
+      const rows = filtrarInformesDelUsuario(Array.isArray(data) ? data : []);
       mantencionesCacheRef.current[informesFiltroCacheKey] = {
         data: rows,
         fetchedAt: Date.now(),
@@ -1655,12 +1704,12 @@ export default function InformesScreen() {
     const persistentCacheKey = `${informesPersistentCacheBaseKey}_retiros`;
     const cached = retirosCacheRef.current[informesFiltroCacheKey];
     if (cached) {
-      setRetirosTerreno(cached.data);
+      setRetirosTerreno(filtrarInformesDelUsuario(cached.data));
       if (Date.now() - cached.fetchedAt < INFORMES_CACHE_TTL_MS) return;
     } else {
       const persisted = await readCachedValue<Permiso[]>(persistentCacheKey, []);
       if (Array.isArray(persisted.value) && persisted.value.length) {
-        const entry = { data: persisted.value, fetchedAt: persisted.updatedAt || 0 };
+        const entry = { data: filtrarInformesDelUsuario(persisted.value), fetchedAt: persisted.updatedAt || 0 };
         retirosCacheRef.current[informesFiltroCacheKey] = entry;
         setRetirosTerreno(entry.data);
         if (Date.now() - entry.fetchedAt < INFORMES_CACHE_TTL_MS) return;
@@ -1672,7 +1721,7 @@ export default function InformesScreen() {
         fecha_desde: filtroFechaDesde || undefined,
         fecha_hasta: filtroFechaHasta || undefined,
       });
-      const rows = Array.isArray(data) ? data : [];
+      const rows = filtrarInformesDelUsuario(Array.isArray(data) ? data : []);
       retirosCacheRef.current[informesFiltroCacheKey] = {
         data: rows,
         fetchedAt: Date.now(),
@@ -1698,12 +1747,12 @@ export default function InformesScreen() {
     const persistentCacheKey = `${informesPersistentCacheBaseKey}_levantamientos`;
     const cached = levantamientosCacheRef.current[informesFiltroCacheKey];
     if (cached) {
-      setLevantamientosTerreno(cached.data);
+      setLevantamientosTerreno(filtrarInformesDelUsuario(cached.data));
       if (Date.now() - cached.fetchedAt < INFORMES_CACHE_TTL_MS) return;
     } else {
       const persisted = await readCachedValue<LevantamientoTerreno[]>(persistentCacheKey, []);
       if (Array.isArray(persisted.value) && persisted.value.length) {
-        const entry = { data: persisted.value, fetchedAt: persisted.updatedAt || 0 };
+        const entry = { data: filtrarInformesDelUsuario(persisted.value), fetchedAt: persisted.updatedAt || 0 };
         levantamientosCacheRef.current[informesFiltroCacheKey] = entry;
         setLevantamientosTerreno(entry.data);
         if (Date.now() - entry.fetchedAt < INFORMES_CACHE_TTL_MS) return;
@@ -1715,7 +1764,7 @@ export default function InformesScreen() {
         fecha_desde: filtroFechaDesde || undefined,
         fecha_hasta: filtroFechaHasta || undefined,
       });
-      const rows = Array.isArray(data) ? data : [];
+      const rows = filtrarInformesDelUsuario(Array.isArray(data) ? data : []);
       levantamientosCacheRef.current[informesFiltroCacheKey] = {
         data: rows,
         fetchedAt: Date.now(),
