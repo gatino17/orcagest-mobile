@@ -365,6 +365,42 @@ export default function ArmadoScreen() {
   const esFinalizado = estadoNormalizado === 'finalizado';
   const esPrefinalizado = estadoNormalizado === 'prefinalizado';
   const esSoloLectura = esFinalizado || esPrefinalizado;
+  const metaEstadoTone = useMemo(() => {
+    if (estadoNormalizado === 'finalizado') {
+      return {
+        border: '#638da3',
+        bg: '#dbe8ef',
+        accent: '#16a34a',
+        glowStrong: 'rgba(22, 163, 74, 0.34)',
+        glowSoft: 'rgba(34, 197, 94, 0.18)',
+      };
+    }
+    if (estadoNormalizado === 'en_proceso') {
+      return {
+        border: '#38bdf8',
+        bg: '#f0f9ff',
+        accent: '#2563eb',
+        glowStrong: 'rgba(59, 130, 246, 0.2)',
+        glowSoft: 'rgba(59, 130, 246, 0.1)',
+      };
+    }
+    if (estadoNormalizado === 'prefinalizado') {
+      return {
+        border: '#a78bfa',
+        bg: '#f5f3ff',
+        accent: '#7c3aed',
+        glowStrong: 'rgba(124, 58, 237, 0.2)',
+        glowSoft: 'rgba(124, 58, 237, 0.1)',
+      };
+    }
+    return {
+      border: '#facc15',
+      bg: '#fffbeb',
+      accent: '#d97706',
+      glowStrong: 'rgba(245, 158, 11, 0.2)',
+      glowSoft: 'rgba(245, 158, 11, 0.1)',
+    };
+  }, [estadoNormalizado]);
   const totalCajasParam = params.total_cajas ? Number(params.total_cajas) : undefined;
   const [totalCajas, setTotalCajas] = useState<number | undefined>(totalCajasParam);
   const centroId = params.centro_id ? Number(params.centro_id) : undefined;
@@ -2212,10 +2248,10 @@ export default function ArmadoScreen() {
           <Text style={styles.sectionTitleLine}>Asignacion</Text>
           <View style={styles.sectionLine} />
         </View>
-        <View style={styles.metaCard}>
-          <View pointerEvents="none" style={styles.metaCardTopAccent} />
-          <View pointerEvents="none" style={styles.metaCardGlowStrong} />
-          <View pointerEvents="none" style={styles.metaCardGlowSoft} />
+        <View style={[styles.metaCard, { borderColor: metaEstadoTone.border, backgroundColor: metaEstadoTone.bg }]}>
+          <View pointerEvents="none" style={[styles.metaCardTopAccent, { backgroundColor: metaEstadoTone.accent }]} />
+          <View pointerEvents="none" style={[styles.metaCardGlowStrong, { backgroundColor: metaEstadoTone.glowStrong }]} />
+          <View pointerEvents="none" style={[styles.metaCardGlowSoft, { backgroundColor: metaEstadoTone.glowSoft }]} />
           <View style={styles.metaTopRow}>
             <View style={{ flex: 1 }}>
               <View style={styles.metaCenterRow}>
