@@ -1,5 +1,5 @@
 ﻿import React, { useMemo, useState, useContext, useEffect, useCallback, useRef } from 'react';
-import { View, Text, StyleSheet, ScrollView, TextInput, ActivityIndicator, Pressable, StatusBar as RNStatusBar, Modal, Alert } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TextInput, ActivityIndicator, Pressable, StatusBar as RNStatusBar, Modal, Alert, AppState } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useColorScheme } from '@/hooks/use-color-scheme';
@@ -1185,6 +1185,24 @@ export default function ArmadoScreen() {
     };
     return subscribeArmadoUpdated(onArmadoUpdated);
   }, [token, armadoId, cargarDetalleArmado, cargarEquipos, cargarMat]);
+
+  useEffect(() => {
+    if (!token || !armadoId) return;
+    const interval = setInterval(() => {
+      if (!suppressRealtimeRefreshRef.current) {
+        cargarDetalleArmado();
+      }
+    }, 8000);
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active' && !suppressRealtimeRefreshRef.current) {
+        cargarDetalleArmado();
+      }
+    });
+    return () => {
+      clearInterval(interval);
+      sub.remove();
+    };
+  }, [token, armadoId, cargarDetalleArmado]);
 
   const actualizarEquipo = (id: string, cambios: Partial<Equipo>) => {
     if (esSoloLectura) return;

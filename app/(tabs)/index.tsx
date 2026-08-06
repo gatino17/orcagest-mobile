@@ -1,5 +1,5 @@
 ﻿import React, { useContext, useEffect, useState, useMemo, useCallback, useRef } from 'react';
-import { StyleSheet, Pressable, ScrollView, ActivityIndicator, View, Alert, Animated } from 'react-native';
+import { StyleSheet, Pressable, ScrollView, ActivityIndicator, View, Alert, Animated, AppState } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { useRouter } from 'expo-router';
@@ -265,6 +265,22 @@ export default function HomeScreen() {
       cargarArmados(true);
     };
     return subscribeArmadoUpdated(onArmadoUpdated);
+  }, [token, userId, cargarArmados]);
+
+  useEffect(() => {
+    if (!token || !userId) return;
+    const interval = setInterval(() => {
+      cargarArmados(true);
+    }, 8000);
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        cargarArmados(true);
+      }
+    });
+    return () => {
+      clearInterval(interval);
+      sub.remove();
+    };
   }, [token, userId, cargarArmados]);
 
   useEffect(() => {
