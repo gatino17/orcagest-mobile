@@ -1,4 +1,4 @@
-﻿import React, { useMemo, useState, useContext, useEffect, useCallback, useRef } from 'react';
+import React, { useMemo, useState, useContext, useEffect, useCallback, useRef } from 'react';
 import { View, Text, StyleSheet, ScrollView, TextInput, ActivityIndicator, Pressable, StatusBar as RNStatusBar, Modal, Alert, AppState } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -147,6 +147,8 @@ const MATERIALES_PREDEF: string[] = [
   'utp planza',
   'conector planza a corrugado',
   'copla planza',
+  'Mouse',
+  'Teclado',
 ];
 
 const MATERIAL_CATEGORY_OPTIONS = ['Todas', 'Electricidad', 'Redes', 'Montaje', 'Canalizacion', 'Otros'] as const;
@@ -250,6 +252,8 @@ const normalizarEstadoRegistroMaterial = (value?: string): EquipoRegistroEstado 
   normalizarEstadoRegistroEquipo(value);
 
 const EQUIPOS_MIGRADOS_A_MATERIALES = new Set(['bandeja rack - tornillos']);
+const EQUIPOS_POR_CANTIDAD = new Set(['mouse', 'teclado']);
+const esEquipoPorCantidadNombre = (nombre?: string) => EQUIPOS_POR_CANTIDAD.has(normalizarNombreMaterial(nombre));
 
 const GRUPOS_EQUIPOS: { titulo: string; items: string[] }[] = [
   {
@@ -555,6 +559,7 @@ export default function ArmadoScreen() {
   const materialesFiltrados = useMemo(() => {
     const termino = normalizarTextoBusqueda(busquedaMaterial);
     return materiales.filter((m) => {
+      if (esEquipoPorCantidadNombre(m?.nombre)) return false;
       const coincideCategoria =
         categoriaMaterial === 'Todas' || obtenerCategoriaMaterial(m?.nombre) === categoriaMaterial;
       if (!coincideCategoria) return false;
@@ -592,6 +597,7 @@ export default function ArmadoScreen() {
     const usados = new Set<string>();
     const equiposPorNombre = new Map<string, Equipo[]>();
     equipos.forEach((e) => {
+      if (esEquipoPorCantidadNombre(e?.nombre)) return;
       const key = norm(e.nombre);
       if (!key) return;
       const lista = equiposPorNombre.get(key) || [];
@@ -612,7 +618,7 @@ export default function ArmadoScreen() {
             // Muestra el nombre canonico del grupo (ej: IP PC -> PC)
             return { ...found, nombre: n };
           }
-          // placeholder para que se vea en la lista aunque no exista aÃºn
+          // placeholder para que se vea en la lista aunque no exista aÃƒÂºn
           return {
             id: `${g.titulo}-${idx}`,
             nombre: n,
@@ -647,33 +653,35 @@ export default function ArmadoScreen() {
   }, [busquedaEquipo, gruposRender, normalizarTextoBusqueda]);
 
   const resumenEquipos = useMemo(() => {
-    const total = gruposRender.reduce((acc, g) => acc + (Array.isArray(g?.items) ? g.items.length : 0), 0);
-    const conSerie = gruposRender.reduce(
-      (acc, g) =>
-        acc +
-        (Array.isArray(g?.items)
-          ? g.items.filter((it) => (it.serie || '').trim().length > 0).length
-          : 0),
-      0
-    );
-    const noAplica = gruposRender.reduce(
-      (acc, g) =>
-        acc +
-        (Array.isArray(g?.items)
-          ? g.items.filter((it) => normalizarEstadoRegistroEquipo(it?.estadoRegistro) === 'no_aplica').length
-          : 0),
-      0
-    );
-    const pendientes = gruposRender.reduce(
-      (acc, g) =>
-        acc +
-        (Array.isArray(g?.items)
-          ? g.items.filter((it) => normalizarEstadoRegistroEquipo(it?.estadoRegistro) === 'pendiente').length
-          : 0),
-      0
-    );
-    return { total, conSerie, noAplica, pendientes, resueltos: conSerie + noAplica };
-  }, [gruposRender]);
+    const items = gruposRender.flatMap((g) => (Array.isArray(g?.items) ? g.items : []));
+    let conSerie = 0;
+    let conCantidad = 0;
+    let noAplica = 0;
+    let pendientes = 0;
+    items.forEach((it) => {
+      const esCantidad = esEquipoPorCantidadNombre(it?.nombre);
+      const material = esCantidad
+        ? materiales.find((m) => normalizarNombreMaterial(m?.nombre) === normalizarNombreMaterial(it?.nombre))
+        : null;
+      const estadoRegistro = esCantidad
+        ? normalizarEstadoRegistroMaterial(material?.estadoRegistro)
+        : normalizarEstadoRegistroEquipo(it?.estadoRegistro);
+      if (estadoRegistro === 'no_aplica') {
+        noAplica += 1;
+        return;
+      }
+      if (estadoRegistro === 'pendiente') {
+        pendientes += 1;
+        return;
+      }
+      if (esCantidad) {
+        if (Number(material?.cantidad || 0) > 0) conCantidad += 1;
+        return;
+      }
+      if ((it.serie || '').trim().length > 0) conSerie += 1;
+    });
+    return { total: items.length, conSerie, conCantidad, noAplica, pendientes, resueltos: conSerie + conCantidad + noAplica };
+  }, [gruposRender, materiales]);
 
   const hashEquipo = useCallback((e: Pick<Equipo, 'serie' | 'codigo' | 'caja' | 'estadoRegistro' | 'observacionRegistro'>) => {
     const serie = String(e.serie || '').trim();
@@ -788,13 +796,14 @@ export default function ArmadoScreen() {
     );
   }, []);
 
+
   const obtenerConflictoSerieLocal = useCallback((serie?: string, equipoActualId?: string | null) => {
     const serieNormalizada = normalizarSerieLocal(serie);
     if (!serieNormalizada) return null;
     const actualId = String(equipoActualId || '').trim();
     return (
       equipos.find((eq) => {
-        if (esEquipoMigradoAMaterial(eq.nombre)) return false;
+        if (esEquipoMigradoAMaterial(eq.nombre) || esEquipoPorCantidadNombre(eq.nombre)) return false;
         const eqId = String(eq.id || '').trim();
         if (actualId && eqId === actualId) return false;
         return normalizarSerieLocal(eq.serie) === serieNormalizada;
@@ -947,7 +956,7 @@ export default function ArmadoScreen() {
       if (!active) return;
       if (cached?.equipos && Array.isArray(cached.equipos) && cached.equipos.length > 0) {
         const equiposCache = cached.equipos
-          .filter((e: Equipo) => !esEquipoMigradoAMaterial(e?.nombre))
+          .filter((e: Equipo) => !esEquipoMigradoAMaterial(e?.nombre) && !esEquipoPorCantidadNombre(e?.nombre))
           .map((e: Equipo) => ({
             ...e,
             caja: normalizarCajaEquipoInicial(e.caja, e.serie, e.codigo),
@@ -1014,7 +1023,7 @@ export default function ArmadoScreen() {
 
   useEffect(() => {
     setEquipos((prev) => {
-      const filtrados = prev.filter((eq) => !esEquipoMigradoAMaterial(eq?.nombre));
+      const filtrados = prev.filter((eq) => !esEquipoMigradoAMaterial(eq?.nombre) && !esEquipoPorCantidadNombre(eq?.nombre));
       return filtrados.length === prev.length ? prev : filtrados;
     });
   }, [esEquipoMigradoAMaterial]);
@@ -1029,7 +1038,7 @@ export default function ArmadoScreen() {
       const data = await getEquipos(centroId);
       if (Array.isArray(data)) {
         const mappedBase = data
-          .filter((eq: any) => !esEquipoMigradoAMaterial(eq?.nombre))
+          .filter((eq: any) => !esEquipoMigradoAMaterial(eq?.nombre) && !esEquipoPorCantidadNombre(eq?.nombre))
           .map((eq: any) => ({
             id: String(eq.id_equipo || eq.id || `${eq.nombre}-${eq.ip || ''}`),
             nombre: eq.nombre || 'Equipo',
@@ -1059,7 +1068,7 @@ export default function ArmadoScreen() {
         const cached = await readCache();
         if (cached?.equipos && Array.isArray(cached.equipos) && cached.equipos.length > 0) {
         const equiposCache = cached.equipos
-          .filter((eq: Equipo) => !esEquipoMigradoAMaterial(eq?.nombre))
+          .filter((eq: Equipo) => !esEquipoMigradoAMaterial(eq?.nombre) && !esEquipoPorCantidadNombre(eq?.nombre))
           .map((eq: Equipo) => ({
             ...eq,
             caja: normalizarCajaEquipoInicial(eq.caja, eq.serie, eq.codigo),
@@ -1250,7 +1259,7 @@ export default function ArmadoScreen() {
         next[idx] = { ...next[idx], ...cambios };
         return next;
       }
-      // Si es un equipo placeholder (aún no viene de backend), lo creamos en estado local
+      // Si es un equipo placeholder (aÃºn no viene de backend), lo creamos en estado local
       // para que no se borre al escribir manualmente o al escanear.
           return [
             ...prev,
@@ -1301,7 +1310,7 @@ export default function ArmadoScreen() {
     if (!equipoEstadoTarget) return;
     Alert.alert(
       'No aplica',
-      '¿Seguro que este equipo no aplica en este armado?',
+      'Â¿Seguro que este equipo no aplica en este armado?',
       [
         { text: 'Cancelar', style: 'cancel' },
         {
@@ -1357,6 +1366,29 @@ export default function ArmadoScreen() {
     setMateriales((prev) => prev.map((m) => (m.id === id ? { ...m, ...cambios } : m)));
   };
 
+  const obtenerMaterialPorNombre = useCallback(
+    (nombre?: string) =>
+      materiales.find((m) => normalizarNombreMaterial(m?.nombre) === normalizarNombreMaterial(nombre)) || null,
+    [materiales]
+  );
+
+  const actualizarMaterialPorNombre = useCallback((nombre: string, cambios: Partial<Material>) => {
+    if (esSoloLectura) return;
+    const key = normalizarNombreMaterial(nombre);
+    setMateriales((prev) =>
+      prev.map((m) =>
+        normalizarNombreMaterial(m?.nombre) === key
+          ? {
+              ...m,
+              ...cambios,
+              nombre: canonizarNombreMaterial(m?.nombre || nombre),
+              usuario: name || m.usuario,
+            }
+          : m
+      )
+    );
+  }, [esSoloLectura, name]);
+
   const abrirEstadoMaterial = useCallback((material: Material) => {
     if (esSoloLectura) return;
     setMaterialEstadoTarget(material);
@@ -1389,7 +1421,7 @@ export default function ArmadoScreen() {
     if (!materialEstadoTarget) return;
     Alert.alert(
       'No aplica',
-      '¿Seguro que este material no aplica en este armado?',
+      'Â¿Seguro que este material no aplica en este armado?',
       [
         { text: 'Cancelar', style: 'cancel' },
         {
@@ -1795,6 +1827,7 @@ export default function ArmadoScreen() {
       setGuardandoEq(true);
       const seriesLocales = new Map<string, string>();
       for (const equipo of equipos) {
+        if (esEquipoPorCantidadNombre(equipo.nombre)) continue;
         const serieNormalizada = normalizarSerieLocal(equipo.serie);
         if (!serieNormalizada) continue;
         const previo = seriesLocales.get(serieNormalizada);
@@ -1814,7 +1847,14 @@ export default function ArmadoScreen() {
       }
       const updatesPendientes: Array<{ id: string; data: Record<string, any> }> = [];
       const createsPendientes: Array<{ localId: string; data: Record<string, any> }> = [];
+      const materialesCantidadPendientes = materiales.filter((m) => {
+        if (!esEquipoPorCantidadNombre(m?.nombre)) return false;
+        if (!materialTieneContenido(m)) return false;
+        const idStr = String(m.id);
+        return materialesSnapshotRef.current[idStr] !== hashMaterial(m);
+      });
       const equiposParaValidar = equipos.filter((e) => {
+        if (esEquipoPorCantidadNombre(e?.nombre)) return false;
         const idStr = String(e.id);
         const actualHash = hashEquipo(e);
         const previoHash = equiposSnapshotRef.current[idStr];
@@ -1857,6 +1897,7 @@ export default function ArmadoScreen() {
         }
       });
       for (const e of equipos) {
+        if (esEquipoPorCantidadNombre(e?.nombre)) continue;
         const idStr = String(e.id);
         const actualHash = hashEquipo(e);
         const previoHash = equiposSnapshotRef.current[idStr];
@@ -1895,12 +1936,22 @@ export default function ArmadoScreen() {
           createsPendientes.push({ localId: idStr, data });
         }
       }
-      if (!updatesPendientes.length && !createsPendientes.length) {
+      const payloadMaterialesCantidad = materialesCantidadPendientes.map((m) => ({
+        id_material: m.id,
+        nombre: m.nombre,
+        cantidad: Number(m.cantidad || 0),
+        caja: m.caja || DEFAULT_PENDING_BOX,
+        caja_tecnico_id: userId || undefined,
+        estado_registro: normalizarEstadoRegistroMaterial(m.estadoRegistro),
+        observacion_registro: String(m.observacionRegistro || '').trim() || null,
+      }));
+      if (!updatesPendientes.length && !createsPendientes.length && !payloadMaterialesCantidad.length) {
         setGuardandoEq(false);
         return;
       }
       const nextSnap = { ...equiposSnapshotRef.current };
       equipos.forEach((e) => {
+        if (esEquipoPorCantidadNombre(e?.nombre)) return;
         const idStr = String(e.id);
         const actualHash = hashEquipo(e);
         const previoHash = equiposSnapshotRef.current[idStr];
@@ -1914,16 +1965,34 @@ export default function ArmadoScreen() {
         }
       });
       equiposSnapshotRef.current = nextSnap;
-      void writeCache({ equipos });
-      persistirEquiposEnSegundoPlano(
-        [
-          ...updatesPendientes.map((item) => ({ tipo: 'update' as const, ...item })),
-          ...createsPendientes.map((item) => ({ tipo: 'create' as const, ...item })),
-        ],
-        {
-          onSettled: () => setGuardandoEq(false),
-        }
-      );
+      const nextMaterialSnap = { ...materialesSnapshotRef.current };
+      materialesCantidadPendientes.forEach((m) => {
+        nextMaterialSnap[String(m.id)] = hashMaterial(m);
+      });
+      materialesSnapshotRef.current = nextMaterialSnap;
+      void writeCache({ equipos, materiales });
+      const opsEquipos = [
+        ...updatesPendientes.map((item) => ({ tipo: 'update' as const, ...item })),
+        ...createsPendientes.map((item) => ({ tipo: 'create' as const, ...item })),
+      ];
+      let operacionesPendientes = 0;
+      const cerrarGuardado = () => {
+        operacionesPendientes -= 1;
+        if (operacionesPendientes <= 0) setGuardandoEq(false);
+      };
+      if (payloadMaterialesCantidad.length) {
+        operacionesPendientes += 1;
+        persistirMaterialesEnSegundoPlano(payloadMaterialesCantidad, {
+          recargarAlFinal: true,
+          onSettled: cerrarGuardado,
+        });
+      }
+      if (opsEquipos.length) {
+        operacionesPendientes += 1;
+        persistirEquiposEnSegundoPlano(opsEquipos, {
+          onSettled: cerrarGuardado,
+        });
+      }
     } catch (_e) {
       // silencioso
       setGuardandoEq(false);
@@ -2220,11 +2289,11 @@ export default function ArmadoScreen() {
         style={styles.scroll}>
         {!token ? (
           <Text style={[styles.subtitle, { color: 'red', textAlign: 'center' }]}>
-            Debes iniciar sesiÃƒÂ³n para ver tus armados.
+            Debes iniciar sesiÃƒÆ’Ã‚Â³n para ver tus armados.
           </Text>
         ) : role !== 'admin' && role !== 'tecnico' ? (
           <Text style={[styles.subtitle, { color: 'red', textAlign: 'center' }]}>
-            Tu rol no tiene acceso a esta secciÃƒÂ³n.
+            Tu rol no tiene acceso a esta secciÃƒÆ’Ã‚Â³n.
           </Text>
         ) : null}
         <View style={styles.hero}>
@@ -2265,7 +2334,7 @@ export default function ArmadoScreen() {
               {companerosArmado.length ? (
                 <View style={styles.metaClientRow}>
                   <Ionicons name="person-add-outline" size={12} color="#64748b" />
-                  <Text style={styles.metaCompanionValue}>{`Compañero: ${companerosArmado.join(', ')}`}</Text>
+                  <Text style={styles.metaCompanionValue}>{`CompaÃ±ero: ${companerosArmado.join(', ')}`}</Text>
                 </View>
               ) : null}
             </View>
@@ -2358,7 +2427,7 @@ export default function ArmadoScreen() {
         {esSoloLectura ? (
           <View style={styles.readOnlyBanner}>
             <Ionicons name="lock-closed-outline" size={14} color="#14532d" />
-            <Text style={styles.readOnlyBannerText}>{esPrefinalizado ? 'Armado prefinalizado: en revisión, vista solo lectura.' : 'Armado finalizado: vista solo lectura.'}</Text>
+            <Text style={styles.readOnlyBannerText}>{esPrefinalizado ? 'Armado prefinalizado: en revisiÃ³n, vista solo lectura.' : 'Armado finalizado: vista solo lectura.'}</Text>
           </View>
         ) : null}
 
@@ -2479,7 +2548,7 @@ export default function ArmadoScreen() {
                   {resumenEquipos.resueltos} de {resumenEquipos.total} equipos resueltos
                 </Text>
                 <Text style={styles.summarySubMeta}>
-                  No aplica {resumenEquipos.noAplica} · Pendientes {resumenEquipos.pendientes}
+                  No aplica {resumenEquipos.noAplica} Â· Pendientes {resumenEquipos.pendientes}
                 </Text>
               </View>
               <View style={styles.summaryPercentWrap}>
@@ -2528,13 +2597,19 @@ export default function ArmadoScreen() {
                     </Pressable>
                     {!colapsado && items.map((eq) => (
                     (() => {
-                      const estadoRegistro = normalizarEstadoRegistroEquipo(eq.estadoRegistro);
+                      const esEquipoCantidad = esEquipoPorCantidadNombre(eq.nombre);
+                      const materialCantidad = esEquipoCantidad ? obtenerMaterialPorNombre(eq.nombre) : null;
+                      const estadoRegistro = esEquipoCantidad
+                        ? normalizarEstadoRegistroMaterial(materialCantidad?.estadoRegistro)
+                        : normalizarEstadoRegistroEquipo(eq.estadoRegistro);
                       const esNoAplica = estadoRegistro === 'no_aplica';
                       const esPendienteRegistro = estadoRegistro === 'pendiente';
                       const esBloqueadoPorEstado = esNoAplica || esPendienteRegistro;
-                      const cajaEtiqueta = esNoAplica ? 'N/A' : esPendienteRegistro ? 'Pendiente' : etiquetaBulto(eq.caja || DEFAULT_PENDING_BOX);
+                      const cajaActual = esEquipoCantidad ? (materialCantidad?.caja || DEFAULT_PENDING_BOX) : (eq.caja || DEFAULT_PENDING_BOX);
+                      const cantidadActual = Number(materialCantidad?.cantidad || 0);
+                      const cajaEtiqueta = esNoAplica ? 'N/A' : esPendienteRegistro ? 'Pendiente' : etiquetaBulto(cajaActual);
                       const estadoEtiqueta = obtenerEstadoEquipoLabel(estadoRegistro);
-                      const observacionPendiente = String(eq.observacionRegistro || '').trim();
+                      const observacionPendiente = String(esEquipoCantidad ? materialCantidad?.observacionRegistro || '' : eq.observacionRegistro || '').trim();
                       return (
                     <View
                         key={eq.id}
@@ -2544,7 +2619,7 @@ export default function ArmadoScreen() {
                             ? styles.cardNoAplica
                             : esPendienteRegistro
                               ? styles.cardPendienteRegistro
-                              : eq.serie?.trim()
+                              : (esEquipoCantidad ? cantidadActual > 0 : eq.serie?.trim())
                                 ? { borderColor: '#93c5fd', backgroundColor: '#dbeafe', borderLeftColor: '#1d4ed8' }
                                 : { borderColor: palette.tabIconDefault, backgroundColor: '#ffffff' },
                         ]}>
@@ -2591,13 +2666,13 @@ export default function ArmadoScreen() {
                                   esCajaPendiente(eq.caja) ? styles.pendingBoxBadge : { borderColor: '#0b3b8c' },
                                 ]}
                                 onPress={() => abrirSelectorCaja({
-                                  tipo: 'equipo',
-                                  id: String(eq.id),
-                                  actual: eq.caja || DEFAULT_PENDING_BOX,
+                                  tipo: esEquipoCantidad ? 'material' : 'equipo',
+                                  id: String(esEquipoCantidad ? materialCantidad?.id || eq.id : eq.id),
+                                  actual: cajaActual,
                                   nombre: eq.nombre,
                                 })}
                                 disabled={esSoloLectura}>
-                                <Text style={esCajaPendiente(eq.caja) ? styles.pendingBoxBadgeTextCompact : styles.cardBadgeTextCompact}>
+                                <Text style={esCajaPendiente(cajaActual) ? styles.pendingBoxBadgeTextCompact : styles.cardBadgeTextCompact}>
                                   {cajaEtiqueta}
                                 </Text>
                               </Pressable>
@@ -2613,40 +2688,67 @@ export default function ArmadoScreen() {
                         ) : null}
 
                         <View style={styles.field}>
-                          <Text style={[styles.label, { color: '#475569' }]}>N serie</Text>
+                          <Text style={[styles.label, { color: '#475569' }]}>{esEquipoCantidad ? 'Cantidad' : 'N serie'}</Text>
                           <View style={styles.inputScanRow}>
-                            <TextInput
-                              placeholder="escanea o escribe N serie"
-                              placeholderTextColor="#94a3b8"
-                              style={[
-                                styles.input,
-                                { flex: 1, color: '#0f172a', borderColor: '#d7e3f4', backgroundColor: '#f8fbff', paddingRight: 12 },
-                                esBloqueadoPorEstado && styles.inputDisabledSoft,
-                              ]}
-                              value={eq.serie ? String(eq.serie) : ''}
-                              onChangeText={(t) => {
-                                const serieNumerica = String(t || '').replace(/\D+/g, '');
-                                const conflictoLocal =
-                                  serieNumerica.length >= 5 ? obtenerConflictoSerieLocal(serieNumerica, eq.id) : null;
-                                if (conflictoLocal) {
-                                  mostrarSerieDuplicadaLocal(serieNumerica, conflictoLocal.nombre);
-                                  return;
-                                }
-                                actualizarEquipo(eq.id, { serie: serieNumerica, codigo: serieNumerica.slice(0, 5), nombre: eq.nombre });
-                              }}
-                              keyboardType="numeric"
-                              editable={!esSoloLectura && !esBloqueadoPorEstado}
-                            />
-                            <Pressable
-                              style={[styles.camBtn, (esSoloLectura || esBloqueadoPorEstado) && styles.btnDisabled]}
-                              onPress={() => abrirCamaraSerie(eq.id, eq.nombre)}
-                              hitSlop={6}
-                              disabled={esSoloLectura || esBloqueadoPorEstado}>
-                              <Ionicons name="barcode-outline" size={18} color="#ffffff" />
-                            </Pressable>
+                            {esEquipoCantidad ? (
+                              <TextInput
+                                placeholder="0"
+                                placeholderTextColor="#94a3b8"
+                                style={[
+                                  styles.input,
+                                  { flex: 1, color: '#0f172a', borderColor: '#d7e3f4', backgroundColor: '#f8fbff', paddingRight: 12 },
+                                  esBloqueadoPorEstado && styles.inputDisabledSoft,
+                                ]}
+                                value={cantidadActual ? String(cantidadActual) : ''}
+                                onChangeText={(t) => {
+                                  const cantidadNumerica = String(t || '').replace(/\D+/g, '');
+                                  actualizarMaterialPorNombre(eq.nombre, {
+                                    cantidad: Number(cantidadNumerica || 0),
+                                    caja: cajaActual,
+                                  });
+                                }}
+                                keyboardType="numeric"
+                                editable={!esSoloLectura && !esBloqueadoPorEstado}
+                              />
+                            ) : (
+                              <TextInput
+                                placeholder="escanea o escribe N serie"
+                                placeholderTextColor="#94a3b8"
+                                style={[
+                                  styles.input,
+                                  { flex: 1, color: '#0f172a', borderColor: '#d7e3f4', backgroundColor: '#f8fbff', paddingRight: 12 },
+                                  esBloqueadoPorEstado && styles.inputDisabledSoft,
+                                ]}
+                                value={eq.serie ? String(eq.serie) : ''}
+                                onChangeText={(t) => {
+                                  const serieNumerica = String(t || '').replace(/\D+/g, '');
+                                  const conflictoLocal =
+                                    serieNumerica.length >= 5 ? obtenerConflictoSerieLocal(serieNumerica, eq.id) : null;
+                                  if (conflictoLocal) {
+                                    mostrarSerieDuplicadaLocal(serieNumerica, conflictoLocal.nombre);
+                                    return;
+                                  }
+                                  actualizarEquipo(eq.id, { serie: serieNumerica, codigo: serieNumerica.slice(0, 5), nombre: eq.nombre });
+                                }}
+                                keyboardType="numeric"
+                                editable={!esSoloLectura && !esBloqueadoPorEstado}
+                              />
+                            )}
+                            {!esEquipoCantidad ? (
+                              <Pressable
+                                style={[styles.camBtn, (esSoloLectura || esBloqueadoPorEstado) && styles.btnDisabled]}
+                                onPress={() => abrirCamaraSerie(eq.id, eq.nombre)}
+                                hitSlop={6}
+                                disabled={esSoloLectura || esBloqueadoPorEstado}>
+                                <Ionicons name="barcode-outline" size={18} color="#ffffff" />
+                              </Pressable>
+                            ) : null}
                             <Pressable
                               style={[styles.estadoEquipoBtn, esSoloLectura && styles.btnDisabled]}
-                              onPress={() => abrirEstadoEquipo(eq)}
+                              onPress={() => {
+                                if (esEquipoCantidad && materialCantidad) abrirEstadoMaterial(materialCantidad);
+                                else abrirEstadoEquipo(eq);
+                              }}
                               hitSlop={6}
                               disabled={esSoloLectura}
                             >
@@ -4952,34 +5054,3 @@ const styles = StyleSheet.create({
     elevation: 4,
   },
 });
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
