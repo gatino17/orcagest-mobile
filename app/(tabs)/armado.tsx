@@ -153,24 +153,42 @@ const MATERIALES_PREDEF: string[] = [
   'Sensor Magnetico',
   'Sensor magnetico respaldo',
   'Sensor magnetico cargador',
+  'Baliza Interior',
+  'Bocina Interior',
+  'Baliza Exterior',
+  'Bocina Exterior',
+  'Foco led 150W',
+  'Foco led 50W',
 ];
 
 const MATERIAL_CATEGORY_OPTIONS = ['Todas', 'Electricidad', 'Redes', 'Montaje', 'Canalizacion', 'Otros'] as const;
 type MaterialCategory = (typeof MATERIAL_CATEGORY_OPTIONS)[number];
 
-const normalizarNombreMaterial = (value?: string) =>
-  String(value || '')
+const normalizarNombreMaterial = (value?: string) => {
+  const normalizado = String(value || '')
     .trim()
     .toLowerCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .replace(/\s+/g, ' ')
     .replace(/\bmesa rack\b/g, 'mesa respaldo');
+  if (['baliza exterior 1', 'baliza exterior 2'].includes(normalizado)) return 'baliza exterior';
+  if (['bocina exterior 1', 'bocina exterior 2'].includes(normalizado)) return 'bocina exterior';
+  if (['foco led 1 150w', 'foco led 2 150w'].includes(normalizado)) return 'foco led 150w';
+  if (['foco led 1 50w', 'foco led 2 50w'].includes(normalizado)) return 'foco led 50w';
+  return normalizado;
+};
 
 const canonizarNombreMaterial = (value?: string) => {
   const texto = String(value || '').trim();
   if (!texto) return '';
-  return normalizarNombreMaterial(texto) === 'mesa respaldo' ? 'Mesa respaldo' : texto;
+  const normalizado = normalizarNombreMaterial(texto);
+  if (normalizado === 'mesa respaldo') return 'Mesa respaldo';
+  if (normalizado === 'baliza exterior') return 'Baliza Exterior';
+  if (normalizado === 'bocina exterior') return 'Bocina Exterior';
+  if (normalizado === 'foco led 150w') return 'Foco led 150W';
+  if (normalizado === 'foco led 50w') return 'Foco led 50W';
+  return texto;
 };
 
 const obtenerCategoriaMaterial = (nombre?: string): MaterialCategory => {
@@ -263,6 +281,12 @@ const EQUIPOS_POR_CANTIDAD = new Set([
   'sensor magnetico',
   'sensor magnetico respaldo',
   'sensor magnetico cargador',
+  'baliza interior',
+  'bocina interior',
+  'baliza exterior',
+  'bocina exterior',
+  'foco led 150w',
+  'foco led 50w',
 ]);
 const esEquipoPorCantidadNombre = (nombre?: string) => EQUIPOS_POR_CANTIDAD.has(normalizarNombreMaterial(nombre));
 
@@ -277,7 +301,7 @@ const GRUPOS_EQUIPOS: { titulo: string; items: string[] }[] = [
   },
   {
     titulo: 'Tablero Alarma',
-    items: ['Tablero 500x400x200', 'Baliza Interior', 'Bocina Interior', 'Baliza Exterior 1', 'Baliza Exterior 2', 'Bocina Exterior 1', 'Bocina Exterior 2', 'Foco led 1 150W', 'Foco led 2 150W', 'Foco led 1 50W', 'Foco led 2 50W', 'Fuente poder 12V', 'Axis P8221'],
+    items: ['Tablero 500x400x200', 'Baliza Interior', 'Bocina Interior', 'Baliza Exterior', 'Bocina Exterior', 'Foco led 150W', 'Foco led 50W', 'Fuente poder 12V', 'Axis P8221'],
   },
   {
     titulo: 'Tablero Respaldo',
@@ -903,7 +927,27 @@ export default function ArmadoScreen() {
     const mapa = new Map<string, any>();
     (listaBackend || []).forEach((m, idx) => {
       const key = normalizar(m.nombre || `mat-${idx}`);
-      if (key) mapa.set(key, m);
+      if (!key) return;
+      const previo = mapa.get(key);
+      if (!previo) {
+        mapa.set(key, m);
+        return;
+      }
+      mapa.set(key, {
+        ...previo,
+        ...m,
+        nombre: canonizarNombreMaterial(previo.nombre || m.nombre),
+        cantidad: Number(previo.cantidad || 0) + Number(m.cantidad || 0),
+        caja: previo.caja || m.caja,
+        caja_tecnico_id: previo.caja_tecnico_id || m.caja_tecnico_id,
+        caja_tecnico_nombre: previo.caja_tecnico_nombre || m.caja_tecnico_nombre,
+        estado_registro:
+          normalizarEstadoRegistroMaterial(previo.estado_registro || previo.estadoRegistro) === 'pendiente' ||
+          normalizarEstadoRegistroMaterial(m.estado_registro || m.estadoRegistro) === 'pendiente'
+            ? 'pendiente'
+            : normalizarEstadoRegistroMaterial(previo.estado_registro || previo.estadoRegistro || m.estado_registro || m.estadoRegistro),
+        observacion_registro: previo.observacion_registro || previo.observacionRegistro || m.observacion_registro || m.observacionRegistro || '',
+      });
     });
 
     const base: Material[] = MATERIALES_PREDEF.map((nombre, idx) => {
