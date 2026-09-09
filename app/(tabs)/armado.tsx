@@ -149,6 +149,10 @@ const MATERIALES_PREDEF: string[] = [
   'copla planza',
   'Mouse',
   'Teclado',
+  'Parlantes',
+  'Sensor Magnetico',
+  'Sensor magnetico respaldo',
+  'Sensor magnetico cargador',
 ];
 
 const MATERIAL_CATEGORY_OPTIONS = ['Todas', 'Electricidad', 'Redes', 'Montaje', 'Canalizacion', 'Otros'] as const;
@@ -252,7 +256,14 @@ const normalizarEstadoRegistroMaterial = (value?: string): EquipoRegistroEstado 
   normalizarEstadoRegistroEquipo(value);
 
 const EQUIPOS_MIGRADOS_A_MATERIALES = new Set(['bandeja rack - tornillos']);
-const EQUIPOS_POR_CANTIDAD = new Set(['mouse', 'teclado']);
+const EQUIPOS_POR_CANTIDAD = new Set([
+  'mouse',
+  'teclado',
+  'parlantes',
+  'sensor magnetico',
+  'sensor magnetico respaldo',
+  'sensor magnetico cargador',
+]);
 const esEquipoPorCantidadNombre = (nombre?: string) => EQUIPOS_POR_CANTIDAD.has(normalizarNombreMaterial(nombre));
 
 const GRUPOS_EQUIPOS: { titulo: string; items: string[] }[] = [
