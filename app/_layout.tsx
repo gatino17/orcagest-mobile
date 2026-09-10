@@ -19,6 +19,7 @@ type AuthContextType = {
   role: string | null;
   name: string | null;
   userId: number | null;
+  paginas: string[];
   ready: boolean;
   setToken: (t: string | null) => void;
 };
@@ -28,6 +29,7 @@ export const AuthContext = createContext<AuthContextType>({
   role: null,
   name: null,
   userId: null,
+  paginas: [],
   ready: false,
   setToken: () => {},
 });
@@ -42,12 +44,32 @@ const extractRole = (token: string | null) => {
   }
 };
 
+const extractPaginas = (token: string | null) => {
+  if (!token) return [];
+  try {
+    const payload: any = jwtDecode(token);
+    const raw =
+      payload?.paginas ||
+      payload?.pages ||
+      payload?.permisos_paginas ||
+      payload?.usuario?.paginas ||
+      payload?.user?.paginas ||
+      [];
+    return Array.isArray(raw)
+      ? raw.map((item) => String(item || '').trim()).filter(Boolean)
+      : [];
+  } catch (_e) {
+    return [];
+  }
+};
+
 export default function RootLayout() {
   const colorScheme = useColorScheme();
   const [token, setTokenState] = useState<string | null>(null);
   const [role, setRole] = useState<string | null>(null);
   const [name, setName] = useState<string | null>(null);
   const [userId, setUserId] = useState<number | null>(null);
+  const [paginas, setPaginas] = useState<string[]>([]);
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
@@ -55,6 +77,7 @@ export default function RootLayout() {
       .then((value) => {
         setTokenState(value);
         setRole(extractRole(value));
+        setPaginas(extractPaginas(value));
         try {
           const payload: any = value ? jwtDecode(value) : null;
           setName(payload?.name || payload?.nombre || payload?.username || null);
@@ -87,6 +110,7 @@ export default function RootLayout() {
   const setToken = async (value: string | null) => {
     setTokenState(value);
     setRole(extractRole(value));
+    setPaginas(extractPaginas(value));
     try {
       const payload: any = value ? jwtDecode(value) : null;
       setName(payload?.name || payload?.nombre || payload?.username || null);
@@ -94,6 +118,7 @@ export default function RootLayout() {
     } catch (_e) {
       setName(null);
       setUserId(null);
+      setPaginas([]);
     }
     if (value) {
       await SecureStore.setItemAsync('token', value);
@@ -102,7 +127,10 @@ export default function RootLayout() {
     }
   };
 
-  const ctx = useMemo(() => ({ token, role, name, userId, ready, setToken }), [token, role, name, userId, ready]);
+  const ctx = useMemo(
+    () => ({ token, role, name, userId, paginas, ready, setToken }),
+    [token, role, name, userId, paginas, ready]
+  );
 
   return (
     <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>

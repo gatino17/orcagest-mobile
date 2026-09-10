@@ -375,3 +375,44 @@ export const fetchAbonosRendicion = async (params?: Record<string, any>) => {
   return res.data;
 };
 
+// Inventario bodega
+export const fetchInventarioBodegaTomas = async (params?: Record<string, any>) => {
+  const res = await api.get('/inventarios/bodega_tomas', { params });
+  return res.data;
+};
+
+export const fetchInventarioBodegaTipos = async () => {
+  const res = await api.get('/inventarios/bodega_tipos');
+  return res.data;
+};
+
+export const createInventarioBodegaEquipos = async (payload: any) => {
+  const res = await api.post('/inventarios/bodega_equipos', payload);
+  return res.data;
+};
+
+export const createInventarioBodegaToma = async (payload: any) => {
+  const res = await api.post('/inventarios/bodega_tomas', payload);
+  return res.data;
+};
+
+export const fetchInventarioBodegaToma = async (idToma: string | number, params?: Record<string, any>) => {
+  const res = await api.get(`/inventarios/bodega_tomas/${idToma}`, { params });
+  return res.data;
+};
+
+export const createInventarioBodegaEscaneo = async (idToma: string | number, payload: any) => {
+  const res = await api.post(`/inventarios/bodega_tomas/${idToma}/escaneos`, payload);
+  return res.data;
+};
+
+export const closeInventarioBodegaToma = async (idToma: string | number) => {
+  const res = await api.post(`/inventarios/bodega_tomas/${idToma}/cerrar`);
+  return res.data;
+};
+
+export const deleteInventarioBodegaEscaneo = async (idEscaneo: string | number) => {
+  const res = await api.delete(`/inventarios/bodega_tomas/escaneos/${idEscaneo}`);
+  return res.data;
+};
+

@@ -11,7 +11,7 @@ import { AuthContext } from '../_layout';
 
 export default function TabLayout() {
   const colorScheme = useColorScheme();
-  const { token, ready } = useContext(AuthContext);
+  const { token, ready, role, paginas } = useContext(AuthContext);
 
   if (!ready) {
     return (
@@ -25,8 +25,21 @@ export default function TabLayout() {
     return <Redirect href="/login" />;
   }
 
+  const normalizar = (value: any) => String(value || '').trim().toLowerCase();
+  const rol = normalizar(role);
+  const esRolInventario = rol === 'inventario';
+  const paginasPermitidas = Array.isArray(paginas) ? paginas.map(normalizar).filter(Boolean) : [];
+  const tienePaginasEnToken = paginasPermitidas.length > 0;
+  const tienePagina = (keys: string[]) => keys.some((key) => paginasPermitidas.includes(normalizar(key)));
+  const puedeVer = (keys: string[], rolesFallback: string[] = []) => {
+    if (tienePaginasEnToken) return tienePagina(keys);
+    if (!rolesFallback.length) return true;
+    return rolesFallback.map(normalizar).includes(rol);
+  };
+
   return (
     <Tabs
+      initialRouteName={esRolInventario ? 'inventariobodega' : 'index'}
       screenOptions={{
         tabBarActiveTintColor: Colors[colorScheme ?? 'light'].tint,
         headerShown: false,
@@ -36,6 +49,9 @@ export default function TabLayout() {
         name="index"
         options={{
           title: 'Home',
+          href: !esRolInventario && puedeVer(['inicio', 'home', 'index'], ['admin', 'tecnico', 'soporte', 'operaciones', 'finanzas'])
+            ? undefined
+            : null,
           tabBarIcon: ({ color }) => <IconSymbol size={28} name="house.fill" color={color} />,
         }}
       />
@@ -43,6 +59,9 @@ export default function TabLayout() {
         name="consultacentro"
         options={{
           title: 'Consulta centro',
+          href: puedeVer(['consulta_centro', 'consultacentro'], ['admin', 'tecnico', 'soporte', 'operaciones'])
+            ? undefined
+            : null,
           tabBarIcon: ({ color }) => <Ionicons name="search-outline" size={24} color={color} />,
         }}
       />
@@ -50,6 +69,7 @@ export default function TabLayout() {
         name="finalizados"
         options={{
           title: 'Finalizados',
+          href: puedeVer(['finalizados'], ['admin', 'tecnico', 'operaciones']) ? undefined : null,
           tabBarIcon: ({ color }) => <Ionicons name="checkmark-done-outline" size={24} color={color} />,
         }}
       />
@@ -57,6 +77,7 @@ export default function TabLayout() {
         name="informes"
         options={{
           title: 'Informes',
+          href: puedeVer(['informes_centros', 'informes'], ['admin', 'tecnico', 'soporte', 'operaciones']) ? undefined : null,
           tabBarIcon: ({ color }) => <Ionicons name="document-text-outline" size={24} color={color} />,
         }}
       />
@@ -64,7 +85,18 @@ export default function TabLayout() {
         name="rendiciones"
         options={{
           title: 'Rendiciones',
+          href: puedeVer(['rendiciones'], ['admin', 'tecnico', 'finanzas']) ? undefined : null,
           tabBarIcon: ({ color }) => <Ionicons name="receipt-outline" size={24} color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="inventariobodega"
+        options={{
+          title: 'Inventario',
+          href: puedeVer(['inventario_bodega', 'inventariobodega'], ['admin', 'operaciones', 'inventario'])
+            ? undefined
+            : null,
+          tabBarIcon: ({ color }) => <Ionicons name="barcode-outline" size={24} color={color} />,
         }}
       />
       <Tabs.Screen

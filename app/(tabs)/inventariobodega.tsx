@@ -1,0 +1,1530 @@
+import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  Modal,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { StatusBar } from 'expo-status-bar';
+import { useRouter } from 'expo-router';
+import { CameraView, useCameraPermissions } from 'expo-camera';
+import { Ionicons } from '@expo/vector-icons';
+
+import {
+  closeInventarioBodegaToma,
+  createInventarioBodegaEquipos,
+  createInventarioBodegaEscaneo,
+  createInventarioBodegaToma,
+  deleteInventarioBodegaEscaneo,
+  fetchInventarioBodegaToma,
+  fetchInventarioBodegaTomas,
+  fetchInventarioBodegaTipos,
+} from '@/lib/api';
+import { AuthContext } from '../_layout';
+
+type ResumenToma = {
+  total_esperado?: number;
+  total_escaneos?: number;
+  encontrados?: number;
+  faltantes?: number;
+  no_esperados?: number;
+  duplicados?: number;
+  no_corresponden?: number;
+  cumplimiento?: number;
+  faltantes_detalle?: any[];
+};
+
+type EquipoTipo = {
+  categoria?: string;
+  equipo_nombre: string;
+  total_esperado: number;
+};
+
+const CATALOGO_INVENTARIO_FALLBACK: EquipoTipo[] = [
+  ...['PC', 'Monitor', 'Mouse', 'Teclado', 'Router', 'Switch', 'Switch (Cisco)', 'Switch raqueable', 'Camara Interior', 'Parlantes', 'Sensor Magnetico', 'Rack 9U - tuercas - tornillos', 'Zapatilla Rack (PDU)'].map((equipo_nombre) => ({ categoria: 'Oficina', equipo_nombre, total_esperado: 0 })),
+  ...['PC cliente', 'Rack 2', 'Ubiquiti TX', 'Ubiquiti RX', 'Pantalla'].map((equipo_nombre) => ({ categoria: 'Base tierra', equipo_nombre, total_esperado: 0 })),
+  ...['Tablero 500x400x200', 'Baliza Interior', 'Bocina Interior', 'Baliza Exterior', 'Bocina Exterior', 'Foco led 150W', 'Foco led 50W', 'Fuente poder 12V', 'Axis P8221'].map((equipo_nombre) => ({ categoria: 'Tablero Alarma', equipo_nombre, total_esperado: 0 })),
+  ...['Tablero 1200x800x300', 'Tablero 1000x600x300', 'Inversor cargador Victron', 'Panel Victron', 'Bateria 1', 'Bateria 2', 'Bateria 3', 'Bateria 4', 'Bateria 5', 'Bateria 6', 'Switch POE', 'Sensor magnetico respaldo', 'Sensor magnetico cargador', 'Cargador 1', 'Cargador 2', 'Tablero Cargador 750x500x250', 'UPS online'].map((equipo_nombre) => ({ categoria: 'Tablero Respaldo', equipo_nombre, total_esperado: 0 })),
+  ...['Tablero Derivacion (400x300x200)', 'Radar 1', 'Radar 2', 'Cable rj radar 1', 'Cable rj radar 2', 'Soporte radar 1', 'Soporte radar 2', 'Camara PTZ termal', 'Camara PTZ Laser', 'Camara PTZ Laser 2', 'Camara Modulo', 'Camara Silo 1', 'Camara Silo 2', 'Camara Ensinerador', 'Ensilaje interior', 'Ensilaje exterior', 'Camara Popa', 'Camara acceso 1', 'Camara acceso 2', 'Camara acceso 3', 'Camara acceso 4', 'Enlace Ubiquiti'].map((equipo_nombre) => ({ categoria: 'Mastil', equipo_nombre, total_esperado: 0 })),
+  ...['Tablero Camara (500x700x250)', 'Poe Power 1', 'Poe Power 2', 'Poe Power 3', 'Poe Power 4', 'Poe Power 5', 'Switch POE 1', 'Switch POE 2', 'Mass', 'Tablero 750x500x250', 'Switch 1', 'Switch 2', 'Switch 3', 'Switch 4', 'Netio'].map((equipo_nombre) => ({ categoria: 'Tablero Camara', equipo_nombre, total_esperado: 0 })),
+];
+
+type TomaInventario = {
+  id_toma: number;
+  nombre?: string;
+  ubicacion?: string;
+  estado?: string;
+  responsable_nombre?: string;
+  fecha_inicio?: string;
+  fecha_cierre?: string | null;
+  observacion?: string;
+  resumen?: ResumenToma;
+  escaneos?: any[];
+};
+
+const estadoTexto = (value?: string) => (String(value || '').toLowerCase() === 'cerrado' ? 'Cerrada' : 'Abierta');
+
+const resultadoTexto = (value?: string) => {
+  const raw = String(value || '').toLowerCase();
+  if (raw === 'encontrado') return 'Encontrado';
+  if (raw === 'manual') return 'Manual';
+  if (raw === 'duplicado') return 'Duplicado';
+  if (raw === 'no_esperado') return 'No esperado';
+  if (raw === 'no_corresponde') return 'No corresponde';
+  return 'Registrado';
+};
+
+const formatFecha = (value?: string | null) => {
+  if (!value) return '-';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value).slice(0, 10);
+  return date.toLocaleDateString('es-CL', { day: '2-digit', month: '2-digit', year: 'numeric' });
+};
+
+const formatHora = (value?: string | null) => {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' });
+};
+
+export default function InventarioBodegaScreen() {
+  const router = useRouter();
+  const { setToken } = useContext(AuthContext);
+  const [permission, requestPermission] = useCameraPermissions();
+  const [tomas, setTomas] = useState<TomaInventario[]>([]);
+  const [tiposEquipo, setTiposEquipo] = useState<EquipoTipo[]>([]);
+  const [categoriaSeleccionada, setCategoriaSeleccionada] = useState('Oficina');
+  const [tipoSeleccionado, setTipoSeleccionado] = useState('');
+  const [tomaActiva, setTomaActiva] = useState<TomaInventario | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [scannerVisible, setScannerVisible] = useState(false);
+  const [scannerTarget, setScannerTarget] = useState<'informe' | 'bodega'>('informe');
+  const [valorManual, setValorManual] = useState('');
+  const [nombreToma, setNombreToma] = useState('');
+  const [ubicacion, setUbicacion] = useState('Bodega central');
+  const [observacion, setObservacion] = useState('');
+  const [modo, setModo] = useState<'informe' | 'bodega'>('informe');
+  const [bodegaCodigo, setBodegaCodigo] = useState('');
+  const [bodegaSerie, setBodegaSerie] = useState('');
+  const [bodegaObs, setBodegaObs] = useState('');
+  const [bodegaSaving, setBodegaSaving] = useState(false);
+  const scanLockRef = useRef(false);
+  const tomaActivaIdRef = useRef<number>(0);
+
+  const resumen = tomaActiva?.resumen || {};
+  const escaneos = Array.isArray(tomaActiva?.escaneos) ? tomaActiva.escaneos : [];
+  const faltantes = Array.isArray(resumen.faltantes_detalle) ? resumen.faltantes_detalle : [];
+  const tomaAbierta = String(tomaActiva?.estado || '').toLowerCase() !== 'cerrado';
+  const abiertas = useMemo(() => tomas.filter((item) => String(item.estado || '').toLowerCase() !== 'cerrado').length, [tomas]);
+  const cerradas = Math.max(tomas.length - abiertas, 0);
+  const totalTipoSeleccionado = useMemo(() => {
+    const item = tiposEquipo.find((tipo) => String(tipo.equipo_nombre || '').trim().toLowerCase() === tipoSeleccionado.trim().toLowerCase());
+    return Number(item?.total_esperado || 0);
+  }, [tipoSeleccionado, tiposEquipo]);
+  const categoriasInventario = useMemo(() => {
+    const out: string[] = [];
+    tiposEquipo.forEach((tipo) => {
+      const categoria = String(tipo.categoria || 'Sin categoria').trim() || 'Sin categoria';
+      if (!out.includes(categoria)) out.push(categoria);
+    });
+    return out;
+  }, [tiposEquipo]);
+  const tiposCategoria = useMemo(
+    () => tiposEquipo.filter((tipo) => String(tipo.categoria || 'Sin categoria').trim() === categoriaSeleccionada),
+    [categoriaSeleccionada, tiposEquipo]
+  );
+
+  const detalleParams = useCallback(
+    () => (tipoSeleccionado ? { tipo_equipo: tipoSeleccionado } : undefined),
+    [tipoSeleccionado]
+  );
+
+  const seleccionarToma = useCallback(async (idToma: number) => {
+    if (!idToma) return;
+    setLoading(true);
+    try {
+      const detalle = await fetchInventarioBodegaToma(idToma, detalleParams());
+      tomaActivaIdRef.current = Number(detalle?.id_toma || idToma || 0);
+      setTomaActiva(detalle);
+    } catch (error: any) {
+      Alert.alert('Inventario bodega', error?.response?.data?.error || 'No se pudo cargar el detalle.');
+    } finally {
+      setLoading(false);
+    }
+  }, [detalleParams]);
+
+  const cargarTomas = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
+    try {
+      const lista = await fetchInventarioBodegaTomas();
+      let tiposRows: EquipoTipo[] = [];
+      try {
+        const tipos = await fetchInventarioBodegaTipos();
+        tiposRows = Array.isArray(tipos) ? tipos : [];
+      } catch {
+        tiposRows = CATALOGO_INVENTARIO_FALLBACK;
+      }
+      const rows = Array.isArray(lista) ? lista : [];
+      setTomas(rows);
+      setTiposEquipo(tiposRows.length ? tiposRows : CATALOGO_INVENTARIO_FALLBACK);
+
+      const actualId = Number(tomaActivaIdRef.current || 0);
+      const candidata =
+        rows.find((item: TomaInventario) => Number(item.id_toma) === actualId) ||
+        rows.find((item: TomaInventario) => String(item.estado || '').toLowerCase() !== 'cerrado') ||
+        rows[0];
+
+      if (candidata?.id_toma) {
+        const detalle = await fetchInventarioBodegaToma(candidata.id_toma, detalleParams());
+        tomaActivaIdRef.current = Number(detalle?.id_toma || candidata.id_toma || 0);
+        setTomaActiva(detalle);
+      } else {
+        tomaActivaIdRef.current = 0;
+        setTomaActiva(null);
+      }
+    } catch (error: any) {
+      Alert.alert('Inventario bodega', error?.response?.data?.error || 'No se pudo cargar el inventario.');
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, [detalleParams]);
+
+  useEffect(() => {
+    cargarTomas();
+  }, [cargarTomas]);
+
+  useEffect(() => {
+    if (!categoriasInventario.length) return;
+    if (!categoriasInventario.includes(categoriaSeleccionada)) {
+      setCategoriaSeleccionada(categoriasInventario[0]);
+      setTipoSeleccionado('');
+    }
+  }, [categoriaSeleccionada, categoriasInventario]);
+
+  useEffect(() => {
+    if (!tipoSeleccionado) return;
+    const existeEnCategoria = tiposCategoria.some(
+      (tipo) => String(tipo.equipo_nombre || '').trim().toLowerCase() === tipoSeleccionado.trim().toLowerCase()
+    );
+    if (!existeEnCategoria) setTipoSeleccionado('');
+  }, [tipoSeleccionado, tiposCategoria]);
+
+  const refrescar = useCallback(() => {
+    setRefreshing(true);
+    cargarTomas(true);
+  }, [cargarTomas]);
+
+  const crearToma = useCallback(async () => {
+    if (saving) return;
+    setSaving(true);
+    try {
+      const payload = {
+        nombre: nombreToma.trim() || undefined,
+        ubicacion: ubicacion.trim() || 'Bodega central',
+        observacion: observacion.trim() || undefined,
+      };
+      const data = await createInventarioBodegaToma(payload);
+      const nueva = data?.toma || data;
+      tomaActivaIdRef.current = Number(nueva?.id_toma || 0);
+      setTomaActiva(nueva);
+      setNombreToma('');
+      setObservacion('');
+      const lista = await fetchInventarioBodegaTomas();
+      setTomas(Array.isArray(lista) ? lista : []);
+      try {
+        const tipos = await fetchInventarioBodegaTipos();
+        const tiposRows = Array.isArray(tipos) ? tipos : [];
+        setTiposEquipo(tiposRows.length ? tiposRows : CATALOGO_INVENTARIO_FALLBACK);
+      } catch {
+        setTiposEquipo(CATALOGO_INVENTARIO_FALLBACK);
+      }
+    } catch (error: any) {
+      Alert.alert('Inventario bodega', error?.response?.data?.error || 'No se pudo crear el informe.');
+    } finally {
+      setSaving(false);
+    }
+  }, [nombreToma, observacion, saving, ubicacion]);
+
+  const registrarValor = useCallback(async (valor: string) => {
+    const limpio = String(valor || '').trim();
+    if (!limpio || !tomaActiva?.id_toma || saving || !tomaAbierta) return;
+    if (!tipoSeleccionado) {
+      Alert.alert('Inventario bodega', 'Selecciona primero el tipo de equipo que vas a escanear.');
+      return;
+    }
+    setSaving(true);
+    try {
+      const data = await createInventarioBodegaEscaneo(tomaActiva.id_toma, {
+        valor: limpio,
+        tipo_equipo: tipoSeleccionado,
+        categoria: categoriaSeleccionada,
+      });
+      const toma = data?.toma || null;
+      if (toma) {
+        tomaActivaIdRef.current = Number(toma?.id_toma || tomaActiva?.id_toma || 0);
+        setTomaActiva(toma);
+      }
+      setValorManual('');
+    } catch (error: any) {
+      Alert.alert('Inventario bodega', error?.response?.data?.error || 'No se pudo registrar el escaneo.');
+    } finally {
+      setSaving(false);
+      scanLockRef.current = false;
+    }
+  }, [categoriaSeleccionada, saving, tipoSeleccionado, tomaAbierta, tomaActiva?.id_toma]);
+
+  const abrirScanner = useCallback(async (target: 'informe' | 'bodega' = 'informe') => {
+    if (target === 'informe' && !tomaAbierta) return;
+    if (!tipoSeleccionado) {
+      Alert.alert('Inventario bodega', 'Selecciona primero el tipo de equipo que vas a escanear.');
+      return;
+    }
+    if (permission?.status !== 'granted') {
+      const result = await requestPermission();
+      if (result.status !== 'granted') {
+        Alert.alert('Inventario bodega', 'Necesitas permiso de camara para escanear.');
+        return;
+      }
+    }
+    scanLockRef.current = false;
+    setScannerTarget(target);
+    setScannerVisible(true);
+  }, [permission?.status, requestPermission, tipoSeleccionado, tomaAbierta]);
+
+  const handleBarcodeScanned = useCallback((event: any) => {
+    if (scanLockRef.current) return;
+    scanLockRef.current = true;
+    setScannerVisible(false);
+    if (scannerTarget === 'bodega') {
+      setBodegaCodigo(String(event?.data || '').trim());
+      scanLockRef.current = false;
+      return;
+    }
+    registrarValor(event?.data || '');
+  }, [registrarValor, scannerTarget]);
+
+  const cerrarToma = useCallback(() => {
+    if (!tomaActiva?.id_toma || !tomaAbierta) return;
+    Alert.alert(
+      'Cerrar inventario',
+      'El informe quedara como historial y no permitira nuevos escaneos.',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Finalizar informe',
+          style: 'destructive',
+          onPress: async () => {
+            setSaving(true);
+            try {
+              await closeInventarioBodegaToma(tomaActiva.id_toma);
+              const detalle = await fetchInventarioBodegaToma(tomaActiva.id_toma, detalleParams());
+              tomaActivaIdRef.current = Number(detalle?.id_toma || tomaActiva.id_toma || 0);
+              setTomaActiva(detalle);
+              const lista = await fetchInventarioBodegaTomas();
+              setTomas(Array.isArray(lista) ? lista : []);
+            } catch (error: any) {
+              Alert.alert('Inventario bodega', error?.response?.data?.error || 'No se pudo finalizar el informe.');
+            } finally {
+              setSaving(false);
+            }
+          },
+        },
+      ]
+    );
+  }, [detalleParams, tomaAbierta, tomaActiva?.id_toma]);
+
+  const eliminarEscaneo = useCallback((idEscaneo: number) => {
+    if (!idEscaneo || !tomaActiva?.id_toma || !tomaAbierta) return;
+    Alert.alert('Eliminar escaneo', 'Se quitara este registro del informe actual.', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Eliminar',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await deleteInventarioBodegaEscaneo(idEscaneo);
+            const detalle = await fetchInventarioBodegaToma(tomaActiva.id_toma, detalleParams());
+            setTomaActiva(detalle);
+          } catch (error: any) {
+            Alert.alert('Inventario bodega', error?.response?.data?.error || 'No se pudo eliminar el escaneo.');
+          }
+        },
+      },
+    ]);
+  }, [detalleParams, tomaAbierta, tomaActiva?.id_toma]);
+
+  const agregarEquipoBodega = useCallback(async () => {
+    const codigo = bodegaCodigo.trim();
+    if (!codigo || !tipoSeleccionado || bodegaSaving) {
+      if (!tipoSeleccionado) Alert.alert('Inventario bodega', 'Selecciona categoria y equipo.');
+      return;
+    }
+    setBodegaSaving(true);
+    try {
+      await createInventarioBodegaEquipos({
+        items: [
+          {
+            codigo,
+            numero_serie: bodegaSerie.trim() || codigo,
+            equipo_nombre: tipoSeleccionado,
+            descripcion_producto: bodegaObs.trim() || undefined,
+            ubicacion: 'Bodega central',
+            estado_equipo: 'Operativo',
+          },
+        ],
+      });
+      setBodegaCodigo('');
+      setBodegaSerie('');
+      setBodegaObs('');
+      Alert.alert('Inventario bodega', 'Equipo agregado a bodega central.');
+    } catch (error: any) {
+      Alert.alert('Inventario bodega', error?.response?.data?.error || 'No se pudo agregar el equipo a bodega.');
+    } finally {
+      setBodegaSaving(false);
+    }
+  }, [bodegaCodigo, bodegaObs, bodegaSaving, bodegaSerie, tipoSeleccionado]);
+
+  const cerrarSesion = useCallback(async () => {
+    await setToken(null);
+    router.replace('/login');
+  }, [router, setToken]);
+
+  return (
+    <SafeAreaView style={styles.safe}>
+      <StatusBar style="dark" />
+      <ScrollView
+        contentContainerStyle={styles.content}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refrescar} tintColor="#0b3b8c" />}
+      >
+        <View style={styles.hero}>
+          <View style={styles.heroIcon}>
+            <Ionicons name="barcode-outline" size={28} color="#d9f2ff" />
+          </View>
+          <Text style={styles.heroKicker}>CONTROL TRIMESTRAL</Text>
+          <Text style={styles.heroTitle}>Inventario bodega</Text>
+          <Text style={styles.heroText}>Crea informes, escanea por tipo de equipo y conserva el historial de bodega.</Text>
+          <View style={styles.heroStats}>
+            <View style={styles.heroStat}>
+              <Text style={styles.heroStatNumber}>{abiertas}</Text>
+              <Text style={styles.heroStatLabel}>abiertas</Text>
+            </View>
+            <View style={styles.heroStat}>
+              <Text style={styles.heroStatNumber}>{cerradas}</Text>
+              <Text style={styles.heroStatLabel}>cerradas</Text>
+            </View>
+          </View>
+          <Pressable style={styles.logoutBtn} onPress={cerrarSesion}>
+            <Ionicons name="log-out-outline" size={17} color="#dbeafe" />
+            <Text style={styles.logoutText}>Cerrar sesion</Text>
+          </Pressable>
+        </View>
+
+        <View style={styles.modeSwitch}>
+          <Pressable
+            style={[styles.modeBtn, modo === 'informe' && styles.modeBtnActive]}
+            onPress={() => setModo('informe')}
+          >
+            <Ionicons name="clipboard-outline" size={17} color={modo === 'informe' ? '#ffffff' : '#334155'} />
+            <Text style={[styles.modeBtnText, modo === 'informe' && styles.modeBtnTextActive]}>Crear informe</Text>
+          </Pressable>
+          <Pressable
+            style={[styles.modeBtn, modo === 'bodega' && styles.modeBtnActive]}
+            onPress={() => setModo('bodega')}
+          >
+            <Ionicons name="file-tray-full-outline" size={17} color={modo === 'bodega' ? '#ffffff' : '#334155'} />
+            <Text style={[styles.modeBtnText, modo === 'bodega' && styles.modeBtnTextActive]}>Agregar a bodega</Text>
+          </Pressable>
+        </View>
+
+        {modo === 'bodega' ? (
+          <View style={styles.card}>
+            <View style={styles.sectionHeader}>
+              <View>
+                <Text style={styles.kicker}>BODEGA CENTRAL</Text>
+                <Text style={styles.sectionTitle}>Agregar equipo</Text>
+              </View>
+              <Pressable
+                style={[styles.primaryBtn, (bodegaSaving || !tipoSeleccionado || !bodegaCodigo.trim()) && styles.btnDisabled]}
+                disabled={bodegaSaving || !tipoSeleccionado || !bodegaCodigo.trim()}
+                onPress={agregarEquipoBodega}
+              >
+                <Ionicons name="save-outline" size={17} color="#fff" />
+                <Text style={styles.primaryBtnText}>{bodegaSaving ? 'Guardando...' : 'Agregar'}</Text>
+              </Pressable>
+            </View>
+            <Text style={styles.scanHint}>Selecciona categoria y equipo. El registro quedara en Bodega central y aparecera en En bodega.</Text>
+            <View style={styles.typeBox}>
+              {categoriasInventario.length ? (
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.categoryList}>
+                  {categoriasInventario.map((categoria) => {
+                    const selected = categoria === categoriaSeleccionada;
+                    return (
+                      <Pressable
+                        key={categoria}
+                        style={[styles.categoryPill, selected && styles.categoryPillActive]}
+                        onPress={() => {
+                          setCategoriaSeleccionada(categoria);
+                          setTipoSeleccionado('');
+                        }}
+                      >
+                        <Text style={[styles.categoryPillText, selected && styles.categoryPillTextActive]}>{categoria}</Text>
+                      </Pressable>
+                    );
+                  })}
+                </ScrollView>
+              ) : null}
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.typeList}>
+                {tiposCategoria.map((tipo) => {
+                  const nombre = String(tipo.equipo_nombre || '').trim();
+                  const selected = nombre.toLowerCase() === tipoSeleccionado.trim().toLowerCase();
+                  return (
+                    <Pressable
+                      key={nombre}
+                      style={[styles.typePill, selected && styles.typePillActive]}
+                      onPress={() => setTipoSeleccionado(selected ? '' : nombre)}
+                    >
+                      <Text style={[styles.typePillTitle, selected && styles.typePillTitleActive]} numberOfLines={1}>
+                        {nombre}
+                      </Text>
+                      <Text style={[styles.typePillMeta, selected && styles.typePillMetaActive]}>Bodega central</Text>
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
+            </View>
+            <TextInput
+              style={styles.input}
+              value={bodegaCodigo}
+              onChangeText={setBodegaCodigo}
+              placeholder="Codigo"
+              placeholderTextColor="#94a3b8"
+              autoCapitalize="characters"
+            />
+            <Pressable
+              style={[styles.scanBtn, !tipoSeleccionado && styles.btnDisabled, { marginBottom: 10 }]}
+              disabled={!tipoSeleccionado}
+              onPress={() => abrirScanner('bodega')}
+            >
+              <Ionicons name="scan-outline" size={18} color="#fff" />
+              <Text style={styles.scanBtnText}>Escanear codigo</Text>
+            </Pressable>
+            <TextInput
+              style={styles.input}
+              value={bodegaSerie}
+              onChangeText={setBodegaSerie}
+              placeholder="N serie (si lo dejas vacio usa el codigo)"
+              placeholderTextColor="#94a3b8"
+              autoCapitalize="characters"
+            />
+            <TextInput
+              style={[styles.input, styles.textArea]}
+              value={bodegaObs}
+              onChangeText={setBodegaObs}
+              placeholder="Observacion opcional"
+              placeholderTextColor="#94a3b8"
+              multiline
+            />
+          </View>
+        ) : (
+        <>
+        <View style={styles.card}>
+          <View style={styles.sectionHeader}>
+            <View>
+              <Text style={styles.kicker}>NUEVO INFORME</Text>
+              <Text style={styles.sectionTitle}>Crear informe</Text>
+            </View>
+            <Pressable style={[styles.primaryBtn, saving && styles.btnDisabled]} disabled={saving} onPress={crearToma}>
+              <Ionicons name="add" size={18} color="#fff" />
+              <Text style={styles.primaryBtnText}>{saving ? 'Creando...' : 'Crear'}</Text>
+            </Pressable>
+          </View>
+          <TextInput
+            style={styles.input}
+            value={nombreToma}
+            onChangeText={setNombreToma}
+            placeholder="Nombre del informe"
+            placeholderTextColor="#94a3b8"
+          />
+          <TextInput
+            style={styles.input}
+            value={ubicacion}
+            onChangeText={setUbicacion}
+            placeholder="Ubicacion"
+            placeholderTextColor="#94a3b8"
+          />
+          <TextInput
+            style={[styles.input, styles.textArea]}
+            value={observacion}
+            onChangeText={setObservacion}
+            placeholder="Observacion opcional"
+            placeholderTextColor="#94a3b8"
+            multiline
+          />
+        </View>
+
+        {!!tomas.length && (
+          <View style={styles.card}>
+            <View style={styles.sectionHeader}>
+              <View>
+                <Text style={styles.kicker}>HISTORIAL</Text>
+                <Text style={styles.sectionTitle}>Informes registrados</Text>
+              </View>
+            </View>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tomaList}>
+              {tomas.map((item) => {
+                const selected = Number(item.id_toma) === Number(tomaActiva?.id_toma || 0);
+                const abierta = String(item.estado || '').toLowerCase() !== 'cerrado';
+                return (
+                  <Pressable
+                    key={item.id_toma}
+                    style={[styles.tomaPill, selected && styles.tomaPillActive]}
+                    onPress={() => seleccionarToma(item.id_toma)}
+                  >
+                    <Text style={[styles.tomaPillTitle, selected && styles.tomaPillTitleActive]} numberOfLines={1}>
+                      {item.nombre || `Informe ${item.id_toma}`}
+                    </Text>
+                    <Text style={[styles.tomaPillMeta, selected && styles.tomaPillMetaActive]}>
+                      {formatFecha(item.fecha_inicio)} - {abierta ? 'Abierto' : 'Finalizado'}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+          </View>
+        )}
+
+        {loading ? (
+          <View style={styles.loadingBox}>
+            <ActivityIndicator color="#0b3b8c" />
+            <Text style={styles.loadingText}>Cargando inventario...</Text>
+          </View>
+        ) : tomaActiva ? (
+          <>
+            <View style={styles.activeCard}>
+              <View style={styles.activeHeader}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.kicker}>INFORME ACTUAL</Text>
+                  <Text style={styles.activeTitle}>{tomaActiva.nombre || `Informe ${tomaActiva.id_toma}`}</Text>
+                  <Text style={styles.activeMeta}>{tomaActiva.ubicacion || 'Bodega central'} - {formatFecha(tomaActiva.fecha_inicio)}</Text>
+                </View>
+                <View style={[styles.stateBadge, tomaAbierta ? styles.stateOpen : styles.stateClosed]}>
+                  <Text style={[styles.stateText, tomaAbierta ? styles.stateOpenText : styles.stateClosedText]}>
+                    {estadoTexto(tomaActiva.estado)}
+                  </Text>
+                </View>
+              </View>
+
+              <View style={styles.progressWrap}>
+                <View style={styles.progressBar}>
+                  <View style={[styles.progressFill, { width: `${Math.min(Number(resumen.cumplimiento || 0), 100)}%` }]} />
+                </View>
+                <Text style={styles.progressText}>{Number(resumen.cumplimiento || 0).toFixed(1)}% cumplimiento</Text>
+              </View>
+
+              <View style={styles.kpiGrid}>
+                <Kpi label="Esperados" value={resumen.total_esperado || 0} color="#0b3b8c" />
+                <Kpi label="Encontrados" value={resumen.encontrados || 0} color="#16a34a" />
+                <Kpi label="Faltantes" value={resumen.faltantes || 0} color="#dc2626" />
+                <Kpi label="No esperados" value={resumen.no_esperados || 0} color="#f59e0b" />
+                <Kpi label="No corresponde" value={resumen.no_corresponden || 0} color="#b91c1c" />
+              </View>
+
+              <View style={styles.typeBox}>
+                <View style={styles.sectionHeader}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.kicker}>CATEGORIA Y EQUIPO</Text>
+                    <Text style={styles.scanTitle}>Selecciona categoria, luego equipo</Text>
+                  </View>
+                  {tipoSeleccionado ? (
+                    <View style={styles.typeCounter}>
+                      <Text style={styles.typeCounterNumber}>{totalTipoSeleccionado}</Text>
+                      <Text style={styles.typeCounterLabel}>esperados</Text>
+                    </View>
+                  ) : null}
+                </View>
+                {categoriasInventario.length ? (
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.categoryList}>
+                    {categoriasInventario.map((categoria) => {
+                      const selected = categoria === categoriaSeleccionada;
+                      return (
+                        <Pressable
+                          key={categoria}
+                          style={[styles.categoryPill, selected && styles.categoryPillActive]}
+                          onPress={() => {
+                            setCategoriaSeleccionada(categoria);
+                            setTipoSeleccionado('');
+                          }}
+                        >
+                          <Text style={[styles.categoryPillText, selected && styles.categoryPillTextActive]}>
+                            {categoria}
+                          </Text>
+                        </Pressable>
+                      );
+                    })}
+                  </ScrollView>
+                ) : null}
+                {tiposCategoria.length ? (
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.typeList}>
+                    {tiposCategoria.map((tipo) => {
+                      const nombre = String(tipo.equipo_nombre || '').trim();
+                      const selected = nombre.toLowerCase() === tipoSeleccionado.trim().toLowerCase();
+                      return (
+                        <Pressable
+                          key={nombre}
+                          style={[styles.typePill, selected && styles.typePillActive]}
+                          onPress={() => setTipoSeleccionado(selected ? '' : nombre)}
+                        >
+                          <Text style={[styles.typePillTitle, selected && styles.typePillTitleActive]} numberOfLines={1}>
+                            {nombre}
+                          </Text>
+                          <Text style={[styles.typePillMeta, selected && styles.typePillMetaActive]}>
+                            {Number(tipo.total_esperado || 0)} en bodega
+                          </Text>
+                        </Pressable>
+                      );
+                    })}
+                  </ScrollView>
+                ) : (
+                  <Text style={styles.emptyText}>No hay equipos disponibles para esta categoria.</Text>
+                )}
+              </View>
+
+              {tomaAbierta ? (
+                <View style={styles.scanBox}>
+                  <Text style={styles.scanTitle}>Registrar equipo</Text>
+                  <Text style={styles.scanHint}>
+                    {tipoSeleccionado
+                      ? `Escaneando: ${tipoSeleccionado}`
+                      : 'Selecciona un tipo para habilitar el escaneo.'}
+                  </Text>
+                  <View style={styles.scanRow}>
+                    <TextInput
+                      style={[styles.input, styles.scanInput]}
+                      value={valorManual}
+                      onChangeText={setValorManual}
+                      placeholder="Codigo o N serie"
+                      placeholderTextColor="#94a3b8"
+                      autoCapitalize="characters"
+                    />
+                    <Pressable
+                      style={[styles.iconBtn, (saving || !tipoSeleccionado) && styles.btnDisabled]}
+                      disabled={saving || !tipoSeleccionado}
+                      onPress={() => registrarValor(valorManual)}
+                    >
+                      <Ionicons name="checkmark" size={21} color="#fff" />
+                    </Pressable>
+                  </View>
+                  <View style={styles.actionsRow}>
+                    <Pressable style={[styles.scanBtn, !tipoSeleccionado && styles.btnDisabled]} disabled={!tipoSeleccionado} onPress={() => abrirScanner('informe')}>
+                      <Ionicons name="scan-outline" size={18} color="#fff" />
+                      <Text style={styles.scanBtnText}>Escanear</Text>
+                    </Pressable>
+                    <Pressable style={[styles.closeBtn, saving && styles.btnDisabled]} disabled={saving} onPress={cerrarToma}>
+                      <Ionicons name="lock-closed-outline" size={17} color="#991b1b" />
+                      <Text style={styles.closeBtnText}>Finalizar informe</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              ) : (
+                <View style={styles.readOnlyBox}>
+                  <Ionicons name="lock-closed-outline" size={18} color="#64748b" />
+                  <Text style={styles.readOnlyText}>Informe finalizado. Disponible solo como historial.</Text>
+                </View>
+              )}
+            </View>
+
+            <View style={styles.card}>
+              <View style={styles.sectionHeader}>
+                <View>
+                  <Text style={styles.kicker}>ESCANEOS</Text>
+                  <Text style={styles.sectionTitle}>Equipos registrados</Text>
+                </View>
+                <Text style={styles.countBadge}>{escaneos.length}</Text>
+              </View>
+              {escaneos.length ? (
+                escaneos.map((item) => (
+                  <View key={item.id_escaneo || `${item.codigo}-${item.created_at}`} style={styles.scanItem}>
+                    <View style={styles.scanItemMain}>
+                      <Text style={styles.itemTitle}>{item.equipo_nombre || 'Equipo no identificado'}</Text>
+                      <Text style={styles.itemMeta}>Codigo: {item.codigo || '-'}</Text>
+                      <Text style={styles.itemMeta}>Serie: {item.numero_serie || '-'}</Text>
+                      <Text style={styles.itemDate}>
+                        {formatFecha(item.created_at)} {formatHora(item.created_at)}
+                      </Text>
+                    </View>
+                    <View style={styles.scanItemSide}>
+                      <Badge resultado={item.resultado} />
+                      {tomaAbierta ? (
+                        <Pressable style={styles.deleteBtn} onPress={() => eliminarEscaneo(Number(item.id_escaneo || 0))}>
+                          <Ionicons name="trash-outline" size={16} color="#dc2626" />
+                        </Pressable>
+                      ) : null}
+                    </View>
+                  </View>
+                ))
+              ) : (
+                <Text style={styles.emptyText}>Aun no hay escaneos en este informe.</Text>
+              )}
+            </View>
+
+            <View style={styles.card}>
+              <View style={styles.sectionHeader}>
+                <View>
+                  <Text style={styles.kicker}>CONTROL</Text>
+                  <Text style={styles.sectionTitle}>Faltantes del sistema</Text>
+                </View>
+                <Text style={styles.countBadge}>{faltantes.length}</Text>
+              </View>
+              {faltantes.length ? (
+                faltantes.slice(0, 40).map((item) => (
+                  <View key={item.id_bodega_equipo || `${item.codigo}-${item.numero_serie}`} style={styles.missingItem}>
+                    <Ionicons name="alert-circle-outline" size={19} color="#dc2626" />
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.itemTitle}>{item.equipo_nombre || 'Equipo'}</Text>
+                      <Text style={styles.itemMeta}>Codigo: {item.codigo || '-'} - Serie: {item.numero_serie || '-'}</Text>
+                    </View>
+                  </View>
+                ))
+              ) : (
+                <Text style={styles.emptyText}>Sin faltantes para el informe y tipo seleccionado.</Text>
+              )}
+              {faltantes.length > 40 ? (
+                <Text style={styles.limitText}>Mostrando 40 de {faltantes.length}. Revisa el detalle completo en la web.</Text>
+              ) : null}
+            </View>
+          </>
+        ) : (
+          <View style={styles.emptyState}>
+            <Ionicons name="cube-outline" size={32} color="#64748b" />
+            <Text style={styles.emptyTitle}>Sin informes registrados</Text>
+            <Text style={styles.emptyText}>Crea un informe para comenzar el inventario de bodega.</Text>
+          </View>
+        )}
+        </>
+        )}
+      </ScrollView>
+
+      <Modal visible={scannerVisible} animationType="fade" transparent>
+        <View style={styles.camOverlay}>
+          <View style={styles.camBox}>
+            {permission?.status !== 'granted' ? (
+              <View style={styles.cameraFallback}>
+                <Text style={styles.emptyText}>Sin permiso de camara.</Text>
+              </View>
+            ) : (
+              <CameraView
+                style={StyleSheet.absoluteFillObject}
+                facing="back"
+                onBarcodeScanned={scannerVisible ? handleBarcodeScanned : undefined}
+              />
+            )}
+            <View pointerEvents="none" style={styles.scanFrame} />
+            <View style={styles.camHeader}>
+              <Text style={styles.camTitle}>Escanea codigo o serie</Text>
+              <Pressable onPress={() => setScannerVisible(false)}>
+                <Ionicons name="close-circle" size={28} color="#fff" />
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+    </SafeAreaView>
+  );
+}
+
+function Kpi({ label, value, color }: { label: string; value: number | string; color: string }) {
+  return (
+    <View style={styles.kpiCard}>
+      <Text style={styles.kpiLabel}>{label}</Text>
+      <Text style={[styles.kpiValue, { color }]}>{value}</Text>
+    </View>
+  );
+}
+
+function Badge({ resultado }: { resultado?: string }) {
+  const raw = String(resultado || '').toLowerCase();
+  const style =
+    raw === 'encontrado'
+      ? styles.badgeOk
+      : raw === 'manual'
+        ? styles.badgeManual
+      : raw === 'duplicado'
+        ? styles.badgeWarn
+        : raw === 'no_esperado' || raw === 'no_corresponde'
+          ? styles.badgeDanger
+          : styles.badgeNeutral;
+  return (
+    <View style={[styles.resultBadge, style]}>
+      <Text style={styles.resultBadgeText}>{resultadoTexto(resultado)}</Text>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  safe: {
+    flex: 1,
+    backgroundColor: '#eef3f6',
+  },
+  content: {
+    padding: 16,
+    paddingBottom: 34,
+    gap: 14,
+  },
+  hero: {
+    borderRadius: 28,
+    padding: 20,
+    overflow: 'hidden',
+    backgroundColor: '#071527',
+    shadowColor: '#0f172a',
+    shadowOpacity: 0.18,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 12 },
+    elevation: 5,
+  },
+  heroIcon: {
+    width: 58,
+    height: 58,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#0b3b8c',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.18)',
+    marginBottom: 18,
+  },
+  heroKicker: {
+    color: '#7dd3fc',
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 1.1,
+  },
+  heroTitle: {
+    color: '#ffffff',
+    fontSize: 27,
+    fontWeight: '900',
+    marginTop: 4,
+  },
+  heroText: {
+    color: '#cbd5e1',
+    fontSize: 13,
+    lineHeight: 19,
+    marginTop: 8,
+  },
+  heroStats: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 18,
+  },
+  logoutBtn: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    borderRadius: 999,
+    paddingHorizontal: 13,
+    paddingVertical: 9,
+    marginTop: 14,
+    backgroundColor: 'rgba(15,23,42,0.44)',
+    borderWidth: 1,
+    borderColor: 'rgba(219,234,254,0.2)',
+  },
+  logoutText: {
+    color: '#dbeafe',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  heroStat: {
+    flex: 1,
+    borderRadius: 18,
+    padding: 12,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+  },
+  heroStatNumber: {
+    color: '#ffffff',
+    fontSize: 22,
+    fontWeight: '900',
+  },
+  heroStatLabel: {
+    color: '#9bdcff',
+    fontSize: 11,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+  },
+  card: {
+    borderRadius: 24,
+    padding: 16,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+    shadowColor: '#0f172a',
+    shadowOpacity: 0.06,
+    shadowRadius: 13,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 2,
+  },
+  modeSwitch: {
+    flexDirection: 'row',
+    gap: 10,
+    padding: 6,
+    borderRadius: 22,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+  },
+  modeBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 7,
+    borderRadius: 17,
+    paddingVertical: 12,
+    backgroundColor: '#f1f5f9',
+  },
+  modeBtnActive: {
+    backgroundColor: '#0b3b8c',
+  },
+  modeBtnText: {
+    color: '#334155',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  modeBtnTextActive: {
+    color: '#ffffff',
+  },
+  activeCard: {
+    borderRadius: 26,
+    padding: 16,
+    backgroundColor: '#f8fbff',
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    shadowColor: '#0f172a',
+    shadowOpacity: 0.08,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 3,
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginBottom: 12,
+  },
+  kicker: {
+    color: '#2563eb',
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 1,
+  },
+  sectionTitle: {
+    color: '#0f172a',
+    fontSize: 18,
+    fontWeight: '900',
+    marginTop: 2,
+  },
+  input: {
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+    backgroundColor: '#f8fafc',
+    color: '#0f172a',
+    fontSize: 15,
+    fontWeight: '700',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    marginBottom: 10,
+  },
+  textArea: {
+    minHeight: 78,
+    textAlignVertical: 'top',
+  },
+  primaryBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    backgroundColor: '#0b3b8c',
+  },
+  primaryBtnText: {
+    color: '#ffffff',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  btnDisabled: {
+    opacity: 0.55,
+  },
+  tomaList: {
+    gap: 10,
+    paddingRight: 6,
+  },
+  tomaPill: {
+    width: 190,
+    borderRadius: 18,
+    padding: 13,
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+  },
+  tomaPillActive: {
+    backgroundColor: '#0b3b8c',
+    borderColor: '#0b3b8c',
+  },
+  tomaPillTitle: {
+    color: '#0f172a',
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  tomaPillTitleActive: {
+    color: '#ffffff',
+  },
+  tomaPillMeta: {
+    color: '#64748b',
+    fontSize: 12,
+    fontWeight: '700',
+    marginTop: 4,
+  },
+  tomaPillMetaActive: {
+    color: '#bfdbfe',
+  },
+  loadingBox: {
+    borderRadius: 22,
+    padding: 18,
+    alignItems: 'center',
+    backgroundColor: '#ffffff',
+  },
+  loadingText: {
+    color: '#475569',
+    fontSize: 13,
+    fontWeight: '700',
+    marginTop: 8,
+  },
+  activeHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+  },
+  activeTitle: {
+    color: '#0f172a',
+    fontSize: 20,
+    fontWeight: '900',
+  },
+  activeMeta: {
+    color: '#64748b',
+    fontSize: 12,
+    fontWeight: '800',
+    marginTop: 4,
+  },
+  stateBadge: {
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+  },
+  stateOpen: {
+    backgroundColor: '#dcfce7',
+  },
+  stateClosed: {
+    backgroundColor: '#e2e8f0',
+  },
+  stateText: {
+    fontSize: 11,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+  },
+  stateOpenText: {
+    color: '#166534',
+  },
+  stateClosedText: {
+    color: '#334155',
+  },
+  progressWrap: {
+    marginTop: 16,
+  },
+  progressBar: {
+    height: 10,
+    borderRadius: 999,
+    backgroundColor: '#e2e8f0',
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: '100%',
+    borderRadius: 999,
+    backgroundColor: '#0ea5e9',
+  },
+  progressText: {
+    color: '#334155',
+    fontSize: 12,
+    fontWeight: '900',
+    marginTop: 7,
+  },
+  kpiGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+    marginTop: 16,
+  },
+  kpiCard: {
+    width: '47%',
+    borderRadius: 18,
+    padding: 12,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+  },
+  kpiLabel: {
+    color: '#64748b',
+    fontSize: 11,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+  },
+  kpiValue: {
+    fontSize: 24,
+    fontWeight: '900',
+    marginTop: 3,
+  },
+  typeBox: {
+    marginTop: 16,
+    borderRadius: 22,
+    padding: 14,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+  },
+  categoryList: {
+    gap: 8,
+    paddingRight: 6,
+    marginBottom: 12,
+  },
+  categoryPill: {
+    borderRadius: 999,
+    paddingHorizontal: 13,
+    paddingVertical: 9,
+    backgroundColor: '#eef2f7',
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+  },
+  categoryPillActive: {
+    backgroundColor: '#0b3b8c',
+    borderColor: '#0b3b8c',
+  },
+  categoryPillText: {
+    color: '#334155',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  categoryPillTextActive: {
+    color: '#ffffff',
+  },
+  typeList: {
+    gap: 10,
+    paddingRight: 6,
+  },
+  typePill: {
+    width: 160,
+    borderRadius: 18,
+    padding: 12,
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+  },
+  typePillActive: {
+    backgroundColor: '#082f65',
+    borderColor: '#0ea5e9',
+  },
+  typePillTitle: {
+    color: '#0f172a',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  typePillTitleActive: {
+    color: '#ffffff',
+  },
+  typePillMeta: {
+    color: '#64748b',
+    fontSize: 11,
+    fontWeight: '800',
+    marginTop: 5,
+  },
+  typePillMetaActive: {
+    color: '#bae6fd',
+  },
+  typeCounter: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    minWidth: 78,
+    borderRadius: 18,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    backgroundColor: '#dbeafe',
+  },
+  typeCounterNumber: {
+    color: '#0b3b8c',
+    fontSize: 20,
+    fontWeight: '900',
+  },
+  typeCounterLabel: {
+    color: '#1e3a8a',
+    fontSize: 9,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+  },
+  scanBox: {
+    marginTop: 16,
+    borderRadius: 22,
+    padding: 14,
+    backgroundColor: '#eef6ff',
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+  },
+  scanTitle: {
+    color: '#0f172a',
+    fontSize: 15,
+    fontWeight: '900',
+    marginBottom: 10,
+  },
+  scanHint: {
+    color: '#475569',
+    fontSize: 12,
+    fontWeight: '800',
+    marginBottom: 10,
+  },
+  scanRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  scanInput: {
+    flex: 1,
+    marginBottom: 0,
+  },
+  iconBtn: {
+    width: 50,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#16a34a',
+  },
+  actionsRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 12,
+  },
+  scanBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 7,
+    borderRadius: 16,
+    paddingVertical: 12,
+    backgroundColor: '#0b3b8c',
+  },
+  scanBtnText: {
+    color: '#ffffff',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  closeBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 7,
+    borderRadius: 16,
+    paddingVertical: 12,
+    backgroundColor: '#fee2e2',
+  },
+  closeBtnText: {
+    color: '#991b1b',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  readOnlyBox: {
+    flexDirection: 'row',
+    gap: 9,
+    alignItems: 'center',
+    marginTop: 16,
+    borderRadius: 17,
+    padding: 12,
+    backgroundColor: '#f1f5f9',
+  },
+  readOnlyText: {
+    flex: 1,
+    color: '#475569',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  countBadge: {
+    minWidth: 38,
+    textAlign: 'center',
+    borderRadius: 999,
+    overflow: 'hidden',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    color: '#0b3b8c',
+    backgroundColor: '#dbeafe',
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  scanItem: {
+    flexDirection: 'row',
+    gap: 10,
+    borderRadius: 18,
+    padding: 12,
+    marginBottom: 10,
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  scanItemMain: {
+    flex: 1,
+  },
+  scanItemSide: {
+    alignItems: 'flex-end',
+    gap: 8,
+  },
+  itemTitle: {
+    color: '#0f172a',
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  itemMeta: {
+    color: '#475569',
+    fontSize: 12,
+    fontWeight: '700',
+    marginTop: 3,
+  },
+  itemDate: {
+    color: '#94a3b8',
+    fontSize: 11,
+    fontWeight: '800',
+    marginTop: 6,
+  },
+  resultBadge: {
+    borderRadius: 999,
+    paddingHorizontal: 9,
+    paddingVertical: 6,
+  },
+  badgeOk: {
+    backgroundColor: '#dcfce7',
+  },
+  badgeManual: {
+    backgroundColor: '#e0f2fe',
+  },
+  badgeWarn: {
+    backgroundColor: '#fef3c7',
+  },
+  badgeDanger: {
+    backgroundColor: '#fee2e2',
+  },
+  badgeNeutral: {
+    backgroundColor: '#e2e8f0',
+  },
+  resultBadgeText: {
+    color: '#0f172a',
+    fontSize: 10,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+  },
+  deleteBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#fff1f2',
+  },
+  missingItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    borderRadius: 16,
+    padding: 11,
+    marginBottom: 8,
+    backgroundColor: '#fff7ed',
+    borderWidth: 1,
+    borderColor: '#fed7aa',
+  },
+  emptyState: {
+    borderRadius: 24,
+    padding: 22,
+    alignItems: 'center',
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+  },
+  emptyTitle: {
+    color: '#0f172a',
+    fontSize: 18,
+    fontWeight: '900',
+    marginTop: 8,
+  },
+  emptyText: {
+    color: '#64748b',
+    fontSize: 13,
+    fontWeight: '700',
+    lineHeight: 19,
+  },
+  limitText: {
+    color: '#64748b',
+    fontSize: 12,
+    fontWeight: '800',
+    marginTop: 4,
+  },
+  camOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(2,6,23,0.78)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 18,
+  },
+  camBox: {
+    width: '100%',
+    height: 430,
+    borderRadius: 26,
+    overflow: 'hidden',
+    backgroundColor: '#000000',
+  },
+  camHeader: {
+    position: 'absolute',
+    left: 16,
+    right: 16,
+    top: 16,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  camTitle: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  scanFrame: {
+    position: 'absolute',
+    left: 50,
+    right: 50,
+    top: 145,
+    height: 140,
+    borderRadius: 20,
+    borderWidth: 3,
+    borderColor: '#38bdf8',
+  },
+  cameraFallback: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#f8fafc',
+  },
+});
