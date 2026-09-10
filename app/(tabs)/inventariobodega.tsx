@@ -108,12 +108,14 @@ export default function InventarioBodegaScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [scannerVisible, setScannerVisible] = useState(false);
+  const [crearInformeModalVisible, setCrearInformeModalVisible] = useState(false);
   const [scannerTarget, setScannerTarget] = useState<'informe' | 'bodega'>('informe');
   const [valorManual, setValorManual] = useState('');
   const [nombreToma, setNombreToma] = useState('');
   const [ubicacion, setUbicacion] = useState('Bodega central');
   const [observacion, setObservacion] = useState('');
   const [modo, setModo] = useState<'informe' | 'bodega'>('informe');
+  const [busquedaEquipo, setBusquedaEquipo] = useState('');
   const [bodegaCodigo, setBodegaCodigo] = useState('');
   const [bodegaSerie, setBodegaSerie] = useState('');
   const [bodegaObs, setBodegaObs] = useState('');
@@ -143,6 +145,25 @@ export default function InventarioBodegaScreen() {
     () => tiposEquipo.filter((tipo) => String(tipo.categoria || 'Sin categoria').trim() === categoriaSeleccionada),
     [categoriaSeleccionada, tiposEquipo]
   );
+  const normalizarBusqueda = useCallback(
+    (valor: string) => String(valor || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase(),
+    []
+  );
+  const tiposVisibles = useMemo(() => {
+    const term = normalizarBusqueda(busquedaEquipo);
+    if (!term) return tiposCategoria;
+    return tiposEquipo.filter((tipo) => {
+      const nombre = normalizarBusqueda(tipo.equipo_nombre);
+      const categoria = normalizarBusqueda(tipo.categoria);
+      return nombre.includes(term) || categoria.includes(term);
+    });
+  }, [busquedaEquipo, normalizarBusqueda, tiposCategoria, tiposEquipo]);
+  const separarCodigoSerieEscaneado = useCallback((valor: string) => {
+    const serie = String(valor || '').trim();
+    const numeros = serie.replace(/\D/g, '');
+    const codigo = (numeros.slice(0, 5) || serie.slice(0, 5)).trim();
+    return { codigo, serie };
+  }, []);
 
   const detalleParams = useCallback(
     () => (tipoSeleccionado ? { tipo_equipo: tipoSeleccionado } : undefined),
@@ -238,6 +259,7 @@ export default function InventarioBodegaScreen() {
       const nueva = data?.toma || data;
       tomaActivaIdRef.current = Number(nueva?.id_toma || 0);
       setTomaActiva(nueva);
+      setCrearInformeModalVisible(false);
       setNombreToma('');
       setObservacion('');
       const lista = await fetchInventarioBodegaTomas();
@@ -302,17 +324,19 @@ export default function InventarioBodegaScreen() {
     setScannerVisible(true);
   }, [permission?.status, requestPermission, tipoSeleccionado, tomaAbierta]);
 
-  const handleBarcodeScanned = useCallback((event: any) => {
-    if (scanLockRef.current) return;
-    scanLockRef.current = true;
-    setScannerVisible(false);
-    if (scannerTarget === 'bodega') {
-      setBodegaCodigo(String(event?.data || '').trim());
-      scanLockRef.current = false;
-      return;
-    }
-    registrarValor(event?.data || '');
-  }, [registrarValor, scannerTarget]);
+	  const handleBarcodeScanned = useCallback((event: any) => {
+	    if (scanLockRef.current) return;
+	    scanLockRef.current = true;
+	    setScannerVisible(false);
+	    if (scannerTarget === 'bodega') {
+	      const { codigo, serie } = separarCodigoSerieEscaneado(event?.data || '');
+	      setBodegaCodigo(codigo);
+	      setBodegaSerie(serie);
+	      scanLockRef.current = false;
+	      return;
+	    }
+	    registrarValor(event?.data || '');
+	  }, [registrarValor, scannerTarget, separarCodigoSerieEscaneado]);
 
   const cerrarToma = useCallback(() => {
     if (!tomaActiva?.id_toma || !tomaAbierta) return;
@@ -388,11 +412,24 @@ export default function InventarioBodegaScreen() {
       setBodegaSerie('');
       setBodegaObs('');
       Alert.alert('Inventario bodega', 'Equipo agregado a bodega central.');
-    } catch (error: any) {
-      Alert.alert('Inventario bodega', error?.response?.data?.error || 'No se pudo agregar el equipo a bodega.');
-    } finally {
-      setBodegaSaving(false);
-    }
+	    } catch (error: any) {
+	      const data = error?.response?.data || {};
+	      if (data?.duplicado && data?.existente) {
+	        const existente = data.existente;
+	        const ubicacionExistente = existente?.ubicacion || 'Bodega';
+	        const equipoExistente = existente?.equipo_nombre || 'Equipo';
+	        const serieExistente = existente?.numero_serie || bodegaSerie.trim() || codigo;
+	        const estadoExistente = existente?.estado_equipo || '-';
+	        Alert.alert(
+	          'Equipo ya registrado',
+	          `Ya existe en ${ubicacionExistente}.\n\nEquipo: ${equipoExistente}\nN serie: ${serieExistente}\nEstado: ${estadoExistente}`
+	        );
+	      } else {
+	        Alert.alert('Inventario bodega', data?.error || 'No se pudo agregar el equipo a bodega.');
+	      }
+	    } finally {
+	      setBodegaSaving(false);
+	    }
   }, [bodegaCodigo, bodegaObs, bodegaSaving, bodegaSerie, tipoSeleccionado]);
 
   const cerrarSesion = useCallback(async () => {
@@ -439,7 +476,7 @@ export default function InventarioBodegaScreen() {
             <Text style={[styles.modeBtnText, modo === 'informe' && styles.modeBtnTextActive]}>Crear informe</Text>
           </Pressable>
           <Pressable
-            style={[styles.modeBtn, modo === 'bodega' && styles.modeBtnActive]}
+            style={[styles.modeBtn, modo === 'bodega' && styles.modeBtnBodegaActive]}
             onPress={() => setModo('bodega')}
           >
             <Ionicons name="file-tray-full-outline" size={17} color={modo === 'bodega' ? '#ffffff' : '#334155'} />
@@ -454,124 +491,120 @@ export default function InventarioBodegaScreen() {
                 <Text style={styles.kicker}>BODEGA CENTRAL</Text>
                 <Text style={styles.sectionTitle}>Agregar equipo</Text>
               </View>
-              <Pressable
-                style={[styles.primaryBtn, (bodegaSaving || !tipoSeleccionado || !bodegaCodigo.trim()) && styles.btnDisabled]}
-                disabled={bodegaSaving || !tipoSeleccionado || !bodegaCodigo.trim()}
-                onPress={agregarEquipoBodega}
-              >
-                <Ionicons name="save-outline" size={17} color="#fff" />
-                <Text style={styles.primaryBtnText}>{bodegaSaving ? 'Guardando...' : 'Agregar'}</Text>
-              </Pressable>
             </View>
-            <Text style={styles.scanHint}>Selecciona categoria y equipo. El registro quedara en Bodega central y aparecera en En bodega.</Text>
-            <View style={styles.typeBox}>
-              {categoriasInventario.length ? (
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.categoryList}>
+	            <Text style={styles.scanHint}>Selecciona categoria y equipo. El registro quedara en Bodega central y aparecera en En bodega.</Text>
+	            <View style={styles.typeBox}>
+	              <Text style={styles.selectorLabel}>Selecciona categoria</Text>
+	              {categoriasInventario.length ? (
+	                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.categoryList}>
                   {categoriasInventario.map((categoria) => {
                     const selected = categoria === categoriaSeleccionada;
                     return (
                       <Pressable
-                        key={categoria}
-                        style={[styles.categoryPill, selected && styles.categoryPillActive]}
-                        onPress={() => {
-                          setCategoriaSeleccionada(categoria);
-                          setTipoSeleccionado('');
-                        }}
-                      >
+	                        key={categoria}
+	                        style={[styles.categoryPill, selected && styles.categoryPillActive]}
+	                        onPress={() => {
+	                          setCategoriaSeleccionada(categoria);
+	                          setTipoSeleccionado('');
+	                          setBusquedaEquipo('');
+	                        }}
+	                      >
                         <Text style={[styles.categoryPillText, selected && styles.categoryPillTextActive]}>{categoria}</Text>
                       </Pressable>
                     );
-                  })}
-                </ScrollView>
-              ) : null}
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.typeList}>
-                {tiposCategoria.map((tipo) => {
-                  const nombre = String(tipo.equipo_nombre || '').trim();
-                  const selected = nombre.toLowerCase() === tipoSeleccionado.trim().toLowerCase();
-                  return (
-                    <Pressable
-                      key={nombre}
-                      style={[styles.typePill, selected && styles.typePillActive]}
-                      onPress={() => setTipoSeleccionado(selected ? '' : nombre)}
-                    >
-                      <Text style={[styles.typePillTitle, selected && styles.typePillTitleActive]} numberOfLines={1}>
-                        {nombre}
-                      </Text>
-                      <Text style={[styles.typePillMeta, selected && styles.typePillMetaActive]}>Bodega central</Text>
-                    </Pressable>
-                  );
-                })}
-              </ScrollView>
+		                  })}
+		                </ScrollView>
+		              ) : null}
+		              <Text style={styles.selectorLabel}>Busca o selecciona equipo</Text>
+		              <View style={styles.searchBox}>
+	                <Ionicons name="search-outline" size={17} color="#64748b" />
+	                <TextInput
+	                  style={styles.searchInput}
+	                  value={busquedaEquipo}
+	                  onChangeText={setBusquedaEquipo}
+	                  placeholder="Buscar equipo, ejemplo: router"
+	                  placeholderTextColor="#94a3b8"
+	                />
+	                {!!busquedaEquipo.trim() && (
+	                  <Pressable onPress={() => setBusquedaEquipo('')}>
+	                    <Ionicons name="close-circle" size={18} color="#94a3b8" />
+	                  </Pressable>
+	                )}
+	              </View>
+	              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.typeList}>
+	                {tiposVisibles.map((tipo) => {
+	                  const nombre = String(tipo.equipo_nombre || '').trim();
+	                  const categoria = String(tipo.categoria || 'Sin categoria').trim() || 'Sin categoria';
+	                  const selected = nombre.toLowerCase() === tipoSeleccionado.trim().toLowerCase();
+	                  return (
+	                    <Pressable
+	                      key={`${categoria}-${nombre}`}
+	                      style={[styles.typePill, selected && styles.typePillActive]}
+	                      onPress={() => {
+	                        setCategoriaSeleccionada(categoria);
+	                        setTipoSeleccionado(selected ? '' : nombre);
+	                      }}
+	                    >
+	                      <Text style={[styles.typePillTitle, selected && styles.typePillTitleActive]} numberOfLines={1}>
+	                        {nombre}
+	                      </Text>
+	                      <Text style={[styles.typePillMeta, selected && styles.typePillMetaActive]}>{busquedaEquipo.trim() ? categoria : 'Bodega central'}</Text>
+	                    </Pressable>
+	                  );
+	                })}
+	              </ScrollView>
             </View>
-            <TextInput
-              style={styles.input}
-              value={bodegaCodigo}
-              onChangeText={setBodegaCodigo}
-              placeholder="Codigo"
-              placeholderTextColor="#94a3b8"
-              autoCapitalize="characters"
-            />
+            <View style={styles.bodegaFieldsRow}>
+              <TextInput
+                style={[styles.input, styles.bodegaFieldInput]}
+                value={bodegaCodigo}
+                onChangeText={setBodegaCodigo}
+                placeholder="Codigo"
+                placeholderTextColor="#94a3b8"
+                autoCapitalize="characters"
+              />
+              <TextInput
+                style={[styles.input, styles.bodegaFieldInput]}
+                value={bodegaSerie}
+                onChangeText={setBodegaSerie}
+                placeholder="N serie"
+                placeholderTextColor="#94a3b8"
+                autoCapitalize="characters"
+              />
+            </View>
             <Pressable
-              style={[styles.scanBtn, !tipoSeleccionado && styles.btnDisabled, { marginBottom: 10 }]}
+              style={[styles.scanBtn, styles.scanBtnSuccess, !tipoSeleccionado && styles.btnDisabled, { marginBottom: 10 }]}
               disabled={!tipoSeleccionado}
               onPress={() => abrirScanner('bodega')}
             >
               <Ionicons name="scan-outline" size={18} color="#fff" />
               <Text style={styles.scanBtnText}>Escanear codigo</Text>
             </Pressable>
-            <TextInput
-              style={styles.input}
-              value={bodegaSerie}
-              onChangeText={setBodegaSerie}
-              placeholder="N serie (si lo dejas vacio usa el codigo)"
-              placeholderTextColor="#94a3b8"
-              autoCapitalize="characters"
-            />
-            <TextInput
-              style={[styles.input, styles.textArea]}
-              value={bodegaObs}
-              onChangeText={setBodegaObs}
-              placeholder="Observacion opcional"
-              placeholderTextColor="#94a3b8"
-              multiline
-            />
+            <Pressable
+              style={[styles.primaryBtn, styles.primaryBtnSuccess, styles.bodegaSubmitBtn, (bodegaSaving || !tipoSeleccionado || !bodegaCodigo.trim()) && styles.btnDisabled]}
+              disabled={bodegaSaving || !tipoSeleccionado || !bodegaCodigo.trim()}
+              onPress={agregarEquipoBodega}
+            >
+              <Ionicons name="add-circle-outline" size={18} color="#fff" />
+              <Text style={styles.primaryBtnText}>{bodegaSaving ? 'Guardando...' : 'Agregar a bodega'}</Text>
+            </Pressable>
           </View>
         ) : (
         <>
-        <View style={styles.card}>
-          <View style={styles.sectionHeader}>
-            <View>
-              <Text style={styles.kicker}>NUEVO INFORME</Text>
-              <Text style={styles.sectionTitle}>Crear informe</Text>
-            </View>
-            <Pressable style={[styles.primaryBtn, saving && styles.btnDisabled]} disabled={saving} onPress={crearToma}>
-              <Ionicons name="add" size={18} color="#fff" />
-              <Text style={styles.primaryBtnText}>{saving ? 'Creando...' : 'Crear'}</Text>
-            </Pressable>
-          </View>
-          <TextInput
-            style={styles.input}
-            value={nombreToma}
-            onChangeText={setNombreToma}
-            placeholder="Nombre del informe"
-            placeholderTextColor="#94a3b8"
-          />
-          <TextInput
-            style={styles.input}
-            value={ubicacion}
-            onChangeText={setUbicacion}
-            placeholder="Ubicacion"
-            placeholderTextColor="#94a3b8"
-          />
-          <TextInput
-            style={[styles.input, styles.textArea]}
-            value={observacion}
-            onChangeText={setObservacion}
-            placeholder="Observacion opcional"
-            placeholderTextColor="#94a3b8"
-            multiline
-          />
-        </View>
+	        <View style={styles.createInformeCard}>
+	          <View style={styles.createInformeIcon}>
+	            <Ionicons name="clipboard-outline" size={24} color="#ffffff" />
+	          </View>
+	          <View style={styles.createInformeContent}>
+	            <Text style={styles.kicker}>NUEVO INFORME</Text>
+	            <Text style={styles.sectionTitle}>Crear informe</Text>
+	            <Text style={styles.createInformeText}>Registra una nueva toma fisica para escanear equipos por categoria.</Text>
+	          </View>
+	          <Pressable style={styles.createInformeBtn} onPress={() => setCrearInformeModalVisible(true)}>
+	            <Ionicons name="add-circle-outline" size={18} color="#fff" />
+	            <Text style={styles.primaryBtnText}>Crear</Text>
+	          </Pressable>
+	        </View>
 
         {!!tomas.length && (
           <View style={styles.card}>
@@ -640,8 +673,8 @@ export default function InventarioBodegaScreen() {
                 <Kpi label="No corresponde" value={resumen.no_corresponden || 0} color="#b91c1c" />
               </View>
 
-              <View style={styles.typeBox}>
-                <View style={styles.sectionHeader}>
+	              <View style={styles.typeBox}>
+	                <View style={styles.sectionHeader}>
                   <View style={{ flex: 1 }}>
                     <Text style={styles.kicker}>CATEGORIA Y EQUIPO</Text>
                     <Text style={styles.scanTitle}>Selecciona categoria, luego equipo</Text>
@@ -651,47 +684,69 @@ export default function InventarioBodegaScreen() {
                       <Text style={styles.typeCounterNumber}>{totalTipoSeleccionado}</Text>
                       <Text style={styles.typeCounterLabel}>esperados</Text>
                     </View>
-                  ) : null}
-                </View>
-                {categoriasInventario.length ? (
+	                  ) : null}
+	                </View>
+	                <Text style={styles.selectorLabel}>Selecciona categoria</Text>
+	                {categoriasInventario.length ? (
                   <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.categoryList}>
                     {categoriasInventario.map((categoria) => {
                       const selected = categoria === categoriaSeleccionada;
                       return (
                         <Pressable
-                          key={categoria}
-                          style={[styles.categoryPill, selected && styles.categoryPillActive]}
-                          onPress={() => {
-                            setCategoriaSeleccionada(categoria);
-                            setTipoSeleccionado('');
-                          }}
-                        >
+	                          key={categoria}
+	                          style={[styles.categoryPill, selected && styles.categoryPillActive]}
+	                          onPress={() => {
+	                            setCategoriaSeleccionada(categoria);
+	                            setTipoSeleccionado('');
+	                            setBusquedaEquipo('');
+	                          }}
+	                        >
                           <Text style={[styles.categoryPillText, selected && styles.categoryPillTextActive]}>
                             {categoria}
                           </Text>
                         </Pressable>
                       );
                     })}
-                  </ScrollView>
-                ) : null}
-                {tiposCategoria.length ? (
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.typeList}>
-                    {tiposCategoria.map((tipo) => {
-                      const nombre = String(tipo.equipo_nombre || '').trim();
-                      const selected = nombre.toLowerCase() === tipoSeleccionado.trim().toLowerCase();
-                      return (
-                        <Pressable
-                          key={nombre}
-                          style={[styles.typePill, selected && styles.typePillActive]}
-                          onPress={() => setTipoSeleccionado(selected ? '' : nombre)}
-                        >
+		                  </ScrollView>
+		                ) : null}
+		                <Text style={styles.selectorLabel}>Busca o selecciona equipo</Text>
+		                <View style={styles.searchBox}>
+	                  <Ionicons name="search-outline" size={17} color="#64748b" />
+	                  <TextInput
+	                    style={styles.searchInput}
+	                    value={busquedaEquipo}
+	                    onChangeText={setBusquedaEquipo}
+	                    placeholder="Buscar equipo, ejemplo: router"
+	                    placeholderTextColor="#94a3b8"
+	                  />
+	                  {!!busquedaEquipo.trim() && (
+	                    <Pressable onPress={() => setBusquedaEquipo('')}>
+	                      <Ionicons name="close-circle" size={18} color="#94a3b8" />
+	                    </Pressable>
+	                  )}
+	                </View>
+	                {tiposVisibles.length ? (
+	                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.typeList}>
+	                    {tiposVisibles.map((tipo) => {
+	                      const nombre = String(tipo.equipo_nombre || '').trim();
+	                      const categoria = String(tipo.categoria || 'Sin categoria').trim() || 'Sin categoria';
+	                      const selected = nombre.toLowerCase() === tipoSeleccionado.trim().toLowerCase();
+	                      return (
+	                        <Pressable
+	                          key={`${categoria}-${nombre}`}
+	                          style={[styles.typePill, selected && styles.typePillActive]}
+	                          onPress={() => {
+	                            setCategoriaSeleccionada(categoria);
+	                            setTipoSeleccionado(selected ? '' : nombre);
+	                          }}
+	                        >
                           <Text style={[styles.typePillTitle, selected && styles.typePillTitleActive]} numberOfLines={1}>
                             {nombre}
-                          </Text>
-                          <Text style={[styles.typePillMeta, selected && styles.typePillMetaActive]}>
-                            {Number(tipo.total_esperado || 0)} en bodega
-                          </Text>
-                        </Pressable>
+	                          </Text>
+	                          <Text style={[styles.typePillMeta, selected && styles.typePillMetaActive]}>
+	                            {busquedaEquipo.trim() ? categoria : `${Number(tipo.total_esperado || 0)} en bodega`}
+	                          </Text>
+	                        </Pressable>
                       );
                     })}
                   </ScrollView>
@@ -813,10 +868,74 @@ export default function InventarioBodegaScreen() {
         )}
         </>
         )}
-      </ScrollView>
+	      </ScrollView>
 
-      <Modal visible={scannerVisible} animationType="fade" transparent>
-        <View style={styles.camOverlay}>
+	      <Modal visible={crearInformeModalVisible} animationType="fade" transparent>
+	        <View style={styles.formModalOverlay}>
+	          <View style={styles.formModalCard}>
+	            <View style={styles.formModalHeader}>
+	              <View style={styles.formModalTitleWrap}>
+	                <View style={styles.formModalIcon}>
+	                  <Ionicons name="clipboard-outline" size={22} color="#ffffff" />
+	                </View>
+	                <View style={{ flex: 1 }}>
+	                  <Text style={styles.kicker}>NUEVO INFORME</Text>
+	                  <Text style={styles.formModalTitle}>Crear informe</Text>
+	                  <Text style={styles.formModalSubtitle}>Define los datos base antes de iniciar el escaneo.</Text>
+	                </View>
+	              </View>
+	              <Pressable onPress={() => setCrearInformeModalVisible(false)} disabled={saving}>
+	                <Ionicons name="close-circle" size={27} color="#64748b" />
+	              </Pressable>
+	            </View>
+	            <Text style={styles.formFieldLabel}>Nombre del informe</Text>
+	            <TextInput
+	              style={styles.input}
+	              value={nombreToma}
+	              onChangeText={setNombreToma}
+	              placeholder="Nombre del informe"
+	              placeholderTextColor="#94a3b8"
+	            />
+	            <Text style={styles.formFieldLabel}>Ubicacion</Text>
+	            <TextInput
+	              style={styles.input}
+	              value={ubicacion}
+	              onChangeText={setUbicacion}
+	              placeholder="Ubicacion"
+	              placeholderTextColor="#94a3b8"
+	            />
+	            <Text style={styles.formFieldLabel}>Observacion</Text>
+	            <TextInput
+	              style={[styles.input, styles.textArea]}
+	              value={observacion}
+	              onChangeText={setObservacion}
+	              placeholder="Observacion opcional"
+	              placeholderTextColor="#94a3b8"
+	              multiline
+	            />
+	            <View style={styles.formModalActions}>
+	              <Pressable
+	                style={[styles.secondaryBtn, saving && styles.btnDisabled]}
+	                disabled={saving}
+	                onPress={() => setCrearInformeModalVisible(false)}
+	              >
+	                <Text style={styles.secondaryBtnText}>Cancelar</Text>
+	              </Pressable>
+	              <Pressable
+	                style={[styles.primaryBtn, styles.formModalSubmit, saving && styles.btnDisabled]}
+	                disabled={saving}
+	                onPress={crearToma}
+	              >
+	                <Ionicons name="checkmark-circle-outline" size={18} color="#fff" />
+	                <Text style={styles.primaryBtnText}>{saving ? 'Creando...' : 'Crear informe'}</Text>
+	              </Pressable>
+	            </View>
+	          </View>
+	        </View>
+	      </Modal>
+
+	      <Modal visible={scannerVisible} animationType="fade" transparent>
+	        <View style={styles.camOverlay}>
           <View style={styles.camBox}>
             {permission?.status !== 'granted' ? (
               <View style={styles.cameraFallback}>
@@ -973,6 +1092,49 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 8 },
     elevation: 2,
   },
+  createInformeCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    borderRadius: 24,
+    padding: 14,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#c7ddff',
+    shadowColor: '#0f172a',
+    shadowOpacity: 0.08,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 9 },
+    elevation: 3,
+  },
+  createInformeIcon: {
+    width: 50,
+    height: 50,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#0b3b8c',
+  },
+  createInformeContent: {
+    flex: 1,
+  },
+  createInformeText: {
+    color: '#64748b',
+    fontSize: 12,
+    fontWeight: '800',
+    lineHeight: 17,
+    marginTop: 4,
+  },
+  createInformeBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    borderRadius: 16,
+    paddingHorizontal: 13,
+    paddingVertical: 11,
+    backgroundColor: '#0b3b8c',
+  },
   modeSwitch: {
     flexDirection: 'row',
     gap: 10,
@@ -994,6 +1156,9 @@ const styles = StyleSheet.create({
   },
   modeBtnActive: {
     backgroundColor: '#0b3b8c',
+  },
+  modeBtnBodegaActive: {
+    backgroundColor: '#16a34a',
   },
   modeBtnText: {
     color: '#334155',
@@ -1046,6 +1211,15 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     marginBottom: 10,
   },
+  bodegaFieldsRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginBottom: 10,
+  },
+  bodegaFieldInput: {
+    flex: 1,
+    marginBottom: 0,
+  },
   textArea: {
     minHeight: 78,
     textAlignVertical: 'top',
@@ -1058,6 +1232,30 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 10,
     backgroundColor: '#0b3b8c',
+  },
+  primaryBtnSuccess: {
+    backgroundColor: '#16a34a',
+  },
+  bodegaSubmitBtn: {
+    justifyContent: 'center',
+    marginTop: 2,
+    minHeight: 48,
+  },
+  secondaryBtn: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    backgroundColor: '#f1f5f9',
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+  },
+  secondaryBtnText: {
+    color: '#334155',
+    fontSize: 13,
+    fontWeight: '900',
   },
   primaryBtnText: {
     color: '#ffffff',
@@ -1203,6 +1401,14 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#dbeafe',
   },
+  selectorLabel: {
+    color: '#0f172a',
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 0.45,
+    marginBottom: 8,
+    textTransform: 'uppercase',
+  },
   categoryList: {
     gap: 8,
     paddingRight: 6,
@@ -1227,6 +1433,25 @@ const styles = StyleSheet.create({
   },
   categoryPillTextActive: {
     color: '#ffffff',
+  },
+  searchBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+    backgroundColor: '#f8fafc',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    marginBottom: 12,
+  },
+  searchInput: {
+    flex: 1,
+    color: '#0f172a',
+    fontSize: 14,
+    fontWeight: '800',
+    paddingVertical: 4,
   },
   typeList: {
     gap: 10,
@@ -1330,6 +1555,9 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     paddingVertical: 12,
     backgroundColor: '#0b3b8c',
+  },
+  scanBtnSuccess: {
+    backgroundColor: '#16a34a',
   },
   scanBtnText: {
     color: '#ffffff',
@@ -1482,6 +1710,75 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '800',
     marginTop: 4,
+  },
+  formModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(2,6,23,0.58)',
+    justifyContent: 'center',
+    padding: 18,
+  },
+  formModalCard: {
+    borderRadius: 28,
+    padding: 18,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    shadowColor: '#0f172a',
+    shadowOpacity: 0.22,
+    shadowRadius: 22,
+    shadowOffset: { width: 0, height: 14 },
+    elevation: 8,
+  },
+  formModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginBottom: 16,
+  },
+  formModalTitleWrap: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  formModalIcon: {
+    width: 46,
+    height: 46,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#0b3b8c',
+  },
+  formModalTitle: {
+    color: '#0f172a',
+    fontSize: 20,
+    fontWeight: '900',
+    marginTop: 2,
+  },
+  formModalSubtitle: {
+    color: '#64748b',
+    fontSize: 12,
+    fontWeight: '800',
+    lineHeight: 17,
+    marginTop: 3,
+  },
+  formFieldLabel: {
+    color: '#334155',
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 0.35,
+    marginBottom: 6,
+    textTransform: 'uppercase',
+  },
+  formModalActions: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 4,
+  },
+  formModalSubmit: {
+    flex: 1.2,
+    justifyContent: 'center',
   },
   camOverlay: {
     flex: 1,
