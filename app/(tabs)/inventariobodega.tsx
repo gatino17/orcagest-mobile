@@ -54,6 +54,33 @@ const CATALOGO_INVENTARIO_FALLBACK: EquipoTipo[] = [
   ...['Tablero Camara (500x700x250)', 'Poe Power 1', 'Poe Power 2', 'Poe Power 3', 'Poe Power 4', 'Poe Power 5', 'Switch POE 1', 'Switch POE 2', 'Mass', 'Tablero 750x500x250', 'Switch 1', 'Switch 2', 'Switch 3', 'Switch 4', 'Netio'].map((equipo_nombre) => ({ categoria: 'Tablero Camara', equipo_nombre, total_esperado: 0 })),
 ];
 
+const normalizarNombreEquipo = (valor?: string) =>
+  String(valor || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase();
+
+const EQUIPOS_POR_CANTIDAD_INVENTARIO = new Set(
+  [
+    'Mouse',
+    'Teclado',
+    'Parlantes',
+    'Sensor Magnetico',
+    'Sensor magnetico respaldo',
+    'Sensor magnetico cargador',
+    'Baliza Interior',
+    'Bocina Interior',
+    'Baliza Exterior',
+    'Bocina Exterior',
+    'Foco led 150W',
+    'Foco led 50W',
+  ].map(normalizarNombreEquipo)
+);
+
+const esEquipoPorCantidadInventario = (nombre?: string) =>
+  EQUIPOS_POR_CANTIDAD_INVENTARIO.has(normalizarNombreEquipo(nombre));
+
 type TomaInventario = {
   id_toma: number;
   nombre?: string;
@@ -116,28 +143,31 @@ export default function InventarioBodegaScreen() {
   const scanLockRef = useRef(false);
   const tomaActivaIdRef = useRef<number>(0);
 
-  const resumen = tomaActiva?.resumen || {};
   const resumenInformeDetalle = informeDetalle?.resumen || {};
   const escaneosInformeDetalle = Array.isArray(informeDetalle?.escaneos) ? informeDetalle.escaneos : [];
   const faltantesInformeDetalle = Array.isArray(resumenInformeDetalle.faltantes_detalle) ? resumenInformeDetalle.faltantes_detalle : [];
   const tomaAbierta = String(tomaActiva?.estado || '').toLowerCase() !== 'cerrado';
   const abiertas = useMemo(() => tomas.filter((item) => String(item.estado || '').toLowerCase() !== 'cerrado').length, [tomas]);
   const cerradas = Math.max(tomas.length - abiertas, 0);
+  const tiposEscaneables = useMemo(
+    () => tiposEquipo.filter((tipo) => !esEquipoPorCantidadInventario(tipo.equipo_nombre)),
+    [tiposEquipo]
+  );
   const totalTipoSeleccionado = useMemo(() => {
-    const item = tiposEquipo.find((tipo) => String(tipo.equipo_nombre || '').trim().toLowerCase() === tipoSeleccionado.trim().toLowerCase());
+    const item = tiposEscaneables.find((tipo) => normalizarNombreEquipo(tipo.equipo_nombre) === normalizarNombreEquipo(tipoSeleccionado));
     return Number(item?.total_esperado || 0);
-  }, [tipoSeleccionado, tiposEquipo]);
+  }, [tipoSeleccionado, tiposEscaneables]);
   const categoriasInventario = useMemo(() => {
     const out: string[] = [];
-    tiposEquipo.forEach((tipo) => {
+    tiposEscaneables.forEach((tipo) => {
       const categoria = String(tipo.categoria || 'Sin categoria').trim() || 'Sin categoria';
       if (!out.includes(categoria)) out.push(categoria);
     });
     return out;
-  }, [tiposEquipo]);
+  }, [tiposEscaneables]);
   const tiposCategoria = useMemo(
-    () => tiposEquipo.filter((tipo) => String(tipo.categoria || 'Sin categoria').trim() === categoriaSeleccionada),
-    [categoriaSeleccionada, tiposEquipo]
+    () => tiposEscaneables.filter((tipo) => String(tipo.categoria || 'Sin categoria').trim() === categoriaSeleccionada),
+    [categoriaSeleccionada, tiposEscaneables]
   );
   const normalizarBusqueda = useCallback(
     (valor: string) => String(valor || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase(),
@@ -146,12 +176,19 @@ export default function InventarioBodegaScreen() {
   const tiposVisibles = useMemo(() => {
     const term = normalizarBusqueda(busquedaEquipo);
     if (!term) return tiposCategoria;
-    return tiposEquipo.filter((tipo) => {
+    return tiposEscaneables.filter((tipo) => {
       const nombre = normalizarBusqueda(tipo.equipo_nombre);
       const categoria = normalizarBusqueda(tipo.categoria);
       return nombre.includes(term) || categoria.includes(term);
     });
-  }, [busquedaEquipo, normalizarBusqueda, tiposCategoria, tiposEquipo]);
+  }, [busquedaEquipo, normalizarBusqueda, tiposCategoria, tiposEscaneables]);
+  useEffect(() => {
+    if (!tipoSeleccionado) return;
+    const sigueDisponible = tiposEscaneables.some(
+      (tipo) => normalizarNombreEquipo(tipo.equipo_nombre) === normalizarNombreEquipo(tipoSeleccionado)
+    );
+    if (!sigueDisponible) setTipoSeleccionado('');
+  }, [tipoSeleccionado, tiposEscaneables]);
   const separarCodigoSerieEscaneado = useCallback((valor: string) => {
     const serie = String(valor || '').trim();
     const numeros = serie.replace(/\D/g, '');
@@ -173,20 +210,6 @@ export default function InventarioBodegaScreen() {
     () => (tipoSeleccionado ? { tipo_equipo: tipoSeleccionado } : undefined),
     [tipoSeleccionado]
   );
-
-  const seleccionarToma = useCallback(async (idToma: number) => {
-    if (!idToma) return;
-    setLoading(true);
-    try {
-      const detalle = await fetchInventarioBodegaToma(idToma, detalleParams());
-      tomaActivaIdRef.current = Number(detalle?.id_toma || idToma || 0);
-      setTomaActiva(detalle);
-    } catch (error: any) {
-      Alert.alert('Inventario bodega', error?.response?.data?.error || 'No se pudo cargar el detalle.');
-    } finally {
-      setLoading(false);
-    }
-  }, [detalleParams]);
 
   const verInformeHistorial = useCallback(async (idToma: number) => {
     if (!idToma) return;
@@ -639,41 +662,41 @@ export default function InventarioBodegaScreen() {
             </View>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tomaList}>
               {tomas.map((item) => {
-                const selected = Number(item.id_toma) === Number(tomaActiva?.id_toma || 0);
                 const abierta = String(item.estado || '').toLowerCase() !== 'cerrado';
 	                return (
 	                  <View
 	                    key={item.id_toma}
-	                    style={[styles.tomaPill, selected && styles.tomaPillActive]}
+	                    style={[styles.tomaPill, abierta ? styles.tomaPillOpen : styles.tomaPillClosed]}
 	                  >
 	                    <View style={styles.tomaPillTop}>
-	                      <Pressable style={styles.tomaPillMain} onPress={() => seleccionarToma(item.id_toma)}>
-	                        <Text style={[styles.tomaPillTitle, selected && styles.tomaPillTitleActive]} numberOfLines={1}>
+	                      <View style={styles.tomaPillMain}>
+	                        <Text style={styles.tomaPillTitle} numberOfLines={2}>
 	                          {item.nombre || `Informe ${item.id_toma}`}
 	                        </Text>
 	                        <View style={styles.tomaPillMetaRow}>
-	                          <Text style={[styles.tomaPillMeta, selected && styles.tomaPillMetaActive]}>
+	                          <Text style={styles.tomaPillMeta}>
 	                            {formatFecha(item.fecha_inicio)} - 
 	                          </Text>
 	                          <Text style={[styles.tomaPillStatus, abierta ? styles.tomaPillStatusOpen : styles.tomaPillStatusClosed]}>
 	                            {abierta ? 'Abierto' : 'Finalizado'}
 	                          </Text>
 	                        </View>
-	                      </Pressable>
+	                      </View>
 	                      <View style={styles.tomaPillActions}>
 	                        <Pressable
-	                          style={[styles.tomaViewBtn, selected && styles.tomaViewBtnActive]}
+	                          style={styles.tomaViewBtn}
 	                          onPress={() => verInformeHistorial(item.id_toma)}
 	                        >
-	                          <Ionicons name="eye-outline" size={16} color={selected ? '#ffffff' : '#0b3b8c'} />
+	                          <Ionicons name="eye-outline" size={15} color="#0b3b8c" />
+	                          <Text style={styles.tomaViewBtnText}>Ver</Text>
 	                        </Pressable>
 	                        {abierta ? (
 	                          <Pressable
-	                            style={[styles.tomaScanBtn, selected && styles.tomaScanBtnActive]}
+	                            style={styles.tomaScanBtn}
 	                            onPress={() => abrirModalEscaneoInforme(item.id_toma)}
 	                          >
-	                            <Ionicons name="scan-outline" size={14} color={selected ? '#ffffff' : '#166534'} />
-	                            <Text style={[styles.tomaScanBtnText, selected && styles.tomaScanBtnTextActive]}>Escanear</Text>
+	                            <Ionicons name="scan-outline" size={15} color="#92400e" />
+	                            <Text style={styles.tomaScanBtnText}>Escanear</Text>
 	                          </Pressable>
 	                        ) : null}
 	                      </View>
@@ -690,54 +713,13 @@ export default function InventarioBodegaScreen() {
             <ActivityIndicator color="#0b3b8c" />
             <Text style={styles.loadingText}>Cargando inventario...</Text>
           </View>
-        ) : tomaActiva ? (
-          <>
-            <View style={styles.activeCard}>
-              <View style={styles.activeHeader}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.kicker}>INFORME ACTUAL</Text>
-                  <Text style={styles.activeTitle}>{tomaActiva.nombre || `Informe ${tomaActiva.id_toma}`}</Text>
-                  <Text style={styles.activeMeta}>{tomaActiva.ubicacion || 'Bodega central'} - {formatFecha(tomaActiva.fecha_inicio)}</Text>
-                </View>
-                <View style={[styles.stateBadge, tomaAbierta ? styles.stateOpen : styles.stateClosed]}>
-                  <Text style={[styles.stateText, tomaAbierta ? styles.stateOpenText : styles.stateClosedText]}>
-                    {estadoTexto(tomaActiva.estado)}
-                  </Text>
-                </View>
-              </View>
-
-              <View style={styles.progressWrap}>
-                <View style={styles.progressBar}>
-                  <View style={[styles.progressFill, { width: `${Math.min(Number(resumen.cumplimiento || 0), 100)}%` }]} />
-                </View>
-                <Text style={styles.progressText}>{Number(resumen.cumplimiento || 0).toFixed(1)}% cumplimiento</Text>
-              </View>
-
-              <View style={styles.kpiGrid}>
-                <Kpi label="Esperados" value={resumen.total_esperado || 0} color="#0b3b8c" />
-                <Kpi label="Encontrados" value={resumen.encontrados || 0} color="#16a34a" />
-                <Kpi label="Faltantes" value={resumen.faltantes || 0} color="#dc2626" />
-                <Kpi label="No esperados" value={resumen.no_esperados || 0} color="#f59e0b" />
-                <Kpi label="No corresponde" value={resumen.no_corresponden || 0} color="#b91c1c" />
-              </View>
-
-              <View style={styles.reportActionHint}>
-                <Ionicons name={tomaAbierta ? 'scan-outline' : 'lock-closed-outline'} size={18} color={tomaAbierta ? '#166534' : '#64748b'} />
-                <Text style={styles.reportActionText}>
-                  {tomaAbierta
-                    ? 'Usa Escanear en el historial para registrar equipos.'
-                    : 'Informe finalizado. Usa el ojo del historial para revisar el detalle.'}
-                </Text>
-              </View>
-            </View>
-          </>
-        ) : (
+        ) : !tomas.length ? (
           <View style={styles.emptyState}>
             <Ionicons name="cube-outline" size={32} color="#64748b" />
             <Text style={styles.emptyTitle}>Sin informes registrados</Text>
             <Text style={styles.emptyText}>Crea un informe para comenzar el inventario de bodega.</Text>
           </View>
-        )}
+        ) : null}
         </>
         )}
 	      </ScrollView>
@@ -1395,74 +1377,72 @@ const styles = StyleSheet.create({
     paddingRight: 6,
   },
   tomaPill: {
-    width: 235,
-    borderRadius: 18,
-    padding: 13,
+    width: 260,
+    borderRadius: 20,
+    padding: 14,
     backgroundColor: '#f8fafc',
     borderWidth: 1,
     borderColor: '#dbeafe',
   },
+  tomaPillOpen: {
+    backgroundColor: '#fff7d6',
+    borderColor: '#facc15',
+  },
+  tomaPillClosed: {
+    backgroundColor: '#f8fafc',
+    borderColor: '#dbeafe',
+  },
   tomaPillTop: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 8,
+    gap: 12,
   },
   tomaPillMain: {
-    flex: 1,
-  },
-  tomaPillActive: {
-    backgroundColor: '#0b3b8c',
-    borderColor: '#0b3b8c',
+    minHeight: 56,
   },
   tomaViewBtn: {
-    width: 30,
-    height: 30,
-    borderRadius: 12,
+    flex: 1,
+    minHeight: 34,
+    borderRadius: 13,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    gap: 5,
     backgroundColor: '#eaf2ff',
     borderWidth: 1,
     borderColor: '#bfdbfe',
   },
-  tomaViewBtnActive: {
-    backgroundColor: 'rgba(255,255,255,0.16)',
-    borderColor: 'rgba(255,255,255,0.28)',
-  },
-  tomaPillActions: {
-    alignItems: 'flex-end',
-    gap: 8,
-  },
-  tomaScanBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    borderRadius: 999,
-    paddingHorizontal: 9,
-    paddingVertical: 6,
-    backgroundColor: '#dcfce7',
-    borderWidth: 1,
-    borderColor: '#bbf7d0',
-  },
-  tomaScanBtnActive: {
-    backgroundColor: 'rgba(255,255,255,0.18)',
-    borderColor: 'rgba(255,255,255,0.35)',
-  },
-  tomaScanBtnText: {
-    color: '#166534',
+  tomaViewBtnText: {
+    color: '#0b3b8c',
     fontSize: 11,
     fontWeight: '900',
   },
-  tomaScanBtnTextActive: {
-    color: '#ffffff',
+  tomaPillActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
-  tomaPillTitle: {
-    flex: 1,
-    color: '#0f172a',
-    fontSize: 14,
+  tomaScanBtn: {
+    flex: 1.35,
+    minHeight: 34,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+    borderRadius: 13,
+    paddingHorizontal: 10,
+    borderWidth: 1,
+    backgroundColor: '#fef3c7',
+    borderColor: '#fbbf24',
+  },
+  tomaScanBtnText: {
+    color: '#92400e',
+    fontSize: 11,
     fontWeight: '900',
   },
-  tomaPillTitleActive: {
-    color: '#ffffff',
+  tomaPillTitle: {
+    color: '#0f172a',
+    fontSize: 15,
+    lineHeight: 19,
+    fontWeight: '900',
   },
   tomaPillMeta: {
     color: '#64748b',
@@ -1475,15 +1455,12 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     marginTop: 4,
   },
-  tomaPillMetaActive: {
-    color: '#bfdbfe',
-  },
   tomaPillStatus: {
     fontSize: 12,
     fontWeight: '900',
   },
   tomaPillStatusOpen: {
-    color: '#16a34a',
+    color: '#15803d',
   },
   tomaPillStatusClosed: {
     color: '#64748b',
