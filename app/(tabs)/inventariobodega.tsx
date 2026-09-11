@@ -1,4 +1,4 @@
-import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -13,7 +13,6 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
-import { useRouter } from 'expo-router';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Ionicons } from '@expo/vector-icons';
 
@@ -23,11 +22,11 @@ import {
   createInventarioBodegaEscaneo,
   createInventarioBodegaToma,
   deleteInventarioBodegaEscaneo,
+  fetchInventarioBodegaEquipos,
   fetchInventarioBodegaToma,
   fetchInventarioBodegaTomas,
   fetchInventarioBodegaTipos,
 } from '@/lib/api';
-import { AuthContext } from '../_layout';
 
 type ResumenToma = {
   total_esperado?: number;
@@ -96,8 +95,6 @@ const formatHora = (value?: string | null) => {
 };
 
 export default function InventarioBodegaScreen() {
-  const router = useRouter();
-  const { setToken } = useContext(AuthContext);
   const [permission, requestPermission] = useCameraPermissions();
   const [tomas, setTomas] = useState<TomaInventario[]>([]);
   const [tiposEquipo, setTiposEquipo] = useState<EquipoTipo[]>([]);
@@ -109,6 +106,9 @@ export default function InventarioBodegaScreen() {
   const [saving, setSaving] = useState(false);
   const [scannerVisible, setScannerVisible] = useState(false);
   const [crearInformeModalVisible, setCrearInformeModalVisible] = useState(false);
+  const [verInformeModalVisible, setVerInformeModalVisible] = useState(false);
+  const [informeDetalle, setInformeDetalle] = useState<TomaInventario | null>(null);
+  const [informeDetalleLoading, setInformeDetalleLoading] = useState(false);
   const [scannerTarget, setScannerTarget] = useState<'informe' | 'bodega'>('informe');
   const [valorManual, setValorManual] = useState('');
   const [nombreToma, setNombreToma] = useState('');
@@ -126,6 +126,9 @@ export default function InventarioBodegaScreen() {
   const resumen = tomaActiva?.resumen || {};
   const escaneos = Array.isArray(tomaActiva?.escaneos) ? tomaActiva.escaneos : [];
   const faltantes = Array.isArray(resumen.faltantes_detalle) ? resumen.faltantes_detalle : [];
+  const resumenInformeDetalle = informeDetalle?.resumen || {};
+  const escaneosInformeDetalle = Array.isArray(informeDetalle?.escaneos) ? informeDetalle.escaneos : [];
+  const faltantesInformeDetalle = Array.isArray(resumenInformeDetalle.faltantes_detalle) ? resumenInformeDetalle.faltantes_detalle : [];
   const tomaAbierta = String(tomaActiva?.estado || '').toLowerCase() !== 'cerrado';
   const abiertas = useMemo(() => tomas.filter((item) => String(item.estado || '').toLowerCase() !== 'cerrado').length, [tomas]);
   const cerradas = Math.max(tomas.length - abiertas, 0);
@@ -164,6 +167,16 @@ export default function InventarioBodegaScreen() {
     const codigo = (numeros.slice(0, 5) || serie.slice(0, 5)).trim();
     return { codigo, serie };
   }, []);
+  const mostrarEquipoExistente = useCallback((existente: any, serieFallback = '') => {
+    const ubicacionExistente = existente?.ubicacion || 'Bodega';
+    const equipoExistente = existente?.equipo_nombre || 'Equipo';
+    const serieExistente = existente?.numero_serie || serieFallback || '-';
+    const estadoExistente = existente?.estado_equipo || '-';
+    Alert.alert(
+      'Equipo ya registrado',
+      `Ya existe en ${ubicacionExistente}.\n\nEquipo: ${equipoExistente}\nN serie: ${serieExistente}\nEstado: ${estadoExistente}`
+    );
+  }, []);
 
   const detalleParams = useCallback(
     () => (tipoSeleccionado ? { tipo_equipo: tipoSeleccionado } : undefined),
@@ -183,6 +196,22 @@ export default function InventarioBodegaScreen() {
       setLoading(false);
     }
   }, [detalleParams]);
+
+  const verInformeHistorial = useCallback(async (idToma: number) => {
+    if (!idToma) return;
+    setVerInformeModalVisible(true);
+    setInformeDetalleLoading(true);
+    setInformeDetalle(null);
+    try {
+      const detalle = await fetchInventarioBodegaToma(idToma);
+      setInformeDetalle(detalle || null);
+    } catch (error: any) {
+      Alert.alert('Inventario bodega', error?.response?.data?.error || 'No se pudo cargar el informe.');
+      setVerInformeModalVisible(false);
+    } finally {
+      setInformeDetalleLoading(false);
+    }
+  }, []);
 
   const cargarTomas = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
@@ -324,7 +353,7 @@ export default function InventarioBodegaScreen() {
     setScannerVisible(true);
   }, [permission?.status, requestPermission, tipoSeleccionado, tomaAbierta]);
 
-	  const handleBarcodeScanned = useCallback((event: any) => {
+	  const handleBarcodeScanned = useCallback(async (event: any) => {
 	    if (scanLockRef.current) return;
 	    scanLockRef.current = true;
 	    setScannerVisible(false);
@@ -332,11 +361,20 @@ export default function InventarioBodegaScreen() {
 	      const { codigo, serie } = separarCodigoSerieEscaneado(event?.data || '');
 	      setBodegaCodigo(codigo);
 	      setBodegaSerie(serie);
+	      try {
+	        const rows = await fetchInventarioBodegaEquipos({ q: serie || codigo });
+	        const existente = Array.isArray(rows)
+	          ? rows.find((item) => normalizarBusqueda(item?.numero_serie) === normalizarBusqueda(serie || codigo))
+	          : null;
+	        if (existente) mostrarEquipoExistente(existente, serie || codigo);
+	      } catch {
+	        // Si la consulta preventiva falla, el guardado mantiene la validacion final del backend.
+	      }
 	      scanLockRef.current = false;
 	      return;
 	    }
 	    registrarValor(event?.data || '');
-	  }, [registrarValor, scannerTarget, separarCodigoSerieEscaneado]);
+	  }, [mostrarEquipoExistente, normalizarBusqueda, registrarValor, scannerTarget, separarCodigoSerieEscaneado]);
 
   const cerrarToma = useCallback(() => {
     if (!tomaActiva?.id_toma || !tomaAbierta) return;
@@ -415,27 +453,14 @@ export default function InventarioBodegaScreen() {
 	    } catch (error: any) {
 	      const data = error?.response?.data || {};
 	      if (data?.duplicado && data?.existente) {
-	        const existente = data.existente;
-	        const ubicacionExistente = existente?.ubicacion || 'Bodega';
-	        const equipoExistente = existente?.equipo_nombre || 'Equipo';
-	        const serieExistente = existente?.numero_serie || bodegaSerie.trim() || codigo;
-	        const estadoExistente = existente?.estado_equipo || '-';
-	        Alert.alert(
-	          'Equipo ya registrado',
-	          `Ya existe en ${ubicacionExistente}.\n\nEquipo: ${equipoExistente}\nN serie: ${serieExistente}\nEstado: ${estadoExistente}`
-	        );
+	        mostrarEquipoExistente(data.existente, bodegaSerie.trim() || codigo);
 	      } else {
 	        Alert.alert('Inventario bodega', data?.error || 'No se pudo agregar el equipo a bodega.');
 	      }
 	    } finally {
 	      setBodegaSaving(false);
 	    }
-  }, [bodegaCodigo, bodegaObs, bodegaSaving, bodegaSerie, tipoSeleccionado]);
-
-  const cerrarSesion = useCallback(async () => {
-    await setToken(null);
-    router.replace('/login');
-  }, [router, setToken]);
+	  }, [bodegaCodigo, bodegaObs, bodegaSaving, bodegaSerie, mostrarEquipoExistente, tipoSeleccionado]);
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -461,10 +486,6 @@ export default function InventarioBodegaScreen() {
               <Text style={styles.heroStatLabel}>cerradas</Text>
             </View>
           </View>
-          <Pressable style={styles.logoutBtn} onPress={cerrarSesion}>
-            <Ionicons name="log-out-outline" size={17} color="#dbeafe" />
-            <Text style={styles.logoutText}>Cerrar sesion</Text>
-          </Pressable>
         </View>
 
         <View style={styles.modeSwitch}>
@@ -555,22 +576,34 @@ export default function InventarioBodegaScreen() {
 	              </ScrollView>
             </View>
             <View style={styles.bodegaFieldsRow}>
-              <TextInput
-                style={[styles.input, styles.bodegaFieldInput]}
-                value={bodegaCodigo}
-                onChangeText={setBodegaCodigo}
-                placeholder="Codigo"
-                placeholderTextColor="#94a3b8"
-                autoCapitalize="characters"
-              />
-              <TextInput
-                style={[styles.input, styles.bodegaFieldInput]}
-                value={bodegaSerie}
-                onChangeText={setBodegaSerie}
-                placeholder="N serie"
-                placeholderTextColor="#94a3b8"
-                autoCapitalize="characters"
-              />
+              <View style={styles.bodegaFieldCard}>
+                <View style={styles.bodegaFieldLabelRow}>
+                  <Ionicons name="pricetag-outline" size={14} color="#16a34a" />
+                  <Text style={styles.bodegaFieldLabel}>Codigo</Text>
+                </View>
+                <TextInput
+                  style={styles.bodegaInlineInput}
+                  value={bodegaCodigo}
+                  onChangeText={setBodegaCodigo}
+                  placeholder="5 digitos"
+                  placeholderTextColor="#94a3b8"
+                  autoCapitalize="characters"
+                />
+              </View>
+              <View style={styles.bodegaFieldCard}>
+                <View style={styles.bodegaFieldLabelRow}>
+                  <Ionicons name="barcode-outline" size={14} color="#0b3b8c" />
+                  <Text style={styles.bodegaFieldLabel}>N serie</Text>
+                </View>
+                <TextInput
+                  style={styles.bodegaInlineInput}
+                  value={bodegaSerie}
+                  onChangeText={setBodegaSerie}
+                  placeholder="Serie completa"
+                  placeholderTextColor="#94a3b8"
+                  autoCapitalize="characters"
+                />
+              </View>
             </View>
             <Pressable
               style={[styles.scanBtn, styles.scanBtnSuccess, !tipoSeleccionado && styles.btnDisabled, { marginBottom: 10 }]}
@@ -619,18 +652,27 @@ export default function InventarioBodegaScreen() {
                 const selected = Number(item.id_toma) === Number(tomaActiva?.id_toma || 0);
                 const abierta = String(item.estado || '').toLowerCase() !== 'cerrado';
                 return (
-                  <Pressable
-                    key={item.id_toma}
-                    style={[styles.tomaPill, selected && styles.tomaPillActive]}
-                    onPress={() => seleccionarToma(item.id_toma)}
-                  >
-                    <Text style={[styles.tomaPillTitle, selected && styles.tomaPillTitleActive]} numberOfLines={1}>
-                      {item.nombre || `Informe ${item.id_toma}`}
-                    </Text>
-                    <Text style={[styles.tomaPillMeta, selected && styles.tomaPillMetaActive]}>
-                      {formatFecha(item.fecha_inicio)} - {abierta ? 'Abierto' : 'Finalizado'}
-                    </Text>
-                  </Pressable>
+	                  <View
+	                    key={item.id_toma}
+	                    style={[styles.tomaPill, selected && styles.tomaPillActive]}
+	                  >
+	                    <View style={styles.tomaPillTop}>
+	                      <Pressable style={styles.tomaPillMain} onPress={() => seleccionarToma(item.id_toma)}>
+	                        <Text style={[styles.tomaPillTitle, selected && styles.tomaPillTitleActive]} numberOfLines={1}>
+	                          {item.nombre || `Informe ${item.id_toma}`}
+	                        </Text>
+	                        <Text style={[styles.tomaPillMeta, selected && styles.tomaPillMetaActive]}>
+	                          {formatFecha(item.fecha_inicio)} - {abierta ? 'Abierto' : 'Finalizado'}
+	                        </Text>
+	                      </Pressable>
+	                      <Pressable
+	                        style={[styles.tomaViewBtn, selected && styles.tomaViewBtnActive]}
+	                        onPress={() => verInformeHistorial(item.id_toma)}
+	                      >
+	                        <Ionicons name="eye-outline" size={16} color={selected ? '#ffffff' : '#0b3b8c'} />
+	                      </Pressable>
+	                    </View>
+	                  </View>
                 );
               })}
             </ScrollView>
@@ -934,6 +976,105 @@ export default function InventarioBodegaScreen() {
 	        </View>
 	      </Modal>
 
+	      <Modal visible={verInformeModalVisible} animationType="fade" transparent>
+	        <View style={styles.formModalOverlay}>
+	          <View style={styles.reportModalCard}>
+	            <View style={styles.formModalHeader}>
+	              <View style={styles.formModalTitleWrap}>
+	                <View style={styles.reportModalIcon}>
+	                  <Ionicons name="document-text-outline" size={22} color="#ffffff" />
+	                </View>
+	                <View style={{ flex: 1 }}>
+	                  <Text style={styles.kicker}>HISTORIAL</Text>
+	                  <Text style={styles.formModalTitle} numberOfLines={2}>
+	                    {informeDetalle?.nombre || 'Informe de inventario'}
+	                  </Text>
+	                  <Text style={styles.formModalSubtitle}>
+	                    {informeDetalle ? `${estadoTexto(informeDetalle.estado)} - ${formatFecha(informeDetalle.fecha_inicio)}` : 'Cargando informe...'}
+	                  </Text>
+	                </View>
+	              </View>
+	              <Pressable onPress={() => setVerInformeModalVisible(false)} disabled={informeDetalleLoading}>
+	                <Ionicons name="close-circle" size={27} color="#64748b" />
+	              </Pressable>
+	            </View>
+
+	            {informeDetalleLoading ? (
+	              <View style={styles.reportLoadingBox}>
+	                <ActivityIndicator color="#0b3b8c" />
+	                <Text style={styles.loadingText}>Cargando informe...</Text>
+	              </View>
+	            ) : informeDetalle ? (
+	              <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.reportModalContent}>
+	                <View style={styles.reportInfoGrid}>
+	                  <View style={styles.reportInfoItem}>
+	                    <Text style={styles.reportInfoLabel}>Ubicacion</Text>
+	                    <Text style={styles.reportInfoValue}>{informeDetalle.ubicacion || 'Bodega central'}</Text>
+	                  </View>
+	                  <View style={styles.reportInfoItem}>
+	                    <Text style={styles.reportInfoLabel}>Responsable</Text>
+	                    <Text style={styles.reportInfoValue}>{informeDetalle.responsable_nombre || '-'}</Text>
+	                  </View>
+	                  <View style={styles.reportInfoItem}>
+	                    <Text style={styles.reportInfoLabel}>Inicio</Text>
+	                    <Text style={styles.reportInfoValue}>{formatFecha(informeDetalle.fecha_inicio)}</Text>
+	                  </View>
+	                  <View style={styles.reportInfoItem}>
+	                    <Text style={styles.reportInfoLabel}>Cierre</Text>
+	                    <Text style={styles.reportInfoValue}>{formatFecha(informeDetalle.fecha_cierre)}</Text>
+	                  </View>
+	                </View>
+
+	                {!!informeDetalle.observacion && (
+	                  <View style={styles.reportNote}>
+	                    <Text style={styles.reportInfoLabel}>Observacion</Text>
+	                    <Text style={styles.reportNoteText}>{informeDetalle.observacion}</Text>
+	                  </View>
+	                )}
+
+	                <View style={styles.reportKpiGrid}>
+	                  <Kpi label="Esperados" value={resumenInformeDetalle.total_esperado || 0} color="#0b3b8c" />
+	                  <Kpi label="Encontrados" value={resumenInformeDetalle.encontrados || 0} color="#16a34a" />
+	                  <Kpi label="Faltantes" value={resumenInformeDetalle.faltantes || 0} color="#dc2626" />
+	                  <Kpi label="No esperados" value={resumenInformeDetalle.no_esperados || 0} color="#f59e0b" />
+	                </View>
+
+	                <Text style={styles.reportSectionTitle}>Ultimos escaneos</Text>
+	                {escaneosInformeDetalle.length ? (
+	                  escaneosInformeDetalle.slice(0, 6).map((item) => (
+	                    <View key={item.id_escaneo || `${item.codigo}-${item.created_at}`} style={styles.reportListItem}>
+	                      <Ionicons name="barcode-outline" size={17} color="#0b3b8c" />
+	                      <View style={{ flex: 1 }}>
+	                        <Text style={styles.itemTitle}>{item.equipo_nombre || 'Equipo'}</Text>
+	                        <Text style={styles.itemMeta}>Codigo: {item.codigo || '-'} - Serie: {item.numero_serie || '-'}</Text>
+	                      </View>
+	                      <Badge resultado={item.resultado} />
+	                    </View>
+	                  ))
+	                ) : (
+	                  <Text style={styles.emptyText}>Sin escaneos registrados.</Text>
+	                )}
+
+	                <Text style={styles.reportSectionTitle}>Faltantes</Text>
+	                {faltantesInformeDetalle.length ? (
+	                  faltantesInformeDetalle.slice(0, 6).map((item) => (
+	                    <View key={item.id_bodega_equipo || `${item.codigo}-${item.numero_serie}`} style={styles.reportListItem}>
+	                      <Ionicons name="alert-circle-outline" size={17} color="#dc2626" />
+	                      <View style={{ flex: 1 }}>
+	                        <Text style={styles.itemTitle}>{item.equipo_nombre || 'Equipo'}</Text>
+	                        <Text style={styles.itemMeta}>Codigo: {item.codigo || '-'} - Serie: {item.numero_serie || '-'}</Text>
+	                      </View>
+	                    </View>
+	                  ))
+	                ) : (
+	                  <Text style={styles.emptyText}>Sin faltantes en este informe.</Text>
+	                )}
+	              </ScrollView>
+	            ) : null}
+	          </View>
+	        </View>
+	      </Modal>
+
 	      <Modal visible={scannerVisible} animationType="fade" transparent>
 	        <View style={styles.camOverlay}>
           <View style={styles.camBox}>
@@ -1044,24 +1185,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 10,
     marginTop: 18,
-  },
-  logoutBtn: {
-    alignSelf: 'flex-start',
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 7,
-    borderRadius: 999,
-    paddingHorizontal: 13,
-    paddingVertical: 9,
-    marginTop: 14,
-    backgroundColor: 'rgba(15,23,42,0.44)',
-    borderWidth: 1,
-    borderColor: 'rgba(219,234,254,0.2)',
-  },
-  logoutText: {
-    color: '#dbeafe',
-    fontSize: 12,
-    fontWeight: '900',
   },
   heroStat: {
     flex: 1,
@@ -1216,9 +1339,33 @@ const styles = StyleSheet.create({
     gap: 10,
     marginBottom: 10,
   },
-  bodegaFieldInput: {
+  bodegaFieldCard: {
     flex: 1,
-    marginBottom: 0,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+    backgroundColor: '#f8fafc',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  bodegaFieldLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    marginBottom: 5,
+  },
+  bodegaFieldLabel: {
+    color: '#334155',
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0.45,
+    textTransform: 'uppercase',
+  },
+  bodegaInlineInput: {
+    color: '#0f172a',
+    fontSize: 15,
+    fontWeight: '900',
+    paddingVertical: 2,
   },
   textArea: {
     minHeight: 78,
@@ -1277,11 +1424,34 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#dbeafe',
   },
+  tomaPillTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  tomaPillMain: {
+    flex: 1,
+  },
   tomaPillActive: {
     backgroundColor: '#0b3b8c',
     borderColor: '#0b3b8c',
   },
+  tomaViewBtn: {
+    width: 30,
+    height: 30,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#eaf2ff',
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+  },
+  tomaViewBtnActive: {
+    backgroundColor: 'rgba(255,255,255,0.16)',
+    borderColor: 'rgba(255,255,255,0.28)',
+  },
   tomaPillTitle: {
+    flex: 1,
     color: '#0f172a',
     fontSize: 14,
     fontWeight: '900',
@@ -1729,6 +1899,19 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 14 },
     elevation: 8,
   },
+  reportModalCard: {
+    maxHeight: '86%',
+    borderRadius: 28,
+    padding: 18,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    shadowColor: '#0f172a',
+    shadowOpacity: 0.22,
+    shadowRadius: 22,
+    shadowOffset: { width: 0, height: 14 },
+    elevation: 8,
+  },
   formModalHeader: {
     flexDirection: 'row',
     alignItems: 'flex-start',
@@ -1749,6 +1932,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#0b3b8c',
+  },
+  reportModalIcon: {
+    width: 46,
+    height: 46,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#16a34a',
   },
   formModalTitle: {
     color: '#0f172a',
@@ -1779,6 +1970,80 @@ const styles = StyleSheet.create({
   formModalSubmit: {
     flex: 1.2,
     justifyContent: 'center',
+  },
+  reportLoadingBox: {
+    minHeight: 180,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  reportModalContent: {
+    paddingBottom: 6,
+  },
+  reportInfoGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+    marginBottom: 12,
+  },
+  reportInfoItem: {
+    width: '47%',
+    borderRadius: 16,
+    padding: 11,
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+  },
+  reportInfoLabel: {
+    color: '#64748b',
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0.45,
+    textTransform: 'uppercase',
+  },
+  reportInfoValue: {
+    color: '#0f172a',
+    fontSize: 13,
+    fontWeight: '900',
+    marginTop: 4,
+  },
+  reportNote: {
+    borderRadius: 16,
+    padding: 11,
+    marginBottom: 12,
+    backgroundColor: '#eff6ff',
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+  },
+  reportNoteText: {
+    color: '#334155',
+    fontSize: 13,
+    fontWeight: '700',
+    lineHeight: 18,
+    marginTop: 4,
+  },
+  reportKpiGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+    marginBottom: 12,
+  },
+  reportSectionTitle: {
+    color: '#0f172a',
+    fontSize: 14,
+    fontWeight: '900',
+    marginTop: 8,
+    marginBottom: 8,
+  },
+  reportListItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    borderRadius: 16,
+    padding: 11,
+    marginBottom: 8,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
   },
   camOverlay: {
     flex: 1,

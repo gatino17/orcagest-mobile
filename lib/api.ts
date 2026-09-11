@@ -386,6 +386,11 @@ export const fetchInventarioBodegaTipos = async () => {
   return res.data;
 };
 
+export const fetchInventarioBodegaEquipos = async (params?: Record<string, any>) => {
+  const res = await api.get('/inventarios/bodega_equipos', { params });
+  return res.data;
+};
+
 export const createInventarioBodegaEquipos = async (payload: any) => {
   const res = await api.post('/inventarios/bodega_equipos', payload);
   return res.data;
