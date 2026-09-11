@@ -25,6 +25,7 @@ import {
   fetchInventarioBodegaToma,
   fetchInventarioBodegaTomas,
   fetchInventarioBodegaTipos,
+  validarSerieEquipo,
 } from '@/lib/api';
 
 type ResumenToma = {
@@ -110,7 +111,12 @@ const formatFecha = (value?: string | null) => {
   if (!value) return '-';
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return String(value).slice(0, 10);
-  return date.toLocaleDateString('es-CL', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  return date.toLocaleDateString('es-CL', {
+    timeZone: 'America/Santiago',
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  });
 };
 
 export default function InventarioBodegaScreen() {
@@ -127,8 +133,10 @@ export default function InventarioBodegaScreen() {
   const [crearInformeModalVisible, setCrearInformeModalVisible] = useState(false);
   const [verInformeModalVisible, setVerInformeModalVisible] = useState(false);
   const [scanInformeModalVisible, setScanInformeModalVisible] = useState(false);
+  const [detalleEscaneoModalVisible, setDetalleEscaneoModalVisible] = useState(false);
   const [informeDetalle, setInformeDetalle] = useState<TomaInventario | null>(null);
   const [informeDetalleLoading, setInformeDetalleLoading] = useState(false);
+  const [ultimoEscaneo, setUltimoEscaneo] = useState<any | null>(null);
   const [scannerTarget, setScannerTarget] = useState<'informe' | 'bodega'>('informe');
   const [valorManual, setValorManual] = useState('');
   const [nombreToma, setNombreToma] = useState('');
@@ -147,6 +155,7 @@ export default function InventarioBodegaScreen() {
   const escaneosInformeDetalle = Array.isArray(informeDetalle?.escaneos) ? informeDetalle.escaneos : [];
   const faltantesInformeDetalle = Array.isArray(resumenInformeDetalle.faltantes_detalle) ? resumenInformeDetalle.faltantes_detalle : [];
   const tomaAbierta = String(tomaActiva?.estado || '').toLowerCase() !== 'cerrado';
+  const totalEscaneadoActual = Number(tomaActiva?.resumen?.total_escaneos || 0);
   const abiertas = useMemo(() => tomas.filter((item) => String(item.estado || '').toLowerCase() !== 'cerrado').length, [tomas]);
   const cerradas = Math.max(tomas.length - abiertas, 0);
   const tiposEscaneables = useMemo(
@@ -206,6 +215,40 @@ export default function InventarioBodegaScreen() {
     );
   }, []);
 
+  const buscarEquipoBodegaPorValor = useCallback(async (valor: string) => {
+    const limpio = String(valor || '').trim();
+    if (!limpio) return null;
+    const { codigo, serie } = separarCodigoSerieEscaneado(limpio);
+    const objetivo = normalizarBusqueda(serie || codigo);
+    const rows = await fetchInventarioBodegaEquipos({ q: serie || codigo });
+    if (!Array.isArray(rows)) return null;
+    return (
+      rows.find((item) => normalizarBusqueda(item?.numero_serie) === objetivo) ||
+      rows.find((item) => normalizarBusqueda(item?.codigo) === objetivo) ||
+      null
+    );
+  }, [normalizarBusqueda, separarCodigoSerieEscaneado]);
+
+  const avisarEquipoNoDisponibleBodega = useCallback(async (valor: string) => {
+    try {
+      const validacion = await validarSerieEquipo(valor);
+      if (validacion?.duplicado && validacion?.equipo) {
+        const equipo = validacion.equipo;
+        Alert.alert(
+          'Equipo fuera de bodega',
+          `Este equipo esta registrado en ${equipo.centro_nombre || 'otro centro'}.\n\nPara inventario de bodega primero debe estar ingresado en Bodega central.`
+        );
+        return;
+      }
+    } catch {
+      // Si esta consulta falla, igual mostramos la instruccion operativa principal.
+    }
+    Alert.alert(
+      'Agregar a bodega primero',
+      'Este codigo no esta disponible en Bodega central. Ingresalo primero desde Agregar a bodega y luego vuelve a escanearlo.'
+    );
+  }, []);
+
   const detalleParams = useCallback(
     () => (tipoSeleccionado ? { tipo_equipo: tipoSeleccionado } : undefined),
     [tipoSeleccionado]
@@ -229,48 +272,35 @@ export default function InventarioBodegaScreen() {
 
   const abrirModalEscaneoInforme = useCallback(async (idToma: number) => {
     if (!idToma) return;
-    setLoading(true);
+    const previa = tomas.find((item) => Number(item.id_toma) === Number(idToma));
+    if (previa) setTomaActiva(previa);
+    setTipoSeleccionado('');
+    setBusquedaEquipo('');
+    setValorManual('');
+    setUltimoEscaneo(null);
+    setScanInformeModalVisible(true);
     try {
       const detalle = await fetchInventarioBodegaToma(idToma);
       tomaActivaIdRef.current = Number(detalle?.id_toma || idToma || 0);
       setTomaActiva(detalle || null);
-      setTipoSeleccionado('');
-      setBusquedaEquipo('');
-      setValorManual('');
-      setScanInformeModalVisible(true);
     } catch (error: any) {
       Alert.alert('Inventario bodega', error?.response?.data?.error || 'No se pudo abrir el escaneo.');
-    } finally {
-      setLoading(false);
     }
-  }, []);
+  }, [tomas]);
 
   const cargarTomas = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
     try {
-      const lista = await fetchInventarioBodegaTomas();
-      let tiposRows: EquipoTipo[] = [];
-      try {
-        const tipos = await fetchInventarioBodegaTipos();
-        tiposRows = Array.isArray(tipos) ? tipos : [];
-      } catch {
-        tiposRows = CATALOGO_INVENTARIO_FALLBACK;
-      }
+      const [lista, tipos] = await Promise.all([
+        fetchInventarioBodegaTomas(),
+        fetchInventarioBodegaTipos().catch(() => CATALOGO_INVENTARIO_FALLBACK),
+      ]);
+      const tiposRows = Array.isArray(tipos) ? tipos : [];
       const rows = Array.isArray(lista) ? lista : [];
       setTomas(rows);
       setTiposEquipo(tiposRows.length ? tiposRows : CATALOGO_INVENTARIO_FALLBACK);
 
-      const actualId = Number(tomaActivaIdRef.current || 0);
-      const candidata =
-        rows.find((item: TomaInventario) => Number(item.id_toma) === actualId) ||
-        rows.find((item: TomaInventario) => String(item.estado || '').toLowerCase() !== 'cerrado') ||
-        rows[0];
-
-      if (candidata?.id_toma) {
-        const detalle = await fetchInventarioBodegaToma(candidata.id_toma, detalleParams());
-        tomaActivaIdRef.current = Number(detalle?.id_toma || candidata.id_toma || 0);
-        setTomaActiva(detalle);
-      } else {
+      if (!rows.length) {
         tomaActivaIdRef.current = 0;
         setTomaActiva(null);
       }
@@ -280,7 +310,7 @@ export default function InventarioBodegaScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [detalleParams]);
+  }, []);
 
   useEffect(() => {
     cargarTomas();
@@ -342,22 +372,33 @@ export default function InventarioBodegaScreen() {
   const registrarValor = useCallback(async (valor: string) => {
     const limpio = String(valor || '').trim();
     if (!limpio || !tomaActiva?.id_toma || saving || !tomaAbierta) return;
-    if (!tipoSeleccionado) {
-      Alert.alert('Inventario bodega', 'Selecciona primero el tipo de equipo que vas a escanear.');
-      return;
-    }
     setSaving(true);
     try {
+      const equipoBodega = await buscarEquipoBodegaPorValor(limpio);
+      if (!equipoBodega) {
+        await avisarEquipoNoDisponibleBodega(limpio);
+        return;
+      }
+      const tipoDetectado = String(equipoBodega.equipo_nombre || '').trim();
+      const tipoFinal = tipoSeleccionado || tipoDetectado;
+      const categoriaDetectada =
+        tiposEscaneables.find((tipo) => normalizarNombreEquipo(tipo.equipo_nombre) === normalizarNombreEquipo(tipoDetectado))?.categoria ||
+        categoriaSeleccionada;
       const data = await createInventarioBodegaEscaneo(tomaActiva.id_toma, {
         valor: limpio,
-        tipo_equipo: tipoSeleccionado,
-        categoria: categoriaSeleccionada,
+        tipo_equipo: tipoFinal,
+        categoria: categoriaDetectada,
       });
       const toma = data?.toma || null;
       if (toma) {
         tomaActivaIdRef.current = Number(toma?.id_toma || tomaActiva?.id_toma || 0);
         setTomaActiva(toma);
       }
+      if (!tipoSeleccionado && tipoFinal) {
+        setTipoSeleccionado(tipoFinal);
+        if (categoriaDetectada) setCategoriaSeleccionada(categoriaDetectada);
+      }
+      setUltimoEscaneo(data?.escaneo || null);
       setValorManual('');
     } catch (error: any) {
       Alert.alert('Inventario bodega', error?.response?.data?.error || 'No se pudo registrar el escaneo.');
@@ -365,11 +406,20 @@ export default function InventarioBodegaScreen() {
       setSaving(false);
       scanLockRef.current = false;
     }
-  }, [categoriaSeleccionada, saving, tipoSeleccionado, tomaAbierta, tomaActiva?.id_toma]);
+  }, [
+    avisarEquipoNoDisponibleBodega,
+    buscarEquipoBodegaPorValor,
+    categoriaSeleccionada,
+    saving,
+    tipoSeleccionado,
+    tiposEscaneables,
+    tomaAbierta,
+    tomaActiva?.id_toma,
+  ]);
 
   const abrirScanner = useCallback(async (target: 'informe' | 'bodega' = 'informe') => {
     if (target === 'informe' && !tomaAbierta) return;
-    if (!tipoSeleccionado) {
+    if (target === 'bodega' && !tipoSeleccionado) {
       Alert.alert('Inventario bodega', 'Selecciona primero el tipo de equipo que vas a escanear.');
       return;
     }
@@ -802,7 +852,7 @@ export default function InventarioBodegaScreen() {
 	                    {tomaActiva?.nombre || 'Informe de inventario'}
 	                  </Text>
 	                  <Text style={styles.formModalSubtitle}>
-	                    Selecciona categoria y equipo para registrar.
+	                    Puedes seleccionar equipo o escanear directo si ya esta en bodega.
 	                  </Text>
 	                </View>
 	              </View>
@@ -899,8 +949,25 @@ export default function InventarioBodegaScreen() {
 	                <Text style={styles.scanHint}>
 	                  {tipoSeleccionado
 	                    ? `Escaneando: ${tipoSeleccionado}`
-	                    : 'Selecciona un tipo para habilitar el escaneo.'}
+	                    : 'Escanea directo por codigo o N serie si ya existe en bodega.'}
 	                </Text>
+	                <View style={styles.scanSummaryCard}>
+	                  <View style={styles.scanSummaryIcon}>
+	                    <Ionicons name="barcode-outline" size={19} color="#0b3b8c" />
+	                  </View>
+	                  <View style={{ flex: 1 }}>
+	                    <Text style={styles.scanSummaryLabel}>Escaneados</Text>
+	                    <Text style={styles.scanSummaryValue}>{totalEscaneadoActual}</Text>
+	                  </View>
+	                  <Pressable
+	                    style={[styles.scanDetailBtn, !ultimoEscaneo && styles.btnDisabled]}
+	                    disabled={!ultimoEscaneo}
+	                    onPress={() => setDetalleEscaneoModalVisible(true)}
+	                  >
+	                    <Ionicons name="eye-outline" size={15} color="#0b3b8c" />
+	                    <Text style={styles.scanDetailBtnText}>Ver detalle</Text>
+	                  </Pressable>
+	                </View>
 	                <View style={styles.scanRow}>
 	                  <TextInput
 	                    style={[styles.input, styles.scanInput]}
@@ -911,15 +978,15 @@ export default function InventarioBodegaScreen() {
 	                    autoCapitalize="characters"
 	                  />
 	                  <Pressable
-	                    style={[styles.iconBtn, (saving || !tipoSeleccionado) && styles.btnDisabled]}
-	                    disabled={saving || !tipoSeleccionado}
+	                    style={[styles.iconBtn, (saving || !valorManual.trim()) && styles.btnDisabled]}
+	                    disabled={saving || !valorManual.trim()}
 	                    onPress={() => registrarValor(valorManual)}
 	                  >
 	                    <Ionicons name="checkmark" size={21} color="#fff" />
 	                  </Pressable>
 	                </View>
 	                <View style={styles.actionsRow}>
-	                  <Pressable style={[styles.scanBtn, !tipoSeleccionado && styles.btnDisabled]} disabled={!tipoSeleccionado} onPress={() => abrirScanner('informe')}>
+	                  <Pressable style={styles.scanBtn} onPress={() => abrirScanner('informe')}>
 	                    <Ionicons name="scan-outline" size={18} color="#fff" />
 	                    <Text style={styles.scanBtnText}>Escanear</Text>
 	                  </Pressable>
@@ -1029,6 +1096,43 @@ export default function InventarioBodegaScreen() {
 	                )}
 	              </ScrollView>
 	            ) : null}
+	          </View>
+	        </View>
+	      </Modal>
+
+	      <Modal visible={detalleEscaneoModalVisible} animationType="fade" transparent>
+	        <View style={styles.formModalOverlay}>
+	          <View style={styles.scanDetailModalCard}>
+	            <View style={styles.formModalHeader}>
+	              <View style={styles.formModalTitleWrap}>
+	                <View style={styles.reportModalIcon}>
+	                  <Ionicons name="barcode-outline" size={22} color="#ffffff" />
+	                </View>
+	                <View style={{ flex: 1 }}>
+	                  <Text style={styles.kicker}>ULTIMO ESCANEO</Text>
+	                  <Text style={styles.formModalTitle}>Detalle del equipo</Text>
+	                </View>
+	              </View>
+	              <Pressable onPress={() => setDetalleEscaneoModalVisible(false)}>
+	                <Ionicons name="close-circle" size={27} color="#64748b" />
+	              </Pressable>
+	            </View>
+
+	            <View style={styles.scanDetailRow}>
+	              <Text style={styles.reportInfoLabel}>Equipo</Text>
+	              <Text style={styles.scanDetailValue}>{ultimoEscaneo?.equipo_nombre || 'Equipo no identificado'}</Text>
+	            </View>
+	            <View style={styles.scanDetailRow}>
+	              <Text style={styles.reportInfoLabel}>N serie</Text>
+	              <Text style={styles.scanDetailValue}>{ultimoEscaneo?.numero_serie || '-'}</Text>
+	            </View>
+	            <View style={styles.scanDetailRow}>
+	              <Text style={styles.reportInfoLabel}>Codigo</Text>
+	              <Text style={styles.scanDetailValue}>{ultimoEscaneo?.codigo || '-'}</Text>
+	            </View>
+	            <View style={styles.scanDetailFooter}>
+	              <Badge resultado={ultimoEscaneo?.resultado} />
+	            </View>
 	          </View>
 	        </View>
 	      </Modal>
@@ -1377,9 +1481,9 @@ const styles = StyleSheet.create({
     paddingRight: 6,
   },
   tomaPill: {
-    width: 260,
-    borderRadius: 20,
-    padding: 14,
+    width: 238,
+    borderRadius: 18,
+    padding: 11,
     backgroundColor: '#f8fafc',
     borderWidth: 1,
     borderColor: '#dbeafe',
@@ -1393,15 +1497,15 @@ const styles = StyleSheet.create({
     borderColor: '#dbeafe',
   },
   tomaPillTop: {
-    gap: 12,
+    gap: 9,
   },
   tomaPillMain: {
-    minHeight: 56,
+    minHeight: 45,
   },
   tomaViewBtn: {
     flex: 1,
-    minHeight: 34,
-    borderRadius: 13,
+    minHeight: 31,
+    borderRadius: 12,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
@@ -1418,17 +1522,18 @@ const styles = StyleSheet.create({
   tomaPillActions: {
     flexDirection: 'row',
     alignItems: 'center',
+    alignSelf: 'stretch',
     gap: 8,
   },
   tomaScanBtn: {
     flex: 1.35,
-    minHeight: 34,
+    minHeight: 31,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 5,
-    borderRadius: 13,
-    paddingHorizontal: 10,
+    borderRadius: 12,
+    paddingHorizontal: 8,
     borderWidth: 1,
     backgroundColor: '#fef3c7',
     borderColor: '#fbbf24',
@@ -1440,8 +1545,8 @@ const styles = StyleSheet.create({
   },
   tomaPillTitle: {
     color: '#0f172a',
-    fontSize: 15,
-    lineHeight: 19,
+    fontSize: 14,
+    lineHeight: 18,
     fontWeight: '900',
   },
   tomaPillMeta: {
@@ -1453,7 +1558,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     flexWrap: 'wrap',
-    marginTop: 4,
+    marginTop: 3,
   },
   tomaPillStatus: {
     fontSize: 12,
@@ -1692,6 +1797,54 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '800',
     marginBottom: 10,
+  },
+  scanSummaryCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    borderRadius: 18,
+    padding: 12,
+    marginBottom: 12,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+  },
+  scanSummaryIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#dbeafe',
+  },
+  scanSummaryLabel: {
+    color: '#64748b',
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0.4,
+    textTransform: 'uppercase',
+  },
+  scanSummaryValue: {
+    color: '#0b3b8c',
+    fontSize: 24,
+    fontWeight: '900',
+    marginTop: 1,
+  },
+  scanDetailBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    borderRadius: 13,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    backgroundColor: '#eaf2ff',
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+  },
+  scanDetailBtnText: {
+    color: '#0b3b8c',
+    fontSize: 11,
+    fontWeight: '900',
   },
   scanRow: {
     flexDirection: 'row',
@@ -1942,6 +2095,36 @@ const styles = StyleSheet.create({
   },
   scanInformeContent: {
     paddingBottom: 6,
+  },
+  scanDetailModalCard: {
+    borderRadius: 26,
+    padding: 18,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    shadowColor: '#0f172a',
+    shadowOpacity: 0.22,
+    shadowRadius: 22,
+    shadowOffset: { width: 0, height: 14 },
+    elevation: 8,
+  },
+  scanDetailRow: {
+    borderRadius: 16,
+    padding: 12,
+    marginBottom: 9,
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  scanDetailValue: {
+    color: '#0f172a',
+    fontSize: 16,
+    fontWeight: '900',
+    marginTop: 4,
+  },
+  scanDetailFooter: {
+    alignItems: 'flex-start',
+    marginTop: 2,
   },
   formModalHeader: {
     flexDirection: 'row',
