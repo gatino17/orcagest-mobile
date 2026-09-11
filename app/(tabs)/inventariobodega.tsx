@@ -21,7 +21,6 @@ import {
   createInventarioBodegaEquipos,
   createInventarioBodegaEscaneo,
   createInventarioBodegaToma,
-  deleteInventarioBodegaEscaneo,
   fetchInventarioBodegaEquipos,
   fetchInventarioBodegaToma,
   fetchInventarioBodegaTomas,
@@ -87,13 +86,6 @@ const formatFecha = (value?: string | null) => {
   return date.toLocaleDateString('es-CL', { day: '2-digit', month: '2-digit', year: 'numeric' });
 };
 
-const formatHora = (value?: string | null) => {
-  if (!value) return '';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '';
-  return date.toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' });
-};
-
 export default function InventarioBodegaScreen() {
   const [permission, requestPermission] = useCameraPermissions();
   const [tomas, setTomas] = useState<TomaInventario[]>([]);
@@ -107,6 +99,7 @@ export default function InventarioBodegaScreen() {
   const [scannerVisible, setScannerVisible] = useState(false);
   const [crearInformeModalVisible, setCrearInformeModalVisible] = useState(false);
   const [verInformeModalVisible, setVerInformeModalVisible] = useState(false);
+  const [scanInformeModalVisible, setScanInformeModalVisible] = useState(false);
   const [informeDetalle, setInformeDetalle] = useState<TomaInventario | null>(null);
   const [informeDetalleLoading, setInformeDetalleLoading] = useState(false);
   const [scannerTarget, setScannerTarget] = useState<'informe' | 'bodega'>('informe');
@@ -124,8 +117,6 @@ export default function InventarioBodegaScreen() {
   const tomaActivaIdRef = useRef<number>(0);
 
   const resumen = tomaActiva?.resumen || {};
-  const escaneos = Array.isArray(tomaActiva?.escaneos) ? tomaActiva.escaneos : [];
-  const faltantes = Array.isArray(resumen.faltantes_detalle) ? resumen.faltantes_detalle : [];
   const resumenInformeDetalle = informeDetalle?.resumen || {};
   const escaneosInformeDetalle = Array.isArray(informeDetalle?.escaneos) ? informeDetalle.escaneos : [];
   const faltantesInformeDetalle = Array.isArray(resumenInformeDetalle.faltantes_detalle) ? resumenInformeDetalle.faltantes_detalle : [];
@@ -210,6 +201,24 @@ export default function InventarioBodegaScreen() {
       setVerInformeModalVisible(false);
     } finally {
       setInformeDetalleLoading(false);
+    }
+  }, []);
+
+  const abrirModalEscaneoInforme = useCallback(async (idToma: number) => {
+    if (!idToma) return;
+    setLoading(true);
+    try {
+      const detalle = await fetchInventarioBodegaToma(idToma);
+      tomaActivaIdRef.current = Number(detalle?.id_toma || idToma || 0);
+      setTomaActiva(detalle || null);
+      setTipoSeleccionado('');
+      setBusquedaEquipo('');
+      setValorManual('');
+      setScanInformeModalVisible(true);
+    } catch (error: any) {
+      Alert.alert('Inventario bodega', error?.response?.data?.error || 'No se pudo abrir el escaneo.');
+    } finally {
+      setLoading(false);
     }
   }, []);
 
@@ -395,6 +404,7 @@ export default function InventarioBodegaScreen() {
               setTomaActiva(detalle);
               const lista = await fetchInventarioBodegaTomas();
               setTomas(Array.isArray(lista) ? lista : []);
+              setScanInformeModalVisible(false);
             } catch (error: any) {
               Alert.alert('Inventario bodega', error?.response?.data?.error || 'No se pudo finalizar el informe.');
             } finally {
@@ -404,26 +414,6 @@ export default function InventarioBodegaScreen() {
         },
       ]
     );
-  }, [detalleParams, tomaAbierta, tomaActiva?.id_toma]);
-
-  const eliminarEscaneo = useCallback((idEscaneo: number) => {
-    if (!idEscaneo || !tomaActiva?.id_toma || !tomaAbierta) return;
-    Alert.alert('Eliminar escaneo', 'Se quitara este registro del informe actual.', [
-      { text: 'Cancelar', style: 'cancel' },
-      {
-        text: 'Eliminar',
-        style: 'destructive',
-        onPress: async () => {
-          try {
-            await deleteInventarioBodegaEscaneo(idEscaneo);
-            const detalle = await fetchInventarioBodegaToma(tomaActiva.id_toma, detalleParams());
-            setTomaActiva(detalle);
-          } catch (error: any) {
-            Alert.alert('Inventario bodega', error?.response?.data?.error || 'No se pudo eliminar el escaneo.');
-          }
-        },
-      },
-    ]);
   }, [detalleParams, tomaAbierta, tomaActiva?.id_toma]);
 
   const agregarEquipoBodega = useCallback(async () => {
@@ -631,7 +621,7 @@ export default function InventarioBodegaScreen() {
 	          <View style={styles.createInformeContent}>
 	            <Text style={styles.kicker}>NUEVO INFORME</Text>
 	            <Text style={styles.sectionTitle}>Crear informe</Text>
-	            <Text style={styles.createInformeText}>Registra una nueva toma fisica para escanear equipos por categoria.</Text>
+	            <Text style={styles.createInformeText}>Nueva toma fisica por categoria.</Text>
 	          </View>
 	          <Pressable style={styles.createInformeBtn} onPress={() => setCrearInformeModalVisible(true)}>
 	            <Ionicons name="add-circle-outline" size={18} color="#fff" />
@@ -651,7 +641,7 @@ export default function InventarioBodegaScreen() {
               {tomas.map((item) => {
                 const selected = Number(item.id_toma) === Number(tomaActiva?.id_toma || 0);
                 const abierta = String(item.estado || '').toLowerCase() !== 'cerrado';
-                return (
+	                return (
 	                  <View
 	                    key={item.id_toma}
 	                    style={[styles.tomaPill, selected && styles.tomaPillActive]}
@@ -661,19 +651,35 @@ export default function InventarioBodegaScreen() {
 	                        <Text style={[styles.tomaPillTitle, selected && styles.tomaPillTitleActive]} numberOfLines={1}>
 	                          {item.nombre || `Informe ${item.id_toma}`}
 	                        </Text>
-	                        <Text style={[styles.tomaPillMeta, selected && styles.tomaPillMetaActive]}>
-	                          {formatFecha(item.fecha_inicio)} - {abierta ? 'Abierto' : 'Finalizado'}
-	                        </Text>
+	                        <View style={styles.tomaPillMetaRow}>
+	                          <Text style={[styles.tomaPillMeta, selected && styles.tomaPillMetaActive]}>
+	                            {formatFecha(item.fecha_inicio)} - 
+	                          </Text>
+	                          <Text style={[styles.tomaPillStatus, abierta ? styles.tomaPillStatusOpen : styles.tomaPillStatusClosed]}>
+	                            {abierta ? 'Abierto' : 'Finalizado'}
+	                          </Text>
+	                        </View>
 	                      </Pressable>
-	                      <Pressable
-	                        style={[styles.tomaViewBtn, selected && styles.tomaViewBtnActive]}
-	                        onPress={() => verInformeHistorial(item.id_toma)}
-	                      >
-	                        <Ionicons name="eye-outline" size={16} color={selected ? '#ffffff' : '#0b3b8c'} />
-	                      </Pressable>
+	                      <View style={styles.tomaPillActions}>
+	                        <Pressable
+	                          style={[styles.tomaViewBtn, selected && styles.tomaViewBtnActive]}
+	                          onPress={() => verInformeHistorial(item.id_toma)}
+	                        >
+	                          <Ionicons name="eye-outline" size={16} color={selected ? '#ffffff' : '#0b3b8c'} />
+	                        </Pressable>
+	                        {abierta ? (
+	                          <Pressable
+	                            style={[styles.tomaScanBtn, selected && styles.tomaScanBtnActive]}
+	                            onPress={() => abrirModalEscaneoInforme(item.id_toma)}
+	                          >
+	                            <Ionicons name="scan-outline" size={14} color={selected ? '#ffffff' : '#166534'} />
+	                            <Text style={[styles.tomaScanBtnText, selected && styles.tomaScanBtnTextActive]}>Escanear</Text>
+	                          </Pressable>
+	                        ) : null}
+	                      </View>
 	                    </View>
 	                  </View>
-                );
+	                );
               })}
             </ScrollView>
           </View>
@@ -715,190 +721,14 @@ export default function InventarioBodegaScreen() {
                 <Kpi label="No corresponde" value={resumen.no_corresponden || 0} color="#b91c1c" />
               </View>
 
-	              <View style={styles.typeBox}>
-	                <View style={styles.sectionHeader}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.kicker}>CATEGORIA Y EQUIPO</Text>
-                    <Text style={styles.scanTitle}>Selecciona categoria, luego equipo</Text>
-                  </View>
-                  {tipoSeleccionado ? (
-                    <View style={styles.typeCounter}>
-                      <Text style={styles.typeCounterNumber}>{totalTipoSeleccionado}</Text>
-                      <Text style={styles.typeCounterLabel}>esperados</Text>
-                    </View>
-	                  ) : null}
-	                </View>
-	                <Text style={styles.selectorLabel}>Selecciona categoria</Text>
-	                {categoriasInventario.length ? (
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.categoryList}>
-                    {categoriasInventario.map((categoria) => {
-                      const selected = categoria === categoriaSeleccionada;
-                      return (
-                        <Pressable
-	                          key={categoria}
-	                          style={[styles.categoryPill, selected && styles.categoryPillActive]}
-	                          onPress={() => {
-	                            setCategoriaSeleccionada(categoria);
-	                            setTipoSeleccionado('');
-	                            setBusquedaEquipo('');
-	                          }}
-	                        >
-                          <Text style={[styles.categoryPillText, selected && styles.categoryPillTextActive]}>
-                            {categoria}
-                          </Text>
-                        </Pressable>
-                      );
-                    })}
-		                  </ScrollView>
-		                ) : null}
-		                <Text style={styles.selectorLabel}>Busca o selecciona equipo</Text>
-		                <View style={styles.searchBox}>
-	                  <Ionicons name="search-outline" size={17} color="#64748b" />
-	                  <TextInput
-	                    style={styles.searchInput}
-	                    value={busquedaEquipo}
-	                    onChangeText={setBusquedaEquipo}
-	                    placeholder="Buscar equipo, ejemplo: router"
-	                    placeholderTextColor="#94a3b8"
-	                  />
-	                  {!!busquedaEquipo.trim() && (
-	                    <Pressable onPress={() => setBusquedaEquipo('')}>
-	                      <Ionicons name="close-circle" size={18} color="#94a3b8" />
-	                    </Pressable>
-	                  )}
-	                </View>
-	                {tiposVisibles.length ? (
-	                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.typeList}>
-	                    {tiposVisibles.map((tipo) => {
-	                      const nombre = String(tipo.equipo_nombre || '').trim();
-	                      const categoria = String(tipo.categoria || 'Sin categoria').trim() || 'Sin categoria';
-	                      const selected = nombre.toLowerCase() === tipoSeleccionado.trim().toLowerCase();
-	                      return (
-	                        <Pressable
-	                          key={`${categoria}-${nombre}`}
-	                          style={[styles.typePill, selected && styles.typePillActive]}
-	                          onPress={() => {
-	                            setCategoriaSeleccionada(categoria);
-	                            setTipoSeleccionado(selected ? '' : nombre);
-	                          }}
-	                        >
-                          <Text style={[styles.typePillTitle, selected && styles.typePillTitleActive]} numberOfLines={1}>
-                            {nombre}
-	                          </Text>
-	                          <Text style={[styles.typePillMeta, selected && styles.typePillMetaActive]}>
-	                            {busquedaEquipo.trim() ? categoria : `${Number(tipo.total_esperado || 0)} en bodega`}
-	                          </Text>
-	                        </Pressable>
-                      );
-                    })}
-                  </ScrollView>
-                ) : (
-                  <Text style={styles.emptyText}>No hay equipos disponibles para esta categoria.</Text>
-                )}
+              <View style={styles.reportActionHint}>
+                <Ionicons name={tomaAbierta ? 'scan-outline' : 'lock-closed-outline'} size={18} color={tomaAbierta ? '#166534' : '#64748b'} />
+                <Text style={styles.reportActionText}>
+                  {tomaAbierta
+                    ? 'Usa Escanear en el historial para registrar equipos.'
+                    : 'Informe finalizado. Usa el ojo del historial para revisar el detalle.'}
+                </Text>
               </View>
-
-              {tomaAbierta ? (
-                <View style={styles.scanBox}>
-                  <Text style={styles.scanTitle}>Registrar equipo</Text>
-                  <Text style={styles.scanHint}>
-                    {tipoSeleccionado
-                      ? `Escaneando: ${tipoSeleccionado}`
-                      : 'Selecciona un tipo para habilitar el escaneo.'}
-                  </Text>
-                  <View style={styles.scanRow}>
-                    <TextInput
-                      style={[styles.input, styles.scanInput]}
-                      value={valorManual}
-                      onChangeText={setValorManual}
-                      placeholder="Codigo o N serie"
-                      placeholderTextColor="#94a3b8"
-                      autoCapitalize="characters"
-                    />
-                    <Pressable
-                      style={[styles.iconBtn, (saving || !tipoSeleccionado) && styles.btnDisabled]}
-                      disabled={saving || !tipoSeleccionado}
-                      onPress={() => registrarValor(valorManual)}
-                    >
-                      <Ionicons name="checkmark" size={21} color="#fff" />
-                    </Pressable>
-                  </View>
-                  <View style={styles.actionsRow}>
-                    <Pressable style={[styles.scanBtn, !tipoSeleccionado && styles.btnDisabled]} disabled={!tipoSeleccionado} onPress={() => abrirScanner('informe')}>
-                      <Ionicons name="scan-outline" size={18} color="#fff" />
-                      <Text style={styles.scanBtnText}>Escanear</Text>
-                    </Pressable>
-                    <Pressable style={[styles.closeBtn, saving && styles.btnDisabled]} disabled={saving} onPress={cerrarToma}>
-                      <Ionicons name="lock-closed-outline" size={17} color="#991b1b" />
-                      <Text style={styles.closeBtnText}>Finalizar informe</Text>
-                    </Pressable>
-                  </View>
-                </View>
-              ) : (
-                <View style={styles.readOnlyBox}>
-                  <Ionicons name="lock-closed-outline" size={18} color="#64748b" />
-                  <Text style={styles.readOnlyText}>Informe finalizado. Disponible solo como historial.</Text>
-                </View>
-              )}
-            </View>
-
-            <View style={styles.card}>
-              <View style={styles.sectionHeader}>
-                <View>
-                  <Text style={styles.kicker}>ESCANEOS</Text>
-                  <Text style={styles.sectionTitle}>Equipos registrados</Text>
-                </View>
-                <Text style={styles.countBadge}>{escaneos.length}</Text>
-              </View>
-              {escaneos.length ? (
-                escaneos.map((item) => (
-                  <View key={item.id_escaneo || `${item.codigo}-${item.created_at}`} style={styles.scanItem}>
-                    <View style={styles.scanItemMain}>
-                      <Text style={styles.itemTitle}>{item.equipo_nombre || 'Equipo no identificado'}</Text>
-                      <Text style={styles.itemMeta}>Codigo: {item.codigo || '-'}</Text>
-                      <Text style={styles.itemMeta}>Serie: {item.numero_serie || '-'}</Text>
-                      <Text style={styles.itemDate}>
-                        {formatFecha(item.created_at)} {formatHora(item.created_at)}
-                      </Text>
-                    </View>
-                    <View style={styles.scanItemSide}>
-                      <Badge resultado={item.resultado} />
-                      {tomaAbierta ? (
-                        <Pressable style={styles.deleteBtn} onPress={() => eliminarEscaneo(Number(item.id_escaneo || 0))}>
-                          <Ionicons name="trash-outline" size={16} color="#dc2626" />
-                        </Pressable>
-                      ) : null}
-                    </View>
-                  </View>
-                ))
-              ) : (
-                <Text style={styles.emptyText}>Aun no hay escaneos en este informe.</Text>
-              )}
-            </View>
-
-            <View style={styles.card}>
-              <View style={styles.sectionHeader}>
-                <View>
-                  <Text style={styles.kicker}>CONTROL</Text>
-                  <Text style={styles.sectionTitle}>Faltantes del sistema</Text>
-                </View>
-                <Text style={styles.countBadge}>{faltantes.length}</Text>
-              </View>
-              {faltantes.length ? (
-                faltantes.slice(0, 40).map((item) => (
-                  <View key={item.id_bodega_equipo || `${item.codigo}-${item.numero_serie}`} style={styles.missingItem}>
-                    <Ionicons name="alert-circle-outline" size={19} color="#dc2626" />
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.itemTitle}>{item.equipo_nombre || 'Equipo'}</Text>
-                      <Text style={styles.itemMeta}>Codigo: {item.codigo || '-'} - Serie: {item.numero_serie || '-'}</Text>
-                    </View>
-                  </View>
-                ))
-              ) : (
-                <Text style={styles.emptyText}>Sin faltantes para el informe y tipo seleccionado.</Text>
-              )}
-              {faltantes.length > 40 ? (
-                <Text style={styles.limitText}>Mostrando 40 de {faltantes.length}. Revisa el detalle completo en la web.</Text>
-              ) : null}
             </View>
           </>
         ) : (
@@ -972,6 +802,152 @@ export default function InventarioBodegaScreen() {
 	                <Text style={styles.primaryBtnText}>{saving ? 'Creando...' : 'Crear informe'}</Text>
 	              </Pressable>
 	            </View>
+	          </View>
+	        </View>
+	      </Modal>
+
+	      <Modal visible={scanInformeModalVisible} animationType="slide" transparent>
+	        <View style={styles.formModalOverlay}>
+	          <View style={styles.scanInformeModalCard}>
+	            <View style={styles.formModalHeader}>
+	              <View style={styles.formModalTitleWrap}>
+	                <View style={styles.formModalIcon}>
+	                  <Ionicons name="scan-outline" size={22} color="#ffffff" />
+	                </View>
+	                <View style={{ flex: 1 }}>
+	                  <Text style={styles.kicker}>ESCANEO</Text>
+	                  <Text style={styles.formModalTitle} numberOfLines={2}>
+	                    {tomaActiva?.nombre || 'Informe de inventario'}
+	                  </Text>
+	                  <Text style={styles.formModalSubtitle}>
+	                    Selecciona categoria y equipo para registrar.
+	                  </Text>
+	                </View>
+	              </View>
+	              <Pressable onPress={() => setScanInformeModalVisible(false)} disabled={saving}>
+	                <Ionicons name="close-circle" size={27} color="#64748b" />
+	              </Pressable>
+	            </View>
+
+	            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scanInformeContent}>
+	              <View style={styles.typeBox}>
+	                <View style={styles.sectionHeader}>
+	                  <View style={{ flex: 1 }}>
+	                    <Text style={styles.kicker}>CATEGORIA Y EQUIPO</Text>
+	                    <Text style={styles.scanTitle}>Selecciona categoria, luego equipo</Text>
+	                  </View>
+	                  {tipoSeleccionado ? (
+	                    <View style={styles.typeCounter}>
+	                      <Text style={styles.typeCounterNumber}>{totalTipoSeleccionado}</Text>
+	                      <Text style={styles.typeCounterLabel}>esperados</Text>
+	                    </View>
+	                  ) : null}
+	                </View>
+	                <Text style={styles.selectorLabel}>Selecciona categoria</Text>
+	                {categoriasInventario.length ? (
+	                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.categoryList}>
+	                    {categoriasInventario.map((categoria) => {
+	                      const selected = categoria === categoriaSeleccionada;
+	                      return (
+	                        <Pressable
+	                          key={categoria}
+	                          style={[styles.categoryPill, selected && styles.categoryPillActive]}
+	                          onPress={() => {
+	                            setCategoriaSeleccionada(categoria);
+	                            setTipoSeleccionado('');
+	                            setBusquedaEquipo('');
+	                          }}
+	                        >
+	                          <Text style={[styles.categoryPillText, selected && styles.categoryPillTextActive]}>
+	                            {categoria}
+	                          </Text>
+	                        </Pressable>
+	                      );
+	                    })}
+	                  </ScrollView>
+	                ) : null}
+	                <Text style={styles.selectorLabel}>Busca o selecciona equipo</Text>
+	                <View style={styles.searchBox}>
+	                  <Ionicons name="search-outline" size={17} color="#64748b" />
+	                  <TextInput
+	                    style={styles.searchInput}
+	                    value={busquedaEquipo}
+	                    onChangeText={setBusquedaEquipo}
+	                    placeholder="Buscar equipo, ejemplo: router"
+	                    placeholderTextColor="#94a3b8"
+	                  />
+	                  {!!busquedaEquipo.trim() && (
+	                    <Pressable onPress={() => setBusquedaEquipo('')}>
+	                      <Ionicons name="close-circle" size={18} color="#94a3b8" />
+	                    </Pressable>
+	                  )}
+	                </View>
+	                {tiposVisibles.length ? (
+	                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.typeList}>
+	                    {tiposVisibles.map((tipo) => {
+	                      const nombre = String(tipo.equipo_nombre || '').trim();
+	                      const categoria = String(tipo.categoria || 'Sin categoria').trim() || 'Sin categoria';
+	                      const selected = nombre.toLowerCase() === tipoSeleccionado.trim().toLowerCase();
+	                      return (
+	                        <Pressable
+	                          key={`${categoria}-${nombre}`}
+	                          style={[styles.typePill, selected && styles.typePillActive]}
+	                          onPress={() => {
+	                            setCategoriaSeleccionada(categoria);
+	                            setTipoSeleccionado(selected ? '' : nombre);
+	                          }}
+	                        >
+	                          <Text style={[styles.typePillTitle, selected && styles.typePillTitleActive]} numberOfLines={1}>
+	                            {nombre}
+	                          </Text>
+	                          <Text style={[styles.typePillMeta, selected && styles.typePillMetaActive]}>
+	                            {busquedaEquipo.trim() ? categoria : `${Number(tipo.total_esperado || 0)} en bodega`}
+	                          </Text>
+	                        </Pressable>
+	                      );
+	                    })}
+	                  </ScrollView>
+	                ) : (
+	                  <Text style={styles.emptyText}>No hay equipos disponibles para esta categoria.</Text>
+	                )}
+	              </View>
+
+	              <View style={styles.scanBox}>
+	                <Text style={styles.scanTitle}>Registrar equipo</Text>
+	                <Text style={styles.scanHint}>
+	                  {tipoSeleccionado
+	                    ? `Escaneando: ${tipoSeleccionado}`
+	                    : 'Selecciona un tipo para habilitar el escaneo.'}
+	                </Text>
+	                <View style={styles.scanRow}>
+	                  <TextInput
+	                    style={[styles.input, styles.scanInput]}
+	                    value={valorManual}
+	                    onChangeText={setValorManual}
+	                    placeholder="Codigo o N serie"
+	                    placeholderTextColor="#94a3b8"
+	                    autoCapitalize="characters"
+	                  />
+	                  <Pressable
+	                    style={[styles.iconBtn, (saving || !tipoSeleccionado) && styles.btnDisabled]}
+	                    disabled={saving || !tipoSeleccionado}
+	                    onPress={() => registrarValor(valorManual)}
+	                  >
+	                    <Ionicons name="checkmark" size={21} color="#fff" />
+	                  </Pressable>
+	                </View>
+	                <View style={styles.actionsRow}>
+	                  <Pressable style={[styles.scanBtn, !tipoSeleccionado && styles.btnDisabled]} disabled={!tipoSeleccionado} onPress={() => abrirScanner('informe')}>
+	                    <Ionicons name="scan-outline" size={18} color="#fff" />
+	                    <Text style={styles.scanBtnText}>Escanear</Text>
+	                  </Pressable>
+	                  <Pressable style={[styles.closeBtn, saving && styles.btnDisabled]} disabled={saving} onPress={cerrarToma}>
+	                    <Ionicons name="lock-closed-outline" size={17} color="#991b1b" />
+	                    <Text style={styles.closeBtnText}>Finalizar informe</Text>
+	                  </Pressable>
+	                </View>
+	              </View>
+	            </ScrollView>
 	          </View>
 	        </View>
 	      </Modal>
@@ -1134,12 +1110,13 @@ function Badge({ resultado }: { resultado?: string }) {
 const styles = StyleSheet.create({
   safe: {
     flex: 1,
-    backgroundColor: '#eef3f6',
+    backgroundColor: '#f8fbff',
   },
   content: {
     padding: 16,
-    paddingBottom: 34,
+    paddingBottom: 18,
     gap: 14,
+    backgroundColor: '#f8fbff',
   },
   hero: {
     borderRadius: 28,
@@ -1337,6 +1314,7 @@ const styles = StyleSheet.create({
   bodegaFieldsRow: {
     flexDirection: 'row',
     gap: 10,
+    marginTop: 18,
     marginBottom: 10,
   },
   bodegaFieldCard: {
@@ -1417,7 +1395,7 @@ const styles = StyleSheet.create({
     paddingRight: 6,
   },
   tomaPill: {
-    width: 190,
+    width: 235,
     borderRadius: 18,
     padding: 13,
     backgroundColor: '#f8fafc',
@@ -1426,7 +1404,7 @@ const styles = StyleSheet.create({
   },
   tomaPillTop: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     gap: 8,
   },
   tomaPillMain: {
@@ -1450,6 +1428,33 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.16)',
     borderColor: 'rgba(255,255,255,0.28)',
   },
+  tomaPillActions: {
+    alignItems: 'flex-end',
+    gap: 8,
+  },
+  tomaScanBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    borderRadius: 999,
+    paddingHorizontal: 9,
+    paddingVertical: 6,
+    backgroundColor: '#dcfce7',
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
+  },
+  tomaScanBtnActive: {
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    borderColor: 'rgba(255,255,255,0.35)',
+  },
+  tomaScanBtnText: {
+    color: '#166534',
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  tomaScanBtnTextActive: {
+    color: '#ffffff',
+  },
   tomaPillTitle: {
     flex: 1,
     color: '#0f172a',
@@ -1463,10 +1468,25 @@ const styles = StyleSheet.create({
     color: '#64748b',
     fontSize: 12,
     fontWeight: '700',
+  },
+  tomaPillMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
     marginTop: 4,
   },
   tomaPillMetaActive: {
     color: '#bfdbfe',
+  },
+  tomaPillStatus: {
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  tomaPillStatusOpen: {
+    color: '#16a34a',
+  },
+  tomaPillStatusClosed: {
+    color: '#64748b',
   },
   loadingBox: {
     borderRadius: 22,
@@ -1764,6 +1784,24 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '800',
   },
+  reportActionHint: {
+    flexDirection: 'row',
+    gap: 9,
+    alignItems: 'center',
+    marginTop: 16,
+    borderRadius: 17,
+    padding: 12,
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+  },
+  reportActionText: {
+    flex: 1,
+    color: '#334155',
+    fontSize: 13,
+    fontWeight: '800',
+    lineHeight: 18,
+  },
   countBadge: {
     minWidth: 38,
     textAlign: 'center',
@@ -1911,6 +1949,22 @@ const styles = StyleSheet.create({
     shadowRadius: 22,
     shadowOffset: { width: 0, height: 14 },
     elevation: 8,
+  },
+  scanInformeModalCard: {
+    maxHeight: '88%',
+    borderRadius: 28,
+    padding: 18,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    shadowColor: '#0f172a',
+    shadowOpacity: 0.22,
+    shadowRadius: 22,
+    shadowOffset: { width: 0, height: 14 },
+    elevation: 8,
+  },
+  scanInformeContent: {
+    paddingBottom: 6,
   },
   formModalHeader: {
     flexDirection: 'row',
