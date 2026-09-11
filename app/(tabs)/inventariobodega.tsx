@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActivityIndicator,
   Alert,
+  Dimensions,
   Modal,
   Pressable,
   RefreshControl,
@@ -27,6 +28,8 @@ import {
   fetchInventarioBodegaTipos,
   validarSerieEquipo,
 } from '@/lib/api';
+
+const HISTORY_CARD_WIDTH = Math.min(Dimensions.get('window').width - 72, 360);
 
 type ResumenToma = {
   total_esperado?: number;
@@ -720,15 +723,17 @@ export default function InventarioBodegaScreen() {
 	                  >
 	                    <View style={styles.tomaPillTop}>
 	                      <View style={styles.tomaPillMain}>
-	                        <Text style={styles.tomaPillTitle} numberOfLines={2}>
-	                          {item.nombre || `Informe ${item.id_toma}`}
-	                        </Text>
-	                        <View style={styles.tomaPillMetaRow}>
-	                          <Text style={styles.tomaPillMeta}>
-	                            {formatFecha(item.fecha_inicio)} - 
+	                        <View style={styles.tomaPillHeader}>
+	                          <Text style={styles.tomaPillTitle} numberOfLines={2}>
+	                            {item.nombre || `Informe ${item.id_toma}`}
 	                          </Text>
 	                          <Text style={[styles.tomaPillStatus, abierta ? styles.tomaPillStatusOpen : styles.tomaPillStatusClosed]}>
-	                            {abierta ? 'Abierto' : 'Finalizado'}
+	                            {abierta ? 'Pendiente' : 'Finalizado'}
+	                          </Text>
+	                        </View>
+	                        <View style={styles.tomaPillMetaRow}>
+	                          <Text style={styles.tomaPillMeta}>
+	                            {formatFecha(item.fecha_inicio)}
 	                          </Text>
 	                        </View>
 	                      </View>
@@ -1481,9 +1486,9 @@ const styles = StyleSheet.create({
     paddingRight: 6,
   },
   tomaPill: {
-    width: 238,
+    width: HISTORY_CARD_WIDTH,
     borderRadius: 18,
-    padding: 11,
+    padding: 13,
     backgroundColor: '#f8fafc',
     borderWidth: 1,
     borderColor: '#dbeafe',
@@ -1493,14 +1498,20 @@ const styles = StyleSheet.create({
     borderColor: '#facc15',
   },
   tomaPillClosed: {
-    backgroundColor: '#f8fafc',
-    borderColor: '#dbeafe',
+    backgroundColor: '#f0fdf4',
+    borderColor: '#86efac',
   },
   tomaPillTop: {
-    gap: 9,
+    gap: 10,
   },
   tomaPillMain: {
-    minHeight: 45,
+    minHeight: 44,
+  },
+  tomaPillHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 10,
   },
   tomaViewBtn: {
     flex: 1,
@@ -1544,6 +1555,7 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
   tomaPillTitle: {
+    flex: 1,
     color: '#0f172a',
     fontSize: 14,
     lineHeight: 18,
@@ -1557,18 +1569,26 @@ const styles = StyleSheet.create({
   tomaPillMetaRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    flexWrap: 'wrap',
-    marginTop: 3,
+    marginTop: 4,
   },
   tomaPillStatus: {
-    fontSize: 12,
+    minWidth: 78,
+    borderRadius: 999,
+    overflow: 'hidden',
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    textAlign: 'center',
+    fontSize: 10,
     fontWeight: '900',
+    textTransform: 'uppercase',
   },
   tomaPillStatusOpen: {
-    color: '#15803d',
+    color: '#b91c1c',
+    backgroundColor: '#fee2e2',
   },
   tomaPillStatusClosed: {
-    color: '#64748b',
+    color: '#15803d',
+    backgroundColor: '#dcfce7',
   },
   loadingBox: {
     borderRadius: 22,
