@@ -136,10 +136,8 @@ export default function InventarioBodegaScreen() {
   const [crearInformeModalVisible, setCrearInformeModalVisible] = useState(false);
   const [verInformeModalVisible, setVerInformeModalVisible] = useState(false);
   const [scanInformeModalVisible, setScanInformeModalVisible] = useState(false);
-  const [detalleEscaneoModalVisible, setDetalleEscaneoModalVisible] = useState(false);
   const [informeDetalle, setInformeDetalle] = useState<TomaInventario | null>(null);
   const [informeDetalleLoading, setInformeDetalleLoading] = useState(false);
-  const [ultimoEscaneo, setUltimoEscaneo] = useState<any | null>(null);
   const [scannerTarget, setScannerTarget] = useState<'informe' | 'bodega'>('informe');
   const [valorManual, setValorManual] = useState('');
   const [nombreToma, setNombreToma] = useState('');
@@ -158,6 +156,22 @@ export default function InventarioBodegaScreen() {
   const escaneosInformeDetalle = Array.isArray(informeDetalle?.escaneos) ? informeDetalle.escaneos : [];
   const faltantesInformeDetalle = Array.isArray(resumenInformeDetalle.faltantes_detalle) ? resumenInformeDetalle.faltantes_detalle : [];
   const tomaAbierta = String(tomaActiva?.estado || '').toLowerCase() !== 'cerrado';
+  const escaneosTomaActiva = useMemo(
+    () => (Array.isArray(tomaActiva?.escaneos) ? tomaActiva.escaneos : []),
+    [tomaActiva?.escaneos]
+  );
+  const escaneosTomaActivaVisibles = useMemo(
+    () =>
+      [...escaneosTomaActiva]
+        .sort((a, b) => {
+          const fechaA = Date.parse(String(a?.created_at || '')) || 0;
+          const fechaB = Date.parse(String(b?.created_at || '')) || 0;
+          if (fechaA !== fechaB) return fechaB - fechaA;
+          return Number(b?.id_escaneo || 0) - Number(a?.id_escaneo || 0);
+        })
+        .slice(0, 10),
+    [escaneosTomaActiva]
+  );
   const totalEscaneadoActual = Number(tomaActiva?.resumen?.total_escaneos || 0);
   const abiertas = useMemo(() => tomas.filter((item) => String(item.estado || '').toLowerCase() !== 'cerrado').length, [tomas]);
   const cerradas = Math.max(tomas.length - abiertas, 0);
@@ -165,10 +179,6 @@ export default function InventarioBodegaScreen() {
     () => tiposEquipo.filter((tipo) => !esEquipoPorCantidadInventario(tipo.equipo_nombre)),
     [tiposEquipo]
   );
-  const totalTipoSeleccionado = useMemo(() => {
-    const item = tiposEscaneables.find((tipo) => normalizarNombreEquipo(tipo.equipo_nombre) === normalizarNombreEquipo(tipoSeleccionado));
-    return Number(item?.total_esperado || 0);
-  }, [tipoSeleccionado, tiposEscaneables]);
   const categoriasInventario = useMemo(() => {
     const out: string[] = [];
     tiposEscaneables.forEach((tipo) => {
@@ -280,7 +290,6 @@ export default function InventarioBodegaScreen() {
     setTipoSeleccionado('');
     setBusquedaEquipo('');
     setValorManual('');
-    setUltimoEscaneo(null);
     setScanInformeModalVisible(true);
     try {
       const detalle = await fetchInventarioBodegaToma(idToma);
@@ -397,11 +406,6 @@ export default function InventarioBodegaScreen() {
         tomaActivaIdRef.current = Number(toma?.id_toma || tomaActiva?.id_toma || 0);
         setTomaActiva(toma);
       }
-      if (!tipoSeleccionado && tipoFinal) {
-        setTipoSeleccionado(tipoFinal);
-        if (categoriaDetectada) setCategoriaSeleccionada(categoriaDetectada);
-      }
-      setUltimoEscaneo(data?.escaneo || null);
       setValorManual('');
     } catch (error: any) {
       Alert.alert('Inventario bodega', error?.response?.data?.error || 'No se pudo registrar el escaneo.');
@@ -857,7 +861,7 @@ export default function InventarioBodegaScreen() {
 	                    {tomaActiva?.nombre || 'Informe de inventario'}
 	                  </Text>
 	                  <Text style={styles.formModalSubtitle}>
-	                    Puedes seleccionar equipo o escanear directo si ya esta en bodega.
+	                    Escanea el codigo o N serie. El sistema identifica el equipo desde bodega.
 	                  </Text>
 	                </View>
 	              </View>
@@ -867,94 +871,10 @@ export default function InventarioBodegaScreen() {
 	            </View>
 
 	            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scanInformeContent}>
-	              <View style={styles.typeBox}>
-	                <View style={styles.sectionHeader}>
-	                  <View style={{ flex: 1 }}>
-	                    <Text style={styles.kicker}>CATEGORIA Y EQUIPO</Text>
-	                    <Text style={styles.scanTitle}>Selecciona categoria, luego equipo</Text>
-	                  </View>
-	                  {tipoSeleccionado ? (
-	                    <View style={styles.typeCounter}>
-	                      <Text style={styles.typeCounterNumber}>{totalTipoSeleccionado}</Text>
-	                      <Text style={styles.typeCounterLabel}>esperados</Text>
-	                    </View>
-	                  ) : null}
-	                </View>
-	                <Text style={styles.selectorLabel}>Selecciona categoria</Text>
-	                {categoriasInventario.length ? (
-	                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.categoryList}>
-	                    {categoriasInventario.map((categoria) => {
-	                      const selected = categoria === categoriaSeleccionada;
-	                      return (
-	                        <Pressable
-	                          key={categoria}
-	                          style={[styles.categoryPill, selected && styles.categoryPillActive]}
-	                          onPress={() => {
-	                            setCategoriaSeleccionada(categoria);
-	                            setTipoSeleccionado('');
-	                            setBusquedaEquipo('');
-	                          }}
-	                        >
-	                          <Text style={[styles.categoryPillText, selected && styles.categoryPillTextActive]}>
-	                            {categoria}
-	                          </Text>
-	                        </Pressable>
-	                      );
-	                    })}
-	                  </ScrollView>
-	                ) : null}
-	                <Text style={styles.selectorLabel}>Busca o selecciona equipo</Text>
-	                <View style={styles.searchBox}>
-	                  <Ionicons name="search-outline" size={17} color="#64748b" />
-	                  <TextInput
-	                    style={styles.searchInput}
-	                    value={busquedaEquipo}
-	                    onChangeText={setBusquedaEquipo}
-	                    placeholder="Buscar equipo, ejemplo: router"
-	                    placeholderTextColor="#94a3b8"
-	                  />
-	                  {!!busquedaEquipo.trim() && (
-	                    <Pressable onPress={() => setBusquedaEquipo('')}>
-	                      <Ionicons name="close-circle" size={18} color="#94a3b8" />
-	                    </Pressable>
-	                  )}
-	                </View>
-	                {tiposVisibles.length ? (
-	                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.typeList}>
-	                    {tiposVisibles.map((tipo) => {
-	                      const nombre = String(tipo.equipo_nombre || '').trim();
-	                      const categoria = String(tipo.categoria || 'Sin categoria').trim() || 'Sin categoria';
-	                      const selected = nombre.toLowerCase() === tipoSeleccionado.trim().toLowerCase();
-	                      return (
-	                        <Pressable
-	                          key={`${categoria}-${nombre}`}
-	                          style={[styles.typePill, selected && styles.typePillActive]}
-	                          onPress={() => {
-	                            setCategoriaSeleccionada(categoria);
-	                            setTipoSeleccionado(selected ? '' : nombre);
-	                          }}
-	                        >
-	                          <Text style={[styles.typePillTitle, selected && styles.typePillTitleActive]} numberOfLines={1}>
-	                            {nombre}
-	                          </Text>
-	                          <Text style={[styles.typePillMeta, selected && styles.typePillMetaActive]}>
-	                            {busquedaEquipo.trim() ? categoria : `${Number(tipo.total_esperado || 0)} en bodega`}
-	                          </Text>
-	                        </Pressable>
-	                      );
-	                    })}
-	                  </ScrollView>
-	                ) : (
-	                  <Text style={styles.emptyText}>No hay equipos disponibles para esta categoria.</Text>
-	                )}
-	              </View>
-
 	              <View style={styles.scanBox}>
 	                <Text style={styles.scanTitle}>Registrar equipo</Text>
 	                <Text style={styles.scanHint}>
-	                  {tipoSeleccionado
-	                    ? `Escaneando: ${tipoSeleccionado}`
-	                    : 'Escanea directo por codigo o N serie si ya existe en bodega.'}
+	                  Escanea o ingresa el codigo. Si el equipo no esta en bodega, primero debes agregarlo.
 	                </Text>
 	                <View style={styles.scanSummaryCard}>
 	                  <View style={styles.scanSummaryIcon}>
@@ -964,14 +884,29 @@ export default function InventarioBodegaScreen() {
 	                    <Text style={styles.scanSummaryLabel}>Escaneados</Text>
 	                    <Text style={styles.scanSummaryValue}>{totalEscaneadoActual}</Text>
 	                  </View>
-	                  <Pressable
-	                    style={[styles.scanDetailBtn, !ultimoEscaneo && styles.btnDisabled]}
-	                    disabled={!ultimoEscaneo}
-	                    onPress={() => setDetalleEscaneoModalVisible(true)}
-	                  >
-	                    <Ionicons name="eye-outline" size={15} color="#0b3b8c" />
-	                    <Text style={styles.scanDetailBtnText}>Ver detalle</Text>
-	                  </Pressable>
+	                </View>
+	                <View style={styles.scanRegisteredBox}>
+	                  <View style={styles.scanRegisteredHeader}>
+	                    <Text style={styles.scanRegisteredTitle}>Equipos llevados</Text>
+	                    <Text style={styles.scanRegisteredCount}>{escaneosTomaActiva.length}</Text>
+	                  </View>
+	                  {escaneosTomaActivaVisibles.length ? (
+	                    escaneosTomaActivaVisibles.map((item) => (
+	                      <View key={item.id_escaneo || `${item.codigo}-${item.created_at}`} style={styles.scanRegisteredItem}>
+	                        <Ionicons name="checkmark-circle-outline" size={16} color="#16a34a" />
+	                        <View style={{ flex: 1 }}>
+	                          <Text style={styles.scanRegisteredName} numberOfLines={1}>
+	                            {item.equipo_nombre || 'Equipo'}
+	                          </Text>
+	                          <Text style={styles.scanRegisteredCode} numberOfLines={1}>Codigo: {item.codigo || '-'}</Text>
+	                          <Text style={styles.scanRegisteredMeta} numberOfLines={1}>Serie: {item.numero_serie || '-'}</Text>
+	                        </View>
+	                        <Badge resultado={item.resultado} />
+	                      </View>
+	                    ))
+	                  ) : (
+	                    <Text style={styles.scanRegisteredEmpty}>Sin equipos escaneados aun.</Text>
+	                  )}
 	                </View>
 	                <View style={styles.scanRow}>
 	                  <TextInput
@@ -1091,43 +1026,6 @@ export default function InventarioBodegaScreen() {
 	                )}
 	              </ScrollView>
 	            ) : null}
-	          </View>
-	        </View>
-	      </Modal>
-
-	      <Modal visible={detalleEscaneoModalVisible} animationType="fade" transparent>
-	        <View style={styles.formModalOverlay}>
-	          <View style={styles.scanDetailModalCard}>
-	            <View style={styles.formModalHeader}>
-	              <View style={styles.formModalTitleWrap}>
-	                <View style={styles.reportModalIcon}>
-	                  <Ionicons name="barcode-outline" size={22} color="#ffffff" />
-	                </View>
-	                <View style={{ flex: 1 }}>
-	                  <Text style={styles.kicker}>ULTIMO ESCANEO</Text>
-	                  <Text style={styles.formModalTitle}>Detalle del equipo</Text>
-	                </View>
-	              </View>
-	              <Pressable onPress={() => setDetalleEscaneoModalVisible(false)}>
-	                <Ionicons name="close-circle" size={27} color="#64748b" />
-	              </Pressable>
-	            </View>
-
-	            <View style={styles.scanDetailRow}>
-	              <Text style={styles.reportInfoLabel}>Equipo</Text>
-	              <Text style={styles.scanDetailValue}>{ultimoEscaneo?.equipo_nombre || 'Equipo no identificado'}</Text>
-	            </View>
-	            <View style={styles.scanDetailRow}>
-	              <Text style={styles.reportInfoLabel}>N serie</Text>
-	              <Text style={styles.scanDetailValue}>{ultimoEscaneo?.numero_serie || '-'}</Text>
-	            </View>
-	            <View style={styles.scanDetailRow}>
-	              <Text style={styles.reportInfoLabel}>Codigo</Text>
-	              <Text style={styles.scanDetailValue}>{ultimoEscaneo?.codigo || '-'}</Text>
-	            </View>
-	            <View style={styles.scanDetailFooter}>
-	              <Badge resultado={ultimoEscaneo?.resultado} />
-	            </View>
 	          </View>
 	        </View>
 	      </Modal>
@@ -1887,21 +1785,66 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     marginTop: 1,
   },
-  scanDetailBtn: {
+  scanRegisteredBox: {
+    borderRadius: 18,
+    padding: 10,
+    marginBottom: 12,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+  },
+  scanRegisteredHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 5,
-    borderRadius: 13,
-    paddingHorizontal: 10,
-    paddingVertical: 9,
-    backgroundColor: '#eaf2ff',
-    borderWidth: 1,
-    borderColor: '#bfdbfe',
+    justifyContent: 'space-between',
+    marginBottom: 8,
   },
-  scanDetailBtnText: {
+  scanRegisteredTitle: {
+    color: '#0f172a',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  scanRegisteredCount: {
+    minWidth: 28,
+    borderRadius: 999,
+    overflow: 'hidden',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    textAlign: 'center',
+    color: '#0b3b8c',
+    backgroundColor: '#dbeafe',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  scanRegisteredItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#eef2f7',
+  },
+  scanRegisteredName: {
+    color: '#0f172a',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  scanRegisteredCode: {
     color: '#0b3b8c',
     fontSize: 11,
     fontWeight: '900',
+    marginTop: 2,
+  },
+  scanRegisteredMeta: {
+    color: '#475569',
+    fontSize: 11,
+    fontWeight: '700',
+    marginTop: 2,
+  },
+  scanRegisteredEmpty: {
+    color: '#64748b',
+    fontSize: 12,
+    fontWeight: '700',
   },
   scanRow: {
     flexDirection: 'row',
@@ -2158,36 +2101,6 @@ const styles = StyleSheet.create({
   },
   scanInformeContent: {
     paddingBottom: 6,
-  },
-  scanDetailModalCard: {
-    borderRadius: 26,
-    padding: 18,
-    backgroundColor: '#ffffff',
-    borderWidth: 1,
-    borderColor: '#bfdbfe',
-    shadowColor: '#0f172a',
-    shadowOpacity: 0.22,
-    shadowRadius: 22,
-    shadowOffset: { width: 0, height: 14 },
-    elevation: 8,
-  },
-  scanDetailRow: {
-    borderRadius: 16,
-    padding: 12,
-    marginBottom: 9,
-    backgroundColor: '#f8fafc',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-  },
-  scanDetailValue: {
-    color: '#0f172a',
-    fontSize: 16,
-    fontWeight: '900',
-    marginTop: 4,
-  },
-  scanDetailFooter: {
-    alignItems: 'flex-start',
-    marginTop: 2,
   },
   formModalHeader: {
     flexDirection: 'row',
