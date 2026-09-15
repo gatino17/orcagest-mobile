@@ -150,7 +150,6 @@ export default function InventarioBodegaScreen() {
   const [bodegaObs, setBodegaObs] = useState('');
   const [bodegaSaving, setBodegaSaving] = useState(false);
   const scanLockRef = useRef(false);
-  const lastScanRef = useRef<{ value: string; time: number }>({ value: '', time: 0 });
   const tomaActivaIdRef = useRef<number>(0);
 
   const resumenInformeDetalle = informeDetalle?.resumen || {};
@@ -171,8 +170,8 @@ export default function InventarioBodegaScreen() {
           return Number(b?.id_escaneo || 0) - Number(a?.id_escaneo || 0);
         })
         .slice(0, 10),
-    [escaneosTomaActiva]
-  );
+	    [escaneosTomaActiva]
+	  );
   const totalEscaneadoActual = Number(tomaActiva?.resumen?.total_escaneos || 0);
   const abiertas = useMemo(() => tomas.filter((item) => String(item.estado || '').toLowerCase() !== 'cerrado').length, [tomas]);
   const cerradas = Math.max(tomas.length - abiertas, 0);
@@ -195,6 +194,18 @@ export default function InventarioBodegaScreen() {
   const normalizarBusqueda = useCallback(
     (valor: string) => String(valor || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase(),
     []
+  );
+  const estaEnEquiposLlevados = useCallback(
+    (valor: string) => {
+      const normalizado = normalizarBusqueda(valor);
+      if (!normalizado) return false;
+      return escaneosTomaActiva.some((item) => {
+        const codigo = normalizarBusqueda(item?.codigo);
+        const serie = normalizarBusqueda(item?.numero_serie);
+        return codigo === normalizado || serie === normalizado;
+      });
+    },
+    [escaneosTomaActiva, normalizarBusqueda]
   );
   const tiposVisibles = useMemo(() => {
     const term = normalizarBusqueda(busquedaEquipo);
@@ -382,17 +393,27 @@ export default function InventarioBodegaScreen() {
     }
   }, [nombreToma, observacion, saving, ubicacion]);
 
-  const registrarValor = useCallback(async (valor: string) => {
-    const limpio = String(valor || '').trim();
-    if (!limpio || !tomaActiva?.id_toma || saving || !tomaAbierta) return;
-    setSaving(true);
+	  const registrarValor = useCallback(async (valor: string) => {
+	    const limpio = String(valor || '').trim();
+	    if (!limpio || !tomaActiva?.id_toma || saving || !tomaAbierta) return;
+	    if (estaEnEquiposLlevados(limpio)) {
+	      Alert.alert('Inventario bodega', 'Este equipo ya esta en los llevados recientes.');
+	      setValorManual('');
+	      return;
+	    }
+	    setSaving(true);
     try {
       const equipoBodega = await buscarEquipoBodegaPorValor(limpio);
-      if (!equipoBodega) {
-        await avisarEquipoNoDisponibleBodega(limpio);
-        return;
-      }
-      const tipoDetectado = String(equipoBodega.equipo_nombre || '').trim();
+	      if (!equipoBodega) {
+	        await avisarEquipoNoDisponibleBodega(limpio);
+	        return;
+	      }
+	      if (estaEnEquiposLlevados(equipoBodega.codigo) || estaEnEquiposLlevados(equipoBodega.numero_serie)) {
+	        Alert.alert('Inventario bodega', 'Este equipo ya esta en los llevados recientes.');
+	        setValorManual('');
+	        return;
+	      }
+	      const tipoDetectado = String(equipoBodega.equipo_nombre || '').trim();
       const tipoFinal = tipoSeleccionado || tipoDetectado;
       const categoriaDetectada =
         tiposEscaneables.find((tipo) => normalizarNombreEquipo(tipo.equipo_nombre) === normalizarNombreEquipo(tipoDetectado))?.categoria ||
@@ -428,8 +449,9 @@ export default function InventarioBodegaScreen() {
   }, [
     avisarEquipoNoDisponibleBodega,
     buscarEquipoBodegaPorValor,
-    categoriaSeleccionada,
-    saving,
+	    categoriaSeleccionada,
+	    estaEnEquiposLlevados,
+	    saving,
     tipoSeleccionado,
     tiposEscaneables,
     tomaAbierta,
@@ -475,13 +497,7 @@ export default function InventarioBodegaScreen() {
 		      return;
 		    }
 		    const raw = String(event?.data || '').trim();
-		    const normalized = normalizarBusqueda(raw);
-		    const now = Date.now();
-		    if (lastScanRef.current.value === normalized && now - lastScanRef.current.time < 2500) {
-		      scanLockRef.current = false;
-		      return;
-		    }
-		    lastScanRef.current = { value: normalized, time: now };
+		    setScannerVisible(false);
 		    registrarValor(raw);
 		  }, [mostrarEquipoExistente, normalizarBusqueda, registrarValor, scannerTarget, separarCodigoSerieEscaneado]);
 
@@ -1064,44 +1080,13 @@ export default function InventarioBodegaScreen() {
                 onBarcodeScanned={scannerVisible ? handleBarcodeScanned : undefined}
               />
             )}
-	            <View pointerEvents="none" style={[styles.scanFrame, scannerTarget === 'informe' && styles.scanFrameWithList]} />
+	            <View pointerEvents="none" style={styles.scanFrame} />
 	            <View style={styles.camHeader}>
 	              <Text style={styles.camTitle}>Escanea codigo o serie</Text>
 	              <Pressable onPress={() => setScannerVisible(false)}>
 	                <Ionicons name="close-circle" size={28} color="#fff" />
 	              </Pressable>
 	            </View>
-	            {scannerTarget === 'informe' ? (
-	              <View style={styles.camScanList}>
-	                <View style={styles.camScanListHeader}>
-	                  <Text style={styles.camScanListTitle}>Equipos escaneados</Text>
-	                  <Text style={styles.camScanListCount}>{totalEscaneadoActual}</Text>
-	                </View>
-	                {saving ? (
-	                  <View style={styles.camScanSaving}>
-	                    <ActivityIndicator size="small" color="#38bdf8" />
-	                    <Text style={styles.camScanSavingText}>Registrando...</Text>
-	                  </View>
-	                ) : null}
-	                {escaneosTomaActivaVisibles.length ? (
-	                  escaneosTomaActivaVisibles.slice(0, 4).map((item) => (
-	                    <View key={`cam-${item.id_escaneo || item.codigo || item.numero_serie}`} style={styles.camScanItem}>
-	                      <Ionicons name="checkmark-circle" size={15} color="#22c55e" />
-	                      <View style={{ flex: 1 }}>
-	                        <Text style={styles.camScanItemName} numberOfLines={1}>
-	                          {item.equipo_nombre || 'Equipo'}
-	                        </Text>
-	                        <Text style={styles.camScanItemMeta} numberOfLines={1}>
-	                          Codigo: {item.codigo || '-'} | Serie: {item.numero_serie || '-'}
-	                        </Text>
-	                      </View>
-	                    </View>
-	                  ))
-	                ) : (
-	                  <Text style={styles.camScanEmpty}>Aun no hay equipos escaneados.</Text>
-	                )}
-	              </View>
-	            ) : null}
 	          </View>
 	        </View>
 	      </Modal>
@@ -2328,77 +2313,6 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '900',
   },
-  camScanList: {
-    position: 'absolute',
-    left: 12,
-    right: 12,
-    bottom: 12,
-    borderRadius: 20,
-    padding: 12,
-    backgroundColor: 'rgba(15,23,42,0.9)',
-    borderWidth: 1,
-    borderColor: 'rgba(148,163,184,0.35)',
-  },
-  camScanListHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 6,
-  },
-  camScanListTitle: {
-    color: '#e0f2fe',
-    fontSize: 12,
-    fontWeight: '900',
-    letterSpacing: 0.5,
-    textTransform: 'uppercase',
-  },
-  camScanListCount: {
-    minWidth: 30,
-    borderRadius: 999,
-    overflow: 'hidden',
-    paddingHorizontal: 9,
-    paddingVertical: 3,
-    textAlign: 'center',
-    color: '#082f49',
-    backgroundColor: '#7dd3fc',
-    fontSize: 13,
-    fontWeight: '900',
-  },
-  camScanSaving: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 7,
-    marginBottom: 5,
-  },
-  camScanSavingText: {
-    color: '#bfdbfe',
-    fontSize: 11,
-    fontWeight: '800',
-  },
-  camScanItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 7,
-    paddingVertical: 5,
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(148,163,184,0.22)',
-  },
-  camScanItemName: {
-    color: '#ffffff',
-    fontSize: 12,
-    fontWeight: '900',
-  },
-  camScanItemMeta: {
-    color: '#cbd5e1',
-    fontSize: 10,
-    fontWeight: '700',
-    marginTop: 1,
-  },
-  camScanEmpty: {
-    color: '#cbd5e1',
-    fontSize: 11,
-    fontWeight: '700',
-  },
   scanFrame: {
     position: 'absolute',
     left: 50,
@@ -2408,10 +2322,6 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     borderWidth: 3,
     borderColor: '#38bdf8',
-  },
-  scanFrameWithList: {
-    top: 105,
-    height: 115,
   },
   cameraFallback: {
     flex: 1,
