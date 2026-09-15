@@ -1036,23 +1036,11 @@ export default function InventarioBodegaScreen() {
 	              </View>
 	            ) : informeDetalle ? (
 	              <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.reportModalContent}>
-	                <View style={styles.reportInfoGrid}>
-	                  <View style={styles.reportInfoItem}>
-	                    <Text style={styles.reportInfoLabel}>Ubicacion</Text>
-	                    <Text style={styles.reportInfoValue}>{informeDetalle.ubicacion || 'Bodega central'}</Text>
-	                  </View>
-	                  <View style={styles.reportInfoItem}>
-	                    <Text style={styles.reportInfoLabel}>Responsable</Text>
-	                    <Text style={styles.reportInfoValue}>{informeDetalle.responsable_nombre || '-'}</Text>
-	                  </View>
-	                  <View style={styles.reportInfoItem}>
-	                    <Text style={styles.reportInfoLabel}>Inicio</Text>
-	                    <Text style={styles.reportInfoValue}>{formatFecha(informeDetalle.fecha_inicio)}</Text>
-	                  </View>
-	                  <View style={styles.reportInfoItem}>
-	                    <Text style={styles.reportInfoLabel}>Cierre</Text>
-	                    <Text style={styles.reportInfoValue}>{formatFecha(informeDetalle.fecha_cierre)}</Text>
-	                  </View>
+	                <View style={styles.reportInfoList}>
+	                  <InfoLine icon="location-outline" label="Ubicacion" value={informeDetalle.ubicacion || 'Bodega central'} />
+	                  <InfoLine icon="person-outline" label="Responsable" value={informeDetalle.responsable_nombre || '-'} />
+	                  <InfoLine icon="calendar-outline" label="Inicio" value={formatFecha(informeDetalle.fecha_inicio)} />
+	                  <InfoLine icon="flag-outline" label="Cierre" value={formatFecha(informeDetalle.fecha_cierre)} />
 	                </View>
 
 	                {!!informeDetalle.observacion && (
@@ -1063,10 +1051,10 @@ export default function InventarioBodegaScreen() {
 	                )}
 
 	                <View style={styles.reportKpiGrid}>
-	                  <Kpi label="Esperados" value={resumenInformeDetalle.total_esperado || 0} color="#0b3b8c" />
-	                  <Kpi label="Encontrados" value={resumenInformeDetalle.encontrados || 0} color="#16a34a" />
-	                  <Kpi label="Faltantes" value={resumenInformeDetalle.faltantes || 0} color="#dc2626" />
-	                  <Kpi label="No esperados" value={resumenInformeDetalle.no_esperados || 0} color="#f59e0b" />
+	                  <Kpi icon="cube-outline" label="Esperados" value={resumenInformeDetalle.total_esperado || 0} color="#0b3b8c" />
+	                  <Kpi icon="checkmark-circle-outline" label="Encontrados" value={resumenInformeDetalle.encontrados || 0} color="#16a34a" />
+	                  <Kpi icon="alert-circle-outline" label="Faltantes" value={resumenInformeDetalle.faltantes || 0} color="#dc2626" />
+	                  <Kpi icon="help-circle-outline" label="No esperados" value={resumenInformeDetalle.no_esperados || 0} color="#f59e0b" />
 	                </View>
 
 	                <Text style={styles.reportSectionTitle}>Ultimos escaneos</Text>
@@ -1076,7 +1064,8 @@ export default function InventarioBodegaScreen() {
 	                      <Ionicons name="barcode-outline" size={17} color="#0b3b8c" />
 	                      <View style={{ flex: 1 }}>
 	                        <Text style={styles.itemTitle}>{item.equipo_nombre || 'Equipo'}</Text>
-	                        <Text style={styles.itemMeta}>Codigo: {item.codigo || '-'} - Serie: {item.numero_serie || '-'}</Text>
+	                        <Text style={styles.itemCode}>Codigo: {item.codigo || '-'}</Text>
+	                        <Text style={styles.itemMeta}>Serie: {item.numero_serie || '-'}</Text>
 	                      </View>
 	                      <Badge resultado={item.resultado} />
 	                    </View>
@@ -1092,7 +1081,8 @@ export default function InventarioBodegaScreen() {
 	                      <Ionicons name="alert-circle-outline" size={17} color="#dc2626" />
 	                      <View style={{ flex: 1 }}>
 	                        <Text style={styles.itemTitle}>{item.equipo_nombre || 'Equipo'}</Text>
-	                        <Text style={styles.itemMeta}>Codigo: {item.codigo || '-'} - Serie: {item.numero_serie || '-'}</Text>
+	                        <Text style={styles.itemCode}>Codigo: {item.codigo || '-'}</Text>
+	                        <Text style={styles.itemMeta}>Serie: {item.numero_serie || '-'}</Text>
 	                      </View>
 	                    </View>
 	                  ))
@@ -1170,11 +1160,46 @@ export default function InventarioBodegaScreen() {
   );
 }
 
-function Kpi({ label, value, color }: { label: string; value: number | string; color: string }) {
+function InfoLine({
+  icon,
+  label,
+  value,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  label: string;
+  value: string | number;
+}) {
+  return (
+    <View style={styles.reportInfoLine}>
+      <Ionicons name={icon} size={15} color="#0b3b8c" />
+      <Text style={styles.reportInfoInlineLabel}>{label}</Text>
+      <Text style={styles.reportInfoInlineValue} numberOfLines={1}>
+        {value}
+      </Text>
+    </View>
+  );
+}
+
+function Kpi({
+  icon,
+  label,
+  value,
+  color,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  label: string;
+  value: number | string;
+  color: string;
+}) {
   return (
     <View style={styles.kpiCard}>
-      <Text style={styles.kpiLabel}>{label}</Text>
-      <Text style={[styles.kpiValue, { color }]}>{value}</Text>
+      <View style={[styles.kpiIcon, { backgroundColor: `${color}18` }]}>
+        <Ionicons name={icon} size={15} color={color} />
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={styles.kpiLabel}>{label}</Text>
+        <Text style={[styles.kpiValue, { color }]}>{value}</Text>
+      </View>
     </View>
   );
 }
@@ -1667,23 +1692,35 @@ const styles = StyleSheet.create({
     marginTop: 16,
   },
   kpiCard: {
-    width: '47%',
-    borderRadius: 18,
-    padding: 12,
-    backgroundColor: '#ffffff',
+    width: '48%',
+    minHeight: 58,
+    borderRadius: 16,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#f8fafc',
     borderWidth: 1,
     borderColor: '#dbeafe',
   },
+  kpiIcon: {
+    width: 30,
+    height: 30,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   kpiLabel: {
     color: '#64748b',
-    fontSize: 11,
+    fontSize: 9,
     fontWeight: '900',
     textTransform: 'uppercase',
   },
   kpiValue: {
-    fontSize: 24,
+    fontSize: 20,
     fontWeight: '900',
-    marginTop: 3,
+    lineHeight: 23,
   },
   typeBox: {
     marginTop: 16,
@@ -1986,11 +2023,17 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '900',
   },
+  itemCode: {
+    color: '#0b3b8c',
+    fontSize: 12,
+    fontWeight: '900',
+    marginTop: 4,
+  },
   itemMeta: {
     color: '#475569',
     fontSize: 12,
     fontWeight: '700',
-    marginTop: 3,
+    marginTop: 2,
   },
   itemDate: {
     color: '#94a3b8',
@@ -2213,19 +2256,33 @@ const styles = StyleSheet.create({
   reportModalContent: {
     paddingBottom: 6,
   },
-  reportInfoGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 10,
+  reportInfoList: {
+    gap: 8,
     marginBottom: 12,
+    paddingBottom: 11,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e2e8f0',
   },
-  reportInfoItem: {
-    width: '47%',
-    borderRadius: 16,
-    padding: 11,
-    backgroundColor: '#f8fafc',
-    borderWidth: 1,
-    borderColor: '#dbeafe',
+  reportInfoLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    minHeight: 24,
+  },
+  reportInfoInlineLabel: {
+    minWidth: 82,
+    color: '#64748b',
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0.35,
+    textTransform: 'uppercase',
+  },
+  reportInfoInlineValue: {
+    flex: 1,
+    color: '#0f172a',
+    fontSize: 12,
+    fontWeight: '900',
+    textAlign: 'right',
   },
   reportInfoLabel: {
     color: '#64748b',
