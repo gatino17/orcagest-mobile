@@ -205,13 +205,11 @@ export default function InventarioBodegaScreen() {
   );
   const estaEnEquiposLlevados = useCallback(
     (valor: string) => {
-      const normalizado = normalizarBusqueda(valor);
-      if (!normalizado) return false;
-      return escaneosTomaActiva.some((item) => {
-        const codigo = normalizarBusqueda(item?.codigo);
-        const serie = normalizarBusqueda(item?.numero_serie);
-        return codigo === normalizado || serie === normalizado;
-      });
+      const serieBuscada = normalizarBusqueda(valor);
+      if (!serieBuscada) return false;
+      return escaneosTomaActiva.some(
+        (item) => normalizarBusqueda(item?.numero_serie) === serieBuscada
+      );
     },
     [escaneosTomaActiva, normalizarBusqueda]
   );
@@ -247,20 +245,6 @@ export default function InventarioBodegaScreen() {
       `Ya existe en ${ubicacionExistente}.\n\nEquipo: ${equipoExistente}\nN serie: ${serieExistente}\nEstado: ${estadoExistente}`
     );
   }, []);
-
-  const buscarEquipoBodegaPorValor = useCallback(async (valor: string) => {
-    const limpio = String(valor || '').trim();
-    if (!limpio) return null;
-    const { codigo, serie } = separarCodigoSerieEscaneado(limpio);
-    const objetivo = normalizarBusqueda(serie || codigo);
-    const rows = await fetchInventarioBodegaEquipos({ q: serie || codigo });
-    if (!Array.isArray(rows)) return null;
-    return (
-      rows.find((item) => normalizarBusqueda(item?.numero_serie) === objetivo) ||
-      rows.find((item) => normalizarBusqueda(item?.codigo) === objetivo) ||
-      null
-    );
-  }, [normalizarBusqueda, separarCodigoSerieEscaneado]);
 
   const avisarEquipoNoDisponibleBodega = useCallback(async (valor: string) => {
     try {
@@ -312,7 +296,7 @@ export default function InventarioBodegaScreen() {
     setValorManual('');
     setScanInformeModalVisible(true);
     try {
-      const detalle = await fetchInventarioBodegaToma(idToma);
+      const detalle = await fetchInventarioBodegaToma(idToma, { compact: 1 });
       tomaActivaIdRef.current = Number(detalle?.id_toma || idToma || 0);
       setTomaActiva(detalle || null);
     } catch (error: any) {
@@ -409,44 +393,33 @@ export default function InventarioBodegaScreen() {
 	      setValorManual('');
 	      return;
 	    }
-	    setSaving(true);
+    setSaving(true);
     try {
-      const equipoBodega = await buscarEquipoBodegaPorValor(limpio);
-	      if (!equipoBodega) {
-	        await avisarEquipoNoDisponibleBodega(limpio);
-	        return;
-	      }
-	      if (estaEnEquiposLlevados(equipoBodega.codigo) || estaEnEquiposLlevados(equipoBodega.numero_serie)) {
-	        Alert.alert('Inventario bodega', 'Este equipo ya esta en los llevados recientes.');
-	        setValorManual('');
-	        return;
-	      }
-	      const tipoDetectado = String(equipoBodega.equipo_nombre || '').trim();
-      const tipoFinal = tipoSeleccionado || tipoDetectado;
-      const categoriaDetectada =
-        tiposEscaneables.find((tipo) => normalizarNombreEquipo(tipo.equipo_nombre) === normalizarNombreEquipo(tipoDetectado))?.categoria ||
-        categoriaSeleccionada;
       const data = await createInventarioBodegaEscaneo(tomaActiva.id_toma, {
         valor: limpio,
-        tipo_equipo: tipoFinal,
-        categoria: categoriaDetectada,
       });
-      const toma = data?.toma || null;
-      if (toma) {
-        tomaActivaIdRef.current = Number(toma?.id_toma || tomaActiva?.id_toma || 0);
-        setTomaActiva(toma);
+      const escaneo = data?.escaneo || null;
+      if (escaneo) {
+        setTomaActiva((actual) => {
+          if (!actual) return actual;
+          const anteriores = Array.isArray(actual.escaneos) ? actual.escaneos : [];
+          return {
+            ...actual,
+            resumen: data?.resumen || actual.resumen,
+            escaneos: [escaneo, ...anteriores],
+          };
+        });
       }
       setValorManual('');
     } catch (error: any) {
       const data = error?.response?.data;
-      const toma = data?.toma || null;
-      if (toma) {
-        tomaActivaIdRef.current = Number(toma?.id_toma || tomaActiva?.id_toma || 0);
-        setTomaActiva(toma);
-      }
       if (data?.duplicado) {
         Alert.alert('Inventario bodega', data?.error || 'Este equipo ya lo escaneaste. Duplicado.');
         setValorManual('');
+        return;
+      }
+      if (data?.no_disponible) {
+        await avisarEquipoNoDisponibleBodega(limpio);
         return;
       }
       Alert.alert('Inventario bodega', error?.response?.data?.error || 'No se pudo registrar el escaneo.');
@@ -456,12 +429,8 @@ export default function InventarioBodegaScreen() {
     }
   }, [
     avisarEquipoNoDisponibleBodega,
-    buscarEquipoBodegaPorValor,
-	    categoriaSeleccionada,
 	    estaEnEquiposLlevados,
 	    saving,
-    tipoSeleccionado,
-    tiposEscaneables,
     tomaAbierta,
     tomaActiva?.id_toma,
   ]);
