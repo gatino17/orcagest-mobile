@@ -110,6 +110,8 @@ const resultadoTexto = (value?: string) => {
   return 'Registrado';
 };
 
+const esEscaneoEncontrado = (item: any) => String(item?.resultado || '').toLowerCase() === 'encontrado';
+
 const formatFecha = (value?: string | null) => {
   if (!value) return '-';
   const date = new Date(value);
@@ -153,16 +155,22 @@ export default function InventarioBodegaScreen() {
   const tomaActivaIdRef = useRef<number>(0);
 
   const resumenInformeDetalle = informeDetalle?.resumen || {};
-  const escaneosInformeDetalle = Array.isArray(informeDetalle?.escaneos) ? informeDetalle.escaneos : [];
+  const escaneosInformeDetalle = Array.isArray(informeDetalle?.escaneos)
+    ? informeDetalle.escaneos.filter(esEscaneoEncontrado)
+    : [];
   const faltantesInformeDetalle = Array.isArray(resumenInformeDetalle.faltantes_detalle) ? resumenInformeDetalle.faltantes_detalle : [];
   const tomaAbierta = String(tomaActiva?.estado || '').toLowerCase() !== 'cerrado';
   const escaneosTomaActiva = useMemo(
     () => (Array.isArray(tomaActiva?.escaneos) ? tomaActiva.escaneos : []),
     [tomaActiva?.escaneos]
   );
+  const encontradosTomaActiva = useMemo(
+    () => escaneosTomaActiva.filter(esEscaneoEncontrado),
+    [escaneosTomaActiva]
+  );
   const escaneosTomaActivaVisibles = useMemo(
     () =>
-      [...escaneosTomaActiva]
+      [...encontradosTomaActiva]
         .sort((a, b) => {
           const fechaA = Date.parse(String(a?.created_at || '')) || 0;
           const fechaB = Date.parse(String(b?.created_at || '')) || 0;
@@ -170,9 +178,9 @@ export default function InventarioBodegaScreen() {
           return Number(b?.id_escaneo || 0) - Number(a?.id_escaneo || 0);
         })
         .slice(0, 10),
-	    [escaneosTomaActiva]
+	    [encontradosTomaActiva]
 	  );
-  const totalEscaneadoActual = Number(tomaActiva?.resumen?.total_escaneos || 0);
+  const totalEscaneadoActual = encontradosTomaActiva.length;
   const abiertas = useMemo(() => tomas.filter((item) => String(item.estado || '').toLowerCase() !== 'cerrado').length, [tomas]);
   const cerradas = Math.max(tomas.length - abiertas, 0);
   const tiposEscaneables = useMemo(
@@ -917,14 +925,14 @@ export default function InventarioBodegaScreen() {
 	                    <Ionicons name="barcode-outline" size={19} color="#0b3b8c" />
 	                  </View>
 	                  <View style={{ flex: 1 }}>
-	                    <Text style={styles.scanSummaryLabel}>Escaneados</Text>
+	                    <Text style={styles.scanSummaryLabel}>Encontrados</Text>
 	                    <Text style={styles.scanSummaryValue}>{totalEscaneadoActual}</Text>
 	                  </View>
 	                </View>
 	                <View style={styles.scanRegisteredBox}>
 	                  <View style={styles.scanRegisteredHeader}>
 	                    <Text style={styles.scanRegisteredTitle}>Equipos llevados</Text>
-	                    <Text style={styles.scanRegisteredCount}>{escaneosTomaActiva.length}</Text>
+	                    <Text style={styles.scanRegisteredCount}>{encontradosTomaActiva.length}</Text>
 	                  </View>
 	                  {escaneosTomaActivaVisibles.length ? (
 	                    escaneosTomaActivaVisibles.map((item) => (
@@ -1028,7 +1036,7 @@ export default function InventarioBodegaScreen() {
 	                  <Kpi icon="help-circle-outline" label="No esperados" value={resumenInformeDetalle.no_esperados || 0} color="#f59e0b" />
 	                </View>
 
-	                <Text style={styles.reportSectionTitle}>Ultimos escaneos</Text>
+	                <Text style={styles.reportSectionTitle}>Ultimos encontrados</Text>
 	                {escaneosInformeDetalle.length ? (
 	                  escaneosInformeDetalle.slice(0, 6).map((item) => (
 	                    <View key={item.id_escaneo || `${item.codigo}-${item.created_at}`} style={styles.reportListItem}>
@@ -1042,7 +1050,7 @@ export default function InventarioBodegaScreen() {
 	                    </View>
 	                  ))
 	                ) : (
-	                  <Text style={styles.emptyText}>Sin escaneos registrados.</Text>
+	                  <Text style={styles.emptyText}>Sin equipos encontrados.</Text>
 	                )}
 
 	                <Text style={styles.reportSectionTitle}>Faltantes</Text>
