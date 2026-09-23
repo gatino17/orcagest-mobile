@@ -22,6 +22,7 @@ import {
   createInventarioBodegaEquipos,
   createInventarioBodegaEscaneo,
   createInventarioBodegaToma,
+  deleteInventarioBodegaEscaneo,
   fetchInventarioBodegaEquipos,
   fetchInventarioBodegaToma,
   fetchInventarioBodegaTomas,
@@ -36,7 +37,6 @@ type ResumenToma = {
   total_escaneos?: number;
   encontrados?: number;
   faltantes?: number;
-  no_esperados?: number;
   duplicados?: number;
   no_corresponden?: number;
   cumplimiento?: number;
@@ -105,7 +105,6 @@ const resultadoTexto = (value?: string) => {
   if (raw === 'encontrado') return 'Encontrado';
   if (raw === 'manual') return 'Manual';
   if (raw === 'duplicado') return 'Duplicado';
-  if (raw === 'no_esperado') return 'No esperado';
   if (raw === 'no_corresponde') return 'No corresponde';
   return 'Registrado';
 };
@@ -399,6 +398,15 @@ export default function InventarioBodegaScreen() {
         valor: limpio,
       });
       const escaneo = data?.escaneo || null;
+      const resultado = String(escaneo?.resultado || '').toLowerCase();
+      if (escaneo && ['manual', 'no_esperado'].includes(resultado)) {
+        if (escaneo.id_escaneo) {
+          await deleteInventarioBodegaEscaneo(escaneo.id_escaneo).catch(() => null);
+        }
+        await avisarEquipoNoDisponibleBodega(limpio);
+        setValorManual('');
+        return;
+      }
       if (escaneo) {
         setTomaActiva((actual) => {
           if (!actual) return actual;
@@ -1002,7 +1010,6 @@ export default function InventarioBodegaScreen() {
 	                  <Kpi icon="cube-outline" label="Esperados" value={resumenInformeDetalle.total_esperado || 0} color="#0b3b8c" />
 	                  <Kpi icon="checkmark-circle-outline" label="Encontrados" value={resumenInformeDetalle.encontrados || 0} color="#16a34a" />
 	                  <Kpi icon="alert-circle-outline" label="Faltantes" value={resumenInformeDetalle.faltantes || 0} color="#dc2626" />
-	                  <Kpi icon="help-circle-outline" label="No esperados" value={resumenInformeDetalle.no_esperados || 0} color="#f59e0b" />
 	                </View>
 
 	                <Text style={styles.reportSectionTitle}>Ultimos encontrados</Text>
@@ -1103,14 +1110,12 @@ function Kpi({
   color: string;
 }) {
   return (
-    <View style={styles.kpiCard}>
+    <View style={[styles.kpiCard, { borderTopColor: color }]}>
       <View style={[styles.kpiIcon, { backgroundColor: `${color}18` }]}>
         <Ionicons name={icon} size={15} color={color} />
       </View>
-      <View style={{ flex: 1 }}>
-        <Text style={styles.kpiLabel}>{label}</Text>
-        <Text style={[styles.kpiValue, { color }]}>{value}</Text>
-      </View>
+      <Text style={styles.kpiLabel} numberOfLines={1} adjustsFontSizeToFit>{label}</Text>
+      <Text style={[styles.kpiValue, { color }]}>{value}</Text>
     </View>
   );
 }
@@ -1603,35 +1608,38 @@ const styles = StyleSheet.create({
     marginTop: 16,
   },
   kpiCard: {
-    width: '48%',
-    minHeight: 58,
+    flex: 1,
+    minWidth: 0,
+    minHeight: 92,
     borderRadius: 16,
-    paddingHorizontal: 10,
-    paddingVertical: 9,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
+    paddingHorizontal: 9,
+    paddingVertical: 10,
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 4,
     backgroundColor: '#f8fafc',
     borderWidth: 1,
+    borderTopWidth: 3,
     borderColor: '#dbeafe',
   },
   kpiIcon: {
-    width: 30,
-    height: 30,
-    borderRadius: 12,
+    width: 28,
+    height: 28,
+    borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
   },
   kpiLabel: {
     color: '#64748b',
-    fontSize: 9,
+    fontSize: 8.5,
     fontWeight: '900',
+    letterSpacing: 0.25,
     textTransform: 'uppercase',
   },
   kpiValue: {
-    fontSize: 20,
+    fontSize: 22,
     fontWeight: '900',
-    lineHeight: 23,
+    lineHeight: 24,
   },
   typeBox: {
     marginTop: 16,
@@ -2240,7 +2248,7 @@ const styles = StyleSheet.create({
   },
   reportKpiGrid: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
+    flexWrap: 'nowrap',
     gap: 10,
     marginBottom: 12,
   },

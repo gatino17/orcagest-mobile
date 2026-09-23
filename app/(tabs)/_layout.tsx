@@ -1,4 +1,4 @@
-import { Redirect, Tabs } from 'expo-router';
+import { Redirect, Tabs, usePathname } from 'expo-router';
 import React, { useContext } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 
@@ -11,6 +11,7 @@ import { AuthContext } from '../_layout';
 
 export default function TabLayout() {
   const colorScheme = useColorScheme();
+  const pathname = usePathname();
   const { token, ready, role, paginas } = useContext(AuthContext);
 
   if (!ready) {
@@ -28,6 +29,12 @@ export default function TabLayout() {
   const normalizar = (value: any) => String(value || '').trim().toLowerCase();
   const rol = normalizar(role);
   const esRolInventario = rol === 'inventario';
+  const estaEnInicio = pathname === '/' || pathname === '/index' || pathname === '/(tabs)';
+
+  if (esRolInventario && estaEnInicio) {
+    return <Redirect href="/(tabs)/inventariobodega" />;
+  }
+
   const paginasPermitidas = Array.isArray(paginas) ? paginas.map(normalizar).filter(Boolean) : [];
   const tienePaginasEnToken = paginasPermitidas.length > 0;
   const tienePagina = (keys: string[]) => keys.some((key) => paginasPermitidas.includes(normalizar(key)));
