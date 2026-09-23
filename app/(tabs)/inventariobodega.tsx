@@ -137,6 +137,7 @@ export default function InventarioBodegaScreen() {
   const [scannerVisible, setScannerVisible] = useState(false);
   const [crearInformeModalVisible, setCrearInformeModalVisible] = useState(false);
   const [verInformeModalVisible, setVerInformeModalVisible] = useState(false);
+  const [faltantesModalVisible, setFaltantesModalVisible] = useState(false);
   const [scanInformeModalVisible, setScanInformeModalVisible] = useState(false);
   const [informeDetalle, setInformeDetalle] = useState<TomaInventario | null>(null);
   const [informeDetalleLoading, setInformeDetalleLoading] = useState(false);
@@ -273,6 +274,7 @@ export default function InventarioBodegaScreen() {
 
   const verInformeHistorial = useCallback(async (idToma: number) => {
     if (!idToma) return;
+    setFaltantesModalVisible(false);
     setVerInformeModalVisible(true);
     setInformeDetalleLoading(true);
     setInformeDetalle(null);
@@ -348,6 +350,7 @@ export default function InventarioBodegaScreen() {
         setScannerVisible(false);
       }
       if (Number(informeDetalle?.id_toma) === idEliminado) {
+        setFaltantesModalVisible(false);
         setVerInformeModalVisible(false);
       }
     };
@@ -1006,7 +1009,10 @@ export default function InventarioBodegaScreen() {
 	                  </Text>
 	                </View>
 	              </View>
-	              <Pressable onPress={() => setVerInformeModalVisible(false)} disabled={informeDetalleLoading}>
+	              <Pressable onPress={() => {
+	                setFaltantesModalVisible(false);
+	                setVerInformeModalVisible(false);
+	              }} disabled={informeDetalleLoading}>
 	                <Ionicons name="close-circle" size={27} color="#64748b" />
 	              </Pressable>
 	            </View>
@@ -1055,23 +1061,69 @@ export default function InventarioBodegaScreen() {
 	                  <Text style={styles.emptyText}>Sin equipos encontrados.</Text>
 	                )}
 
-	                <Text style={styles.reportSectionTitle}>Faltantes</Text>
-	                {faltantesInformeDetalle.length ? (
-	                  faltantesInformeDetalle.slice(0, 6).map((item) => (
-	                    <View key={item.id_bodega_equipo || `${item.codigo}-${item.numero_serie}`} style={styles.reportListItem}>
-	                      <Ionicons name="alert-circle-outline" size={17} color="#dc2626" />
-	                      <View style={{ flex: 1 }}>
-	                        <Text style={styles.itemTitle}>{item.equipo_nombre || 'Equipo'}</Text>
-	                        <Text style={styles.itemCode}>Codigo: {item.codigo || '-'}</Text>
-	                        <Text style={styles.itemMeta}>Serie: {item.numero_serie || '-'}</Text>
-	                      </View>
-	                    </View>
-	                  ))
-	                ) : (
-	                  <Text style={styles.emptyText}>Sin faltantes en este informe.</Text>
-	                )}
+	                <Pressable
+	                  style={[styles.missingSummaryButton, !faltantesInformeDetalle.length && styles.missingSummaryButtonDisabled]}
+	                  disabled={!faltantesInformeDetalle.length}
+	                  onPress={() => setFaltantesModalVisible(true)}
+	                >
+	                  <View style={styles.missingSummaryIcon}>
+	                    <Ionicons name="eye-outline" size={19} color={faltantesInformeDetalle.length ? '#dc2626' : '#94a3b8'} />
+	                  </View>
+	                  <View style={{ flex: 1 }}>
+	                    <Text style={styles.missingSummaryTitle}>Ver faltantes</Text>
+	                    <Text style={styles.missingSummaryText}>
+	                      {faltantesInformeDetalle.length
+	                        ? `${faltantesInformeDetalle.length} equipos pendientes de encontrar`
+	                        : 'Sin faltantes en este informe'}
+	                    </Text>
+	                  </View>
+	                  <View style={styles.missingSummaryCount}>
+	                    <Text style={styles.missingSummaryCountText}>{faltantesInformeDetalle.length}</Text>
+	                  </View>
+	                </Pressable>
 	              </ScrollView>
 	            ) : null}
+	          </View>
+	        </View>
+	      </Modal>
+
+	      <Modal
+	        visible={faltantesModalVisible}
+	        animationType="fade"
+	        transparent
+	        onRequestClose={() => setFaltantesModalVisible(false)}
+	      >
+	        <View style={styles.formModalOverlay}>
+	          <View style={styles.missingModalCard}>
+	            <View style={styles.formModalHeader}>
+	              <View style={styles.formModalTitleWrap}>
+	                <View style={styles.missingModalIcon}>
+	                  <Ionicons name="alert-circle-outline" size={22} color="#ffffff" />
+	                </View>
+	                <View style={{ flex: 1 }}>
+	                  <Text style={styles.kicker}>COMPARATIVA</Text>
+	                  <Text style={styles.formModalTitle}>Equipos faltantes</Text>
+	                  <Text style={styles.formModalSubtitle}>
+	                    {faltantesInformeDetalle.length} pendientes en este informe
+	                  </Text>
+	                </View>
+	              </View>
+	              <Pressable onPress={() => setFaltantesModalVisible(false)}>
+	                <Ionicons name="close-circle" size={27} color="#64748b" />
+	              </Pressable>
+	            </View>
+	            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.missingModalContent}>
+	              {faltantesInformeDetalle.map((item) => (
+	                <View key={item.id_bodega_equipo || `${item.codigo}-${item.numero_serie}`} style={styles.reportListItem}>
+	                  <Ionicons name="alert-circle-outline" size={17} color="#dc2626" />
+	                  <View style={{ flex: 1 }}>
+	                    <Text style={styles.itemTitle}>{item.equipo_nombre || 'Equipo'}</Text>
+	                    <Text style={styles.itemCode}>Codigo: {item.codigo || '-'}</Text>
+	                    <Text style={styles.itemMeta}>Serie: {item.numero_serie || '-'}</Text>
+	                  </View>
+	                </View>
+	              ))}
+	            </ScrollView>
 	          </View>
 	        </View>
 	      </Modal>
@@ -2138,6 +2190,19 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 14 },
     elevation: 8,
   },
+  missingModalCard: {
+    maxHeight: '78%',
+    borderRadius: 28,
+    padding: 18,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#fecaca',
+    shadowColor: '#0f172a',
+    shadowOpacity: 0.22,
+    shadowRadius: 22,
+    shadowOffset: { width: 0, height: 14 },
+    elevation: 10,
+  },
   scanInformeModalCard: {
     maxHeight: '88%',
     borderRadius: 28,
@@ -2183,6 +2248,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: '#16a34a',
   },
+  missingModalIcon: {
+    width: 46,
+    height: 46,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#dc2626',
+  },
   formModalTitle: {
     color: '#0f172a',
     fontSize: 20,
@@ -2220,6 +2293,59 @@ const styles = StyleSheet.create({
   },
   reportModalContent: {
     paddingBottom: 6,
+  },
+  missingModalContent: {
+    paddingBottom: 4,
+  },
+  missingSummaryButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginTop: 14,
+    padding: 12,
+    borderRadius: 17,
+    borderWidth: 1,
+    borderColor: '#fecaca',
+    backgroundColor: '#fff7f7',
+  },
+  missingSummaryButtonDisabled: {
+    borderColor: '#e2e8f0',
+    backgroundColor: '#f8fafc',
+  },
+  missingSummaryIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  missingSummaryTitle: {
+    color: '#0f172a',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  missingSummaryText: {
+    color: '#64748b',
+    fontSize: 10,
+    fontWeight: '800',
+    marginTop: 2,
+  },
+  missingSummaryCount: {
+    minWidth: 31,
+    height: 31,
+    paddingHorizontal: 7,
+    borderRadius: 999,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#fee2e2',
+  },
+  missingSummaryCountText: {
+    color: '#b91c1c',
+    fontSize: 13,
+    fontWeight: '900',
   },
   reportInfoList: {
     gap: 8,
