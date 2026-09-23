@@ -29,6 +29,7 @@ import {
   fetchInventarioBodegaTipos,
   validarSerieEquipo,
 } from '@/lib/api';
+import { subscribeInventarioUpdated } from '@/lib/realtime';
 
 const HISTORY_CARD_WIDTH = Math.min(Dimensions.get('window').width - 72, 360);
 
@@ -332,6 +333,29 @@ export default function InventarioBodegaScreen() {
   }, [cargarTomas]);
 
   useEffect(() => {
+    const onInventarioUpdated = (evento: any) => {
+      if (String(evento?.tipo || '') !== 'toma_eliminada') return;
+      const idEliminado = Number(evento?.id_toma || 0);
+      if (!idEliminado) return;
+
+      setTomas((actuales) => actuales.filter((item) => Number(item.id_toma) !== idEliminado));
+      setTomaActiva((actual) => (Number(actual?.id_toma) === idEliminado ? null : actual));
+      setInformeDetalle((actual) => (Number(actual?.id_toma) === idEliminado ? null : actual));
+
+      if (Number(tomaActiva?.id_toma) === idEliminado) {
+        tomaActivaIdRef.current = 0;
+        setScanInformeModalVisible(false);
+        setScannerVisible(false);
+      }
+      if (Number(informeDetalle?.id_toma) === idEliminado) {
+        setVerInformeModalVisible(false);
+      }
+    };
+
+    return subscribeInventarioUpdated(onInventarioUpdated);
+  }, [informeDetalle?.id_toma, tomaActiva?.id_toma]);
+
+  useEffect(() => {
     if (!categoriasInventario.length) return;
     if (!categoriasInventario.includes(categoriaSeleccionada)) {
       setCategoriaSeleccionada(categoriasInventario[0]);
@@ -554,10 +578,12 @@ export default function InventarioBodegaScreen() {
 	  }, [bodegaCodigo, bodegaObs, bodegaSaving, bodegaSerie, mostrarEquipoExistente, tipoSeleccionado]);
 
   return (
-    <SafeAreaView style={styles.safe}>
+    <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
       <StatusBar style="dark" />
       <ScrollView
+        style={styles.scroll}
         contentContainerStyle={styles.content}
+        showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refrescar} tintColor="#0b3b8c" />}
       >
         <View style={styles.hero}>
@@ -1144,9 +1170,14 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#f8fbff',
   },
+  scroll: {
+    flex: 1,
+    backgroundColor: '#f8fbff',
+  },
   content: {
+    flexGrow: 1,
     padding: 16,
-    paddingBottom: 18,
+    paddingBottom: 24,
     gap: 14,
     backgroundColor: '#f8fbff',
   },

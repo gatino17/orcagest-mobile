@@ -3,6 +3,7 @@ import { SOCKET_TRANSPORTS, SOCKET_URL } from '@/lib/api';
 
 type ArmadoUpdatedHandler = (evt: any) => void;
 type ActividadUpdatedHandler = (evt: any) => void;
+type InventarioUpdatedHandler = (evt: any) => void;
 
 let socket: Socket | null = null;
 let refs = 0;
@@ -39,6 +40,21 @@ export const subscribeActividadUpdated = (handler: ActividadUpdatedHandler) => {
 
   return () => {
     s.off('actividad_updated', handler);
+    refs = Math.max(0, refs - 1);
+    if (refs === 0) {
+      s.disconnect();
+      socket = null;
+    }
+  };
+};
+
+export const subscribeInventarioUpdated = (handler: InventarioUpdatedHandler) => {
+  const s = getSocket();
+  refs += 1;
+  s.on('inventario_updated', handler);
+
+  return () => {
+    s.off('inventario_updated', handler);
     refs = Math.max(0, refs - 1);
     if (refs === 0) {
       s.disconnect();
