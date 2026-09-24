@@ -110,6 +110,14 @@ const resultadoTexto = (value?: string) => {
   return 'Registrado';
 };
 
+const areaRevisionTexto = (value?: string) => {
+  const raw = String(value || '').trim().toLowerCase();
+  if (raw === 'pc') return 'PC';
+  if (raw === 'camaras') return 'Camaras';
+  if (raw === 'energia') return 'Energia';
+  return value || '';
+};
+
 const esEscaneoEncontrado = (item: any) => String(item?.resultado || '').toLowerCase() === 'encontrado';
 
 const formatFecha = (value?: string | null) => {
@@ -950,6 +958,11 @@ export default function InventarioBodegaScreen() {
 	                          </Text>
 	                          <Text style={styles.scanRegisteredCode} numberOfLines={1}>Codigo: {item.codigo || '-'}</Text>
 	                          <Text style={styles.scanRegisteredMeta} numberOfLines={1}>Serie: {item.numero_serie || '-'}</Text>
+	                          {item.revision_area ? (
+	                            <Text style={styles.scanRegisteredArea} numberOfLines={1}>
+	                              Area: {areaRevisionTexto(item.revision_area)}
+	                            </Text>
+	                          ) : null}
 	                        </View>
 	                        <Badge resultado={item.resultado} />
 	                      </View>
@@ -1053,6 +1066,9 @@ export default function InventarioBodegaScreen() {
 	                        <Text style={styles.itemTitle}>{item.equipo_nombre || 'Equipo'}</Text>
 	                        <Text style={styles.itemCode}>Codigo: {item.codigo || '-'}</Text>
 	                        <Text style={styles.itemMeta}>Serie: {item.numero_serie || '-'}</Text>
+	                        {item.revision_area ? (
+	                          <Text style={styles.itemArea}>Area: {areaRevisionTexto(item.revision_area)}</Text>
+	                        ) : null}
 	                      </View>
 	                      <Badge resultado={item.resultado} />
 	                    </View>
@@ -1945,6 +1961,12 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     marginTop: 2,
   },
+  scanRegisteredArea: {
+    color: '#0b3b8c',
+    fontSize: 11,
+    fontWeight: '800',
+    marginTop: 2,
+  },
   scanRegisteredEmpty: {
     color: '#64748b',
     fontSize: 12,
@@ -2189,6 +2211,12 @@ const styles = StyleSheet.create({
     shadowRadius: 22,
     shadowOffset: { width: 0, height: 14 },
     elevation: 8,
+  },
+  itemArea: {
+    color: '#0b3b8c',
+    fontSize: 11,
+    fontWeight: '800',
+    marginTop: 2,
   },
   missingModalCard: {
     maxHeight: '78%',
