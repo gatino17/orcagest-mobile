@@ -35,7 +35,14 @@ export default function TabLayout() {
     return <Redirect href="/(tabs)/inventariobodega" />;
   }
 
-  const paginasPermitidas = Array.isArray(paginas) ? paginas.map(normalizar).filter(Boolean) : [];
+  // Conserva los modulos base del tecnico incluso con permisos de sesiones anteriores.
+  const paginasBaseTecnico = rol === 'tecnico'
+    ? ['inicio', 'consulta_centro', 'armados', 'informes_centros', 'rendiciones']
+    : [];
+  const paginasPermitidas = [
+    ...(Array.isArray(paginas) ? paginas.map(normalizar).filter(Boolean) : []),
+    ...paginasBaseTecnico,
+  ];
   const tienePaginasEnToken = paginasPermitidas.length > 0;
   const tienePagina = (keys: string[]) => keys.some((key) => paginasPermitidas.includes(normalizar(key)));
   const puedeVer = (keys: string[], rolesFallback: string[] = []) => {
@@ -55,7 +62,7 @@ export default function TabLayout() {
       <Tabs.Screen
         name="index"
         options={{
-          title: 'Home',
+          title: 'Inicio',
           href: !esRolInventario && puedeVer(['inicio', 'home', 'index'], ['admin', 'tecnico', 'soporte', 'operaciones', 'finanzas'])
             ? undefined
             : null,
@@ -76,7 +83,7 @@ export default function TabLayout() {
         name="finalizados"
         options={{
           title: 'Finalizados',
-          href: puedeVer(['finalizados'], ['admin', 'tecnico', 'operaciones']) ? undefined : null,
+          href: puedeVer(['armados', 'finalizados'], ['admin', 'tecnico', 'operaciones']) ? undefined : null,
           tabBarIcon: ({ color }) => <Ionicons name="checkmark-done-outline" size={24} color={color} />,
         }}
       />
