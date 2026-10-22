@@ -2,15 +2,14 @@ import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } 
 import {
   ActivityIndicator,
   Alert,
-  Modal,
   Pressable,
   SafeAreaView,
-  ScrollView,
   StatusBar as RNStatusBar,
   StyleSheet,
   TextInput,
   View,
 } from 'react-native';
+import { KeyboardScrollView as ScrollView, KeyboardModal as Modal } from '@/components/keyboard-aware';
 import { Ionicons } from '@expo/vector-icons';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 

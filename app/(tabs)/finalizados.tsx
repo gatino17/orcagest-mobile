@@ -1,5 +1,6 @@
 import React, { useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, FlatList, Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { KeyboardScrollView as ScrollView } from '@/components/keyboard-aware';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { useRouter } from 'expo-router';
@@ -103,6 +104,7 @@ export default function FinalizadosScreen() {
     <SafeAreaView edges={['top']} style={styles.safe}>
       <StatusBar style="dark" translucent={false} />
       <FlatList
+        renderScrollComponent={(props) => <ScrollView {...props} />}
         data={itemsFiltrados}
         keyExtractor={(it) => String(it.id_armado || it.id)}
         contentContainerStyle={styles.container}

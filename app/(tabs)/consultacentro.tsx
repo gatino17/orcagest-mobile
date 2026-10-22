@@ -1,5 +1,6 @@
 import React, { useContext, useEffect, useMemo, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, Modal, TextInput } from 'react-native';
+import { View, Text, StyleSheet, Pressable, ActivityIndicator, TextInput } from 'react-native';
+import { KeyboardScrollView as ScrollView, KeyboardModal as Modal } from '@/components/keyboard-aware';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { AuthContext } from '../_layout';

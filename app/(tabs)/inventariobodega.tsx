@@ -5,15 +5,15 @@ import {
   Animated,
   AppState,
   Dimensions,
-  Modal,
   Pressable,
   RefreshControl,
-  ScrollView,
+  type ScrollView as NativeScrollView,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from 'react-native';
+import { KeyboardScrollView as ScrollView, KeyboardModal as Modal } from '@/components/keyboard-aware';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { CameraView, useCameraPermissions } from 'expo-camera';
@@ -177,7 +177,7 @@ export default function InventarioBodegaScreen() {
   const actualizarRef = useRef<(silent?: boolean) => Promise<void>>(async () => {});
   const recienteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const recientePendienteRef = useRef<{ id: number; toma: number } | null>(null);
-  const scanScrollRef = useRef<ScrollView>(null);
+  const scanScrollRef = useRef<NativeScrollView>(null);
 
   const resumenInformeDetalle = informeDetalle?.resumen || {};
   const escaneosInformeDetalle = Array.isArray(informeDetalle?.escaneos)
@@ -944,6 +944,7 @@ export default function InventarioBodegaScreen() {
 	      <Modal visible={crearInformeModalVisible} animationType="fade" transparent>
 	        <View style={styles.formModalOverlay}>
 	          <View style={styles.formModalCard}>
+                <ScrollView style={{ flexGrow: 0 }}>
 	            <View style={styles.formModalHeader}>
 	              <View style={styles.formModalTitleWrap}>
 	                <View style={styles.formModalIcon}>
@@ -1001,6 +1002,7 @@ export default function InventarioBodegaScreen() {
 	                <Text style={styles.primaryBtnText}>{saving ? 'Creando...' : 'Crear informe'}</Text>
 	              </Pressable>
 	            </View>
+                </ScrollView>
 	          </View>
 	        </View>
 	      </Modal>
@@ -2329,6 +2331,7 @@ const styles = StyleSheet.create({
     padding: 18,
   },
   formModalCard: {
+    maxHeight: '100%',
     borderRadius: 28,
     padding: 18,
     backgroundColor: '#ffffff',

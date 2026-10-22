@@ -5,11 +5,9 @@ import {
   TextInput,
   Pressable,
   StyleSheet,
-  KeyboardAvoidingView,
-  Platform,
   Alert,
-  ScrollView,
 } from 'react-native';
+import { KeyboardScrollView as ScrollView } from '@/components/keyboard-aware';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { AuthContext } from './_layout';
@@ -21,6 +19,7 @@ export default function LoginScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const passwordInput = React.useRef<TextInput>(null);
 
   useEffect(() => {
     if (token) {
@@ -65,7 +64,7 @@ export default function LoginScreen() {
   };
 
   return (
-    <KeyboardAvoidingView style={styles.root} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+    <View style={styles.root}>
       <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
         <View style={styles.background}>
           <View style={styles.glowTop} />
@@ -120,6 +119,9 @@ export default function LoginScreen() {
                 autoCapitalize="none"
                 autoCorrect={false}
                 keyboardType="email-address"
+                returnKeyType="next"
+                submitBehavior="submit"
+                onSubmitEditing={() => passwordInput.current?.focus()}
                 value={email}
                 onChangeText={setEmail}
               />
@@ -135,6 +137,9 @@ export default function LoginScreen() {
                 placeholder="••••••••"
                 placeholderTextColor="#6f8aa1"
                 secureTextEntry
+                ref={passwordInput}
+                returnKeyType="done"
+                onSubmitEditing={() => { if (!loading) handleLogin(); }}
                 autoCapitalize="none"
                 autoCorrect={false}
                 value={password}
@@ -159,7 +164,7 @@ export default function LoginScreen() {
           </View>
         </View>
       </ScrollView>
-    </KeyboardAvoidingView>
+    </View>
   );
 }
 

@@ -3,16 +3,15 @@ import {
   ActivityIndicator,
   Alert,
   Image,
-  Modal,
   Platform,
   Pressable,
-  ScrollView,
   StatusBar as RNStatusBar,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from 'react-native';
+import { KeyboardScrollView as ScrollView, KeyboardModal as Modal } from '@/components/keyboard-aware';
 import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -5765,6 +5764,7 @@ export default function InformesScreen() {
       <Modal visible={showCambioEquipoModal} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
+            <ScrollView contentContainerStyle={{ gap: 10 }} nestedScrollEnabled>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Cambio de equipo</Text>
               <Pressable onPress={() => setShowCambioEquipoModal(false)}>
@@ -5822,6 +5822,7 @@ export default function InformesScreen() {
                 <Text style={styles.checklistOpenBtnText}>Guardar seleccion</Text>
               </Pressable>
             </View>
+            </ScrollView>
           </View>
         </View>
       </Modal>

@@ -1,5 +1,6 @@
 import React, { useMemo, useState, useContext, useEffect, useCallback, useRef } from 'react';
-import { View, Text, StyleSheet, ScrollView, TextInput, ActivityIndicator, Pressable, StatusBar as RNStatusBar, Modal, Alert, AppState } from 'react-native';
+import { View, Text, StyleSheet, TextInput, ActivityIndicator, Pressable, StatusBar as RNStatusBar, Alert, AppState } from 'react-native';
+import { KeyboardScrollView as ScrollView, KeyboardModal as Modal } from '@/components/keyboard-aware';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useColorScheme } from '@/hooks/use-color-scheme';
@@ -3120,6 +3121,7 @@ export default function ArmadoScreen() {
       <Modal visible={modalCajasVisible} animationType="fade" transparent>
         <View style={styles.camOverlay}>
 	          <View style={[styles.camBox, styles.boxNameModal]}>
+                <ScrollView style={{ flexGrow: 0 }}>
 	            <Text style={styles.boxNameModalTitle}>Agregar bulto</Text>
 	            <Text style={styles.boxNameModalText}>
 	              {tieneCajaPrincipalReal
@@ -3170,6 +3172,7 @@ export default function ArmadoScreen() {
                 <Text style={{ color: '#fff', fontWeight: '700' }}>Agregar</Text>
               </Pressable>
             </View>
+                </ScrollView>
           </View>
         </View>
       </Modal>
@@ -4029,6 +4032,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#0b3b8c',
   },
   boxNameModal: {
+    maxHeight: '90%',
     aspectRatio: undefined,
     padding: 18,
     backgroundColor: '#f8fafc',

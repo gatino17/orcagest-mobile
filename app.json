@@ -49,6 +49,7 @@
         "backgroundColor": "#ffffff"
       },
       "usesCleartextTraffic": true,
+      "softwareKeyboardLayoutMode": "resize",
       "package": "com.orcagest.app",
       "permissions": [
         "android.permission.CAMERA"
