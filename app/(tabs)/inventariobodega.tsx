@@ -2,6 +2,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActivityIndicator,
   Alert,
+  Animated,
+  AppState,
   Dimensions,
   Modal,
   Pressable,
@@ -16,6 +18,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Ionicons } from '@expo/vector-icons';
+import { useFocusEffect } from 'expo-router';
 
 import {
   closeInventarioBodegaToma,
@@ -30,6 +33,8 @@ import {
   validarSerieEquipo,
 } from '@/lib/api';
 import { subscribeInventarioUpdated } from '@/lib/realtime';
+import { crearControlConsultasInventario, esEscaneoVisible, filtrarEquiposInventario,
+  incorporarEscaneoInventario, ordenarEscaneosInventario } from '@/lib/inventario-bodega';
 
 const HISTORY_CARD_WIDTH = Math.min(Dimensions.get('window').width - 72, 360);
 
@@ -118,8 +123,6 @@ const areaRevisionTexto = (value?: string) => {
   return value || '';
 };
 
-const esEscaneoEncontrado = (item: any) => String(item?.resultado || '').toLowerCase() === 'encontrado';
-
 const formatFecha = (value?: string | null) => {
   if (!value) return '-';
   const date = new Date(value);
@@ -149,6 +152,10 @@ export default function InventarioBodegaScreen() {
   const [scanInformeModalVisible, setScanInformeModalVisible] = useState(false);
   const [informeDetalle, setInformeDetalle] = useState<TomaInventario | null>(null);
   const [informeDetalleLoading, setInformeDetalleLoading] = useState(false);
+  const [busquedaInforme, setBusquedaInforme] = useState('');
+  const [tomaActivaLoading, setTomaActivaLoading] = useState(false);
+  const [syncError, setSyncError] = useState(false);
+  const [ultimoEscaneo, setUltimoEscaneo] = useState<{ id: number; toma: number } | null>(null);
   const [scannerTarget, setScannerTarget] = useState<'informe' | 'bodega'>('informe');
   const [valorManual, setValorManual] = useState('');
   const [nombreToma, setNombreToma] = useState('');
@@ -161,35 +168,39 @@ export default function InventarioBodegaScreen() {
   const [bodegaObs, setBodegaObs] = useState('');
   const [bodegaSaving, setBodegaSaving] = useState(false);
   const scanLockRef = useRef(false);
+  const scannerTargetRef = useRef<'informe' | 'bodega'>('informe');
   const tomaActivaIdRef = useRef<number>(0);
+  const informeDetalleIdRef = useRef(0);
+  const controlConsultas = useRef(crearControlConsultasInventario()).current;
+  const mutacionRef = useRef(false);
+  const focusedRef = useRef(false);
+  const actualizarRef = useRef<(silent?: boolean) => Promise<void>>(async () => {});
+  const recienteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const recientePendienteRef = useRef<{ id: number; toma: number } | null>(null);
+  const scanScrollRef = useRef<ScrollView>(null);
 
   const resumenInformeDetalle = informeDetalle?.resumen || {};
   const escaneosInformeDetalle = Array.isArray(informeDetalle?.escaneos)
-    ? informeDetalle.escaneos.filter(esEscaneoEncontrado)
+    ? ordenarEscaneosInventario(informeDetalle.escaneos.filter(esEscaneoVisible))
     : [];
   const faltantesInformeDetalle = Array.isArray(resumenInformeDetalle.faltantes_detalle) ? resumenInformeDetalle.faltantes_detalle : [];
+  const escaneosDetalleFiltrados = filtrarEquiposInventario(escaneosInformeDetalle, busquedaInforme);
+  const faltantesDetalleFiltrados = filtrarEquiposInventario(faltantesInformeDetalle, busquedaInforme);
   const tomaAbierta = String(tomaActiva?.estado || '').toLowerCase() !== 'cerrado';
   const escaneosTomaActiva = useMemo(
     () => (Array.isArray(tomaActiva?.escaneos) ? tomaActiva.escaneos : []),
     [tomaActiva?.escaneos]
   );
   const encontradosTomaActiva = useMemo(
-    () => escaneosTomaActiva.filter(esEscaneoEncontrado),
+    () => escaneosTomaActiva.filter(esEscaneoVisible),
     [escaneosTomaActiva]
   );
   const escaneosTomaActivaVisibles = useMemo(
     () =>
-      [...encontradosTomaActiva]
-        .sort((a, b) => {
-          const fechaA = Date.parse(String(a?.created_at || '')) || 0;
-          const fechaB = Date.parse(String(b?.created_at || '')) || 0;
-          if (fechaA !== fechaB) return fechaB - fechaA;
-          return Number(b?.id_escaneo || 0) - Number(a?.id_escaneo || 0);
-        })
-        .slice(0, 10),
+      ordenarEscaneosInventario(encontradosTomaActiva).slice(0, 10),
 	    [encontradosTomaActiva]
 	  );
-  const totalEscaneadoActual = encontradosTomaActiva.length;
+  const totalEscaneadoActual = Number(tomaActiva?.resumen?.encontrados || 0);
   const abiertas = useMemo(() => tomas.filter((item) => String(item.estado || '').toLowerCase() !== 'cerrado').length, [tomas]);
   const cerradas = Math.max(tomas.length - abiertas, 0);
   const tiposEscaneables = useMemo(
@@ -209,7 +220,7 @@ export default function InventarioBodegaScreen() {
     [categoriaSeleccionada, tiposEscaneables]
   );
   const normalizarBusqueda = useCallback(
-    (valor: string) => String(valor || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase(),
+    (valor: unknown) => String(valor || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase(),
     []
   );
   const estaEnEquiposLlevados = useCallback(
@@ -275,46 +286,89 @@ export default function InventarioBodegaScreen() {
     );
   }, []);
 
-  const detalleParams = useCallback(
-    () => (tipoSeleccionado ? { tipo_equipo: tipoSeleccionado } : undefined),
-    [tipoSeleccionado]
-  );
+  const resaltarEscaneo = useCallback((id: number, toma: number) => {
+    if (recienteTimerRef.current) clearTimeout(recienteTimerRef.current);
+    setUltimoEscaneo({ id, toma });
+    recienteTimerRef.current = setTimeout(() => setUltimoEscaneo(null), 3200);
+    if (tomaActivaIdRef.current === toma) scanScrollRef.current?.scrollTo({ y: 0, animated: true });
+  }, []);
+
+  const cerrarDetalle = useCallback(() => {
+    informeDetalleIdRef.current = 0;
+    controlConsultas.invalidar('detalle');
+    setFaltantesModalVisible(false);
+    setVerInformeModalVisible(false);
+    setInformeDetalleLoading(false);
+    setInformeDetalle(null);
+  }, [controlConsultas]);
+
+  const cerrarEscaneo = useCallback(() => {
+    tomaActivaIdRef.current = 0;
+    controlConsultas.invalidar('activa');
+    setScanInformeModalVisible(false);
+    setTomaActivaLoading(false);
+    setTomaActiva(null);
+    if (scannerTargetRef.current === 'informe') setScannerVisible(false);
+  }, [controlConsultas]);
+
+  const cargarSeleccion = useCallback(async (id: number, canal: 'activa' | 'detalle', visible = false) => {
+    const version = controlConsultas.iniciar(canal);
+    const seleccionRef = canal === 'activa' ? tomaActivaIdRef : informeDetalleIdRef;
+    try {
+      const detalle = await fetchInventarioBodegaToma(id, canal === 'activa' ? { compact: 1 } : undefined);
+      if (!controlConsultas.vigente(canal, version) || seleccionRef.current !== id || mutacionRef.current) return;
+      if (canal === 'activa') {
+        setTomaActiva(detalle || null);
+        if (String(detalle?.estado).toLowerCase() === 'cerrado' && scannerTargetRef.current === 'informe') setScannerVisible(false);
+      } else setInformeDetalle(detalle || null);
+      const reciente = recientePendienteRef.current;
+      if (reciente?.toma === id && detalle?.escaneos?.some((item: any) => Number(item.id_escaneo) === reciente.id)) {
+        resaltarEscaneo(reciente.id, id);
+        recientePendienteRef.current = null;
+      }
+    } catch (error: any) {
+      if (!controlConsultas.vigente(canal, version) || seleccionRef.current !== id) return;
+      if (error?.response?.status === 404) {
+        if (canal === 'activa') cerrarEscaneo();
+        else cerrarDetalle();
+      } else setSyncError(true);
+      if (visible) Alert.alert('Inventario bodega', error?.response?.data?.error || 'No se pudo cargar el informe.');
+    } finally {
+      if (controlConsultas.vigente(canal, version)) {
+        if (canal === 'activa') setTomaActivaLoading(false);
+        else setInformeDetalleLoading(false);
+      }
+    }
+  }, [cerrarDetalle, cerrarEscaneo, controlConsultas, resaltarEscaneo]);
 
   const verInformeHistorial = useCallback(async (idToma: number) => {
     if (!idToma) return;
+    informeDetalleIdRef.current = idToma;
+    setBusquedaInforme('');
     setFaltantesModalVisible(false);
     setVerInformeModalVisible(true);
     setInformeDetalleLoading(true);
     setInformeDetalle(null);
-    try {
-      const detalle = await fetchInventarioBodegaToma(idToma);
-      setInformeDetalle(detalle || null);
-    } catch (error: any) {
-      Alert.alert('Inventario bodega', error?.response?.data?.error || 'No se pudo cargar el informe.');
-      setVerInformeModalVisible(false);
-    } finally {
-      setInformeDetalleLoading(false);
-    }
-  }, []);
+    await cargarSeleccion(idToma, 'detalle', true);
+  }, [cargarSeleccion]);
 
   const abrirModalEscaneoInforme = useCallback(async (idToma: number) => {
     if (!idToma) return;
+    tomaActivaIdRef.current = idToma;
     const previa = tomas.find((item) => Number(item.id_toma) === Number(idToma));
     if (previa) setTomaActiva(previa);
     setTipoSeleccionado('');
     setBusquedaEquipo('');
     setValorManual('');
     setScanInformeModalVisible(true);
-    try {
-      const detalle = await fetchInventarioBodegaToma(idToma, { compact: 1 });
-      tomaActivaIdRef.current = Number(detalle?.id_toma || idToma || 0);
-      setTomaActiva(detalle || null);
-    } catch (error: any) {
-      Alert.alert('Inventario bodega', error?.response?.data?.error || 'No se pudo abrir el escaneo.');
-    }
-  }, [tomas]);
+    setTomaActivaLoading(true);
+    setUltimoEscaneo(null);
+    await cargarSeleccion(idToma, 'activa', true);
+  }, [cargarSeleccion, tomas]);
 
   const cargarTomas = useCallback(async (silent = false) => {
+    if (mutacionRef.current) { setRefreshing(false); return; }
+    const version = controlConsultas.iniciar('lista');
     if (!silent) setLoading(true);
     try {
       const [lista, tipos] = await Promise.all([
@@ -323,48 +377,71 @@ export default function InventarioBodegaScreen() {
       ]);
       const tiposRows = Array.isArray(tipos) ? tipos : [];
       const rows = Array.isArray(lista) ? lista : [];
+      if (!controlConsultas.vigente('lista', version) || mutacionRef.current) return;
       setTomas(rows);
       setTiposEquipo(tiposRows.length ? tiposRows : CATALOGO_INVENTARIO_FALLBACK);
-
-      if (!rows.length) {
-        tomaActivaIdRef.current = 0;
-        setTomaActiva(null);
-      }
+      setSyncError(false);
+      const activa = tomaActivaIdRef.current;
+      const detalle = informeDetalleIdRef.current;
+      const existe = (id: number) => rows.some((item) => Number(item.id_toma) === id);
+      await Promise.all([
+        activa ? (existe(activa) ? cargarSeleccion(activa, 'activa') : cerrarEscaneo()) : undefined,
+        detalle ? (existe(detalle) ? cargarSeleccion(detalle, 'detalle') : cerrarDetalle()) : undefined,
+      ]);
     } catch (error: any) {
-      Alert.alert('Inventario bodega', error?.response?.data?.error || 'No se pudo cargar el inventario.');
+      if (!controlConsultas.vigente('lista', version)) return;
+      setSyncError(true);
+      if (!silent) Alert.alert('Inventario bodega', error?.response?.data?.error || 'No se pudo cargar el inventario.');
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (controlConsultas.vigente('lista', version)) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
-  }, []);
+  }, [cargarSeleccion, cerrarDetalle, cerrarEscaneo, controlConsultas]);
+  actualizarRef.current = cargarTomas;
 
-  useEffect(() => {
-    cargarTomas();
-  }, [cargarTomas]);
-
-  useEffect(() => {
-    const onInventarioUpdated = (evento: any) => {
-      if (String(evento?.tipo || '') !== 'toma_eliminada') return;
-      const idEliminado = Number(evento?.id_toma || 0);
-      if (!idEliminado) return;
-
-      setTomas((actuales) => actuales.filter((item) => Number(item.id_toma) !== idEliminado));
-      setTomaActiva((actual) => (Number(actual?.id_toma) === idEliminado ? null : actual));
-      setInformeDetalle((actual) => (Number(actual?.id_toma) === idEliminado ? null : actual));
-
-      if (Number(tomaActiva?.id_toma) === idEliminado) {
-        tomaActivaIdRef.current = 0;
-        setScanInformeModalVisible(false);
-        setScannerVisible(false);
-      }
-      if (Number(informeDetalle?.id_toma) === idEliminado) {
-        setFaltantesModalVisible(false);
-        setVerInformeModalVisible(false);
-      }
+  useFocusEffect(useCallback(() => {
+    focusedRef.current = true;
+    void actualizarRef.current(true);
+    const alVolver = () => { if (AppState.currentState === 'active') void actualizarRef.current(true); };
+    const intervalo = setInterval(alVolver, 20000);
+    const appState = AppState.addEventListener('change', (estado) => { if (estado === 'active') alVolver(); });
+    return () => {
+      focusedRef.current = false;
+      clearInterval(intervalo);
+      appState.remove();
+      controlConsultas.invalidar();
     };
+  }, [controlConsultas]));
 
-    return subscribeInventarioUpdated(onInventarioUpdated);
-  }, [informeDetalle?.id_toma, tomaActiva?.id_toma]);
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout>;
+    const programarRefresco = () => {
+      if (!focusedRef.current || AppState.currentState !== 'active') return;
+      clearTimeout(timer);
+      timer = setTimeout(() => { void actualizarRef.current(true); }, 250);
+    };
+    const onInventarioUpdated = (evento: any) => {
+      if (evento?.tipo === 'escaneo_creado' && evento.id_escaneo) {
+        recientePendienteRef.current = { id: Number(evento.id_escaneo), toma: Number(evento.id_toma) };
+      }
+      if (evento?.tipo === 'toma_eliminada') {
+        const id = Number(evento.id_toma);
+        controlConsultas.invalidar('lista');
+        setTomas((actuales) => actuales.filter((item) => Number(item.id_toma) !== id));
+        if (tomaActivaIdRef.current === id) cerrarEscaneo();
+        if (informeDetalleIdRef.current === id) cerrarDetalle();
+      }
+      programarRefresco();
+    };
+    const unsubscribe = subscribeInventarioUpdated(onInventarioUpdated, programarRefresco);
+    return () => { clearTimeout(timer); unsubscribe(); };
+  }, [cerrarDetalle, cerrarEscaneo, controlConsultas]);
+
+  useEffect(() => () => {
+    if (recienteTimerRef.current) clearTimeout(recienteTimerRef.current);
+  }, []);
 
   useEffect(() => {
     if (!categoriasInventario.length) return;
@@ -388,7 +465,9 @@ export default function InventarioBodegaScreen() {
   }, [cargarTomas]);
 
   const crearToma = useCallback(async () => {
-    if (saving) return;
+    if (saving || mutacionRef.current) return;
+    mutacionRef.current = true;
+    controlConsultas.invalidar();
     setSaving(true);
     try {
       const payload = {
@@ -416,20 +495,31 @@ export default function InventarioBodegaScreen() {
       Alert.alert('Inventario bodega', error?.response?.data?.error || 'No se pudo crear el informe.');
     } finally {
       setSaving(false);
+      mutacionRef.current = false;
+      controlConsultas.invalidar();
+      void actualizarRef.current(true);
     }
-  }, [nombreToma, observacion, saving, ubicacion]);
+  }, [controlConsultas, nombreToma, observacion, saving, ubicacion]);
 
 	  const registrarValor = useCallback(async (valor: string) => {
 	    const limpio = String(valor || '').trim();
-	    if (!limpio || !tomaActiva?.id_toma || saving || !tomaAbierta) return;
+	    if (!limpio || !tomaActiva?.id_toma || tomaActivaIdRef.current !== tomaActiva.id_toma
+          || saving || !tomaAbierta || tomaActivaLoading || mutacionRef.current) {
+        scanLockRef.current = false;
+        return;
+      }
 	    if (estaEnEquiposLlevados(limpio)) {
 	      Alert.alert('Inventario bodega', 'Este equipo ya esta en los llevados recientes.');
 	      setValorManual('');
+        scanLockRef.current = false;
 	      return;
 	    }
+    const idToma = tomaActiva.id_toma;
+    mutacionRef.current = true;
+    controlConsultas.invalidar();
     setSaving(true);
     try {
-      const data = await createInventarioBodegaEscaneo(tomaActiva.id_toma, {
+      const data = await createInventarioBodegaEscaneo(idToma, {
         valor: limpio,
       });
       const escaneo = data?.escaneo || null;
@@ -442,16 +532,19 @@ export default function InventarioBodegaScreen() {
         setValorManual('');
         return;
       }
-      if (escaneo) {
+      if (escaneo && tomaActivaIdRef.current === idToma) {
         setTomaActiva((actual) => {
-          if (!actual) return actual;
+          if (!actual || Number(actual.id_toma) !== idToma) return actual;
           const anteriores = Array.isArray(actual.escaneos) ? actual.escaneos : [];
           return {
             ...actual,
             resumen: data?.resumen || actual.resumen,
-            escaneos: [escaneo, ...anteriores],
+            escaneos: incorporarEscaneoInventario(anteriores, escaneo),
           };
         });
+        resaltarEscaneo(Number(escaneo.id_escaneo), idToma);
+        if (recientePendienteRef.current?.id === Number(escaneo.id_escaneo)
+          && recientePendienteRef.current?.toma === idToma) recientePendienteRef.current = null;
       }
       setValorManual('');
     } catch (error: any) {
@@ -468,18 +561,25 @@ export default function InventarioBodegaScreen() {
       Alert.alert('Inventario bodega', error?.response?.data?.error || 'No se pudo registrar el escaneo.');
     } finally {
       setSaving(false);
+      mutacionRef.current = false;
+      controlConsultas.invalidar();
+      void actualizarRef.current(true);
       scanLockRef.current = false;
     }
   }, [
     avisarEquipoNoDisponibleBodega,
+    controlConsultas,
+    resaltarEscaneo,
 	    estaEnEquiposLlevados,
 	    saving,
     tomaAbierta,
+    tomaActivaLoading,
     tomaActiva?.id_toma,
   ]);
 
   const abrirScanner = useCallback(async (target: 'informe' | 'bodega' = 'informe') => {
-    if (target === 'informe' && !tomaAbierta) return;
+    const idInicial = tomaActivaIdRef.current;
+    if (saving || mutacionRef.current || (target === 'informe' && (!tomaAbierta || tomaActivaLoading))) return;
     if (target === 'bodega' && !tipoSeleccionado) {
       Alert.alert('Inventario bodega', 'Selecciona primero el tipo de equipo que vas a escanear.');
       return;
@@ -491,10 +591,12 @@ export default function InventarioBodegaScreen() {
         return;
       }
     }
+    if (target === 'informe' && (!idInicial || tomaActivaIdRef.current !== idInicial)) return;
     scanLockRef.current = false;
+    scannerTargetRef.current = target;
     setScannerTarget(target);
     setScannerVisible(true);
-  }, [permission?.status, requestPermission, tipoSeleccionado, tomaAbierta]);
+  }, [permission?.status, requestPermission, saving, tipoSeleccionado, tomaAbierta, tomaActivaLoading]);
 
 	  const handleBarcodeScanned = useCallback(async (event: any) => {
 		    if (scanLockRef.current) return;
@@ -532,32 +634,35 @@ export default function InventarioBodegaScreen() {
           text: 'Finalizar informe',
           style: 'destructive',
           onPress: async () => {
+            if (mutacionRef.current || tomaActivaIdRef.current !== tomaActiva.id_toma) return;
+            mutacionRef.current = true;
+            controlConsultas.invalidar();
             setSaving(true);
             try {
               await closeInventarioBodegaToma(tomaActiva.id_toma);
-              const detalle = await fetchInventarioBodegaToma(tomaActiva.id_toma, detalleParams());
-              tomaActivaIdRef.current = Number(detalle?.id_toma || tomaActiva.id_toma || 0);
-              setTomaActiva(detalle);
-              const lista = await fetchInventarioBodegaTomas();
-              setTomas(Array.isArray(lista) ? lista : []);
-              setScanInformeModalVisible(false);
+              cerrarEscaneo();
             } catch (error: any) {
               Alert.alert('Inventario bodega', error?.response?.data?.error || 'No se pudo finalizar el informe.');
             } finally {
               setSaving(false);
+              mutacionRef.current = false;
+              controlConsultas.invalidar();
+              void actualizarRef.current(true);
             }
           },
         },
       ]
     );
-  }, [detalleParams, tomaAbierta, tomaActiva?.id_toma]);
+  }, [cerrarEscaneo, controlConsultas, tomaAbierta, tomaActiva?.id_toma]);
 
   const agregarEquipoBodega = useCallback(async () => {
     const codigo = bodegaCodigo.trim();
-    if (!codigo || !tipoSeleccionado || bodegaSaving) {
+    if (!codigo || !tipoSeleccionado || bodegaSaving || mutacionRef.current) {
       if (!tipoSeleccionado) Alert.alert('Inventario bodega', 'Selecciona categoria y equipo.');
       return;
     }
+    mutacionRef.current = true;
+    controlConsultas.invalidar();
     setBodegaSaving(true);
     try {
       await createInventarioBodegaEquipos({
@@ -585,8 +690,11 @@ export default function InventarioBodegaScreen() {
 	      }
 	    } finally {
 	      setBodegaSaving(false);
+        mutacionRef.current = false;
+        controlConsultas.invalidar();
+        void actualizarRef.current(true);
 	    }
-	  }, [bodegaCodigo, bodegaObs, bodegaSaving, bodegaSerie, mostrarEquipoExistente, tipoSeleccionado]);
+	  }, [bodegaCodigo, bodegaObs, bodegaSaving, bodegaSerie, controlConsultas, mostrarEquipoExistente, tipoSeleccionado]);
 
   return (
     <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
@@ -599,22 +707,14 @@ export default function InventarioBodegaScreen() {
       >
         <View style={styles.hero}>
           <View style={styles.heroIcon}>
-            <Ionicons name="barcode-outline" size={28} color="#d9f2ff" />
+            <Ionicons name="barcode-outline" size={24} color="#d9f2ff" />
           </View>
-          <Text style={styles.heroKicker}>CONTROL TRIMESTRAL</Text>
-          <Text style={styles.heroTitle}>Inventario bodega</Text>
-          <Text style={styles.heroText}>Crea informes, escanea por tipo de equipo y conserva el historial de bodega.</Text>
-          <View style={styles.heroStats}>
-            <View style={styles.heroStat}>
-              <Text style={styles.heroStatNumber}>{abiertas}</Text>
-              <Text style={styles.heroStatLabel}>abiertas</Text>
-            </View>
-            <View style={styles.heroStat}>
-              <Text style={styles.heroStatNumber}>{cerradas}</Text>
-              <Text style={styles.heroStatLabel}>cerradas</Text>
-            </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.heroTitle}>Inventario bodega</Text>
+            <Text style={styles.heroText}>{abiertas} abiertos | {cerradas} cerrados</Text>
           </View>
         </View>
+        {syncError && <Text style={styles.syncWarning}>No se pudo actualizar. Desliza para reintentar.</Text>}
 
         <View style={styles.modeSwitch}>
           <Pressable
@@ -905,7 +1005,7 @@ export default function InventarioBodegaScreen() {
 	        </View>
 	      </Modal>
 
-	      <Modal visible={scanInformeModalVisible} animationType="slide" transparent>
+	      <Modal visible={scanInformeModalVisible} animationType="slide" transparent onRequestClose={cerrarEscaneo}>
 	        <View style={styles.formModalOverlay}>
 	          <View style={styles.scanInformeModalCard}>
 	            <View style={styles.formModalHeader}>
@@ -919,81 +1019,64 @@ export default function InventarioBodegaScreen() {
 	                    {tomaActiva?.nombre || 'Informe de inventario'}
 	                  </Text>
 	                  <Text style={styles.formModalSubtitle}>
-	                    Escanea el codigo o N serie. El sistema identifica el equipo desde bodega.
+	                    Registra equipos por codigo o serie.
 	                  </Text>
 	                </View>
 	              </View>
-	              <Pressable onPress={() => setScanInformeModalVisible(false)} disabled={saving}>
+	              <Pressable onPress={cerrarEscaneo} disabled={saving} accessibilityLabel="Cerrar escaneo">
 	                <Ionicons name="close-circle" size={27} color="#64748b" />
 	              </Pressable>
 	            </View>
 
-	            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scanInformeContent}>
+                <View style={styles.scanToolbar}>
+                  <Pressable style={[styles.scanBtn, (saving || tomaActivaLoading || !tomaAbierta) && styles.btnDisabled]}
+                    disabled={saving || tomaActivaLoading || !tomaAbierta} onPress={() => abrirScanner('informe')}
+                    accessibilityRole="button" accessibilityLabel="Escanear equipo">
+                    <Ionicons name="scan-outline" size={20} color="#fff" />
+                    <Text style={styles.scanBtnText}>Escanear</Text>
+                  </Pressable>
+                  <View style={styles.scanRow}>
+                    <TextInput style={[styles.input, styles.scanInput]} value={valorManual} onChangeText={setValorManual}
+                      placeholder="Codigo o N serie" placeholderTextColor="#94a3b8" autoCapitalize="characters"
+                      accessibilityLabel="Codigo o serie a registrar" editable={!saving && !tomaActivaLoading && tomaAbierta}
+                      returnKeyType="done" onSubmitEditing={() => registrarValor(valorManual)} />
+                    <Pressable style={[styles.iconBtn, (saving || tomaActivaLoading || !tomaAbierta || !valorManual.trim()) && styles.btnDisabled]}
+                      disabled={saving || tomaActivaLoading || !tomaAbierta || !valorManual.trim()}
+                      accessibilityRole="button" accessibilityLabel="Registrar codigo" onPress={() => registrarValor(valorManual)}>
+                      <Ionicons name="checkmark" size={21} color="#fff" />
+                    </Pressable>
+                  </View>
+                </View>
+	            <ScrollView ref={scanScrollRef} style={styles.modalScroll} keyboardShouldPersistTaps="handled"
+                  showsVerticalScrollIndicator={false} contentContainerStyle={styles.scanInformeContent}>
 	              <View style={styles.scanBox}>
-	                <Text style={styles.scanTitle}>Registrar equipo</Text>
-	                <Text style={styles.scanHint}>
-	                  Escanea o ingresa el codigo. Si el equipo no esta en bodega, primero debes agregarlo.
-	                </Text>
 	                <View style={styles.scanSummaryCard}>
 	                  <View style={styles.scanSummaryIcon}>
 	                    <Ionicons name="barcode-outline" size={19} color="#0b3b8c" />
 	                  </View>
 	                  <View style={{ flex: 1 }}>
 	                    <Text style={styles.scanSummaryLabel}>Encontrados</Text>
-	                    <Text style={styles.scanSummaryValue}>{totalEscaneadoActual}</Text>
+	                    <Text style={styles.scanSummaryValue}>{tomaActivaLoading ? '-' : totalEscaneadoActual}</Text>
 	                  </View>
 	                </View>
 	                <View style={styles.scanRegisteredBox}>
 	                  <View style={styles.scanRegisteredHeader}>
-	                    <Text style={styles.scanRegisteredTitle}>Equipos llevados</Text>
+	                    <Text style={styles.scanRegisteredTitle}>Escaneados recientes</Text>
 	                    <Text style={styles.scanRegisteredCount}>{encontradosTomaActiva.length}</Text>
 	                  </View>
-	                  {escaneosTomaActivaVisibles.length ? (
+                    {tomaActivaLoading ? <ActivityIndicator color="#0b3b8c" /> : escaneosTomaActivaVisibles.length ? (
 	                    escaneosTomaActivaVisibles.map((item) => (
-	                      <View key={item.id_escaneo || `${item.codigo}-${item.created_at}`} style={styles.scanRegisteredItem}>
-	                        <Ionicons name="checkmark-circle-outline" size={16} color="#16a34a" />
-	                        <View style={{ flex: 1 }}>
-	                          <Text style={styles.scanRegisteredName} numberOfLines={1}>
-	                            {item.equipo_nombre || 'Equipo'}
-	                          </Text>
-	                          <Text style={styles.scanRegisteredCode} numberOfLines={1}>Codigo: {item.codigo || '-'}</Text>
-	                          <Text style={styles.scanRegisteredMeta} numberOfLines={1}>Serie: {item.numero_serie || '-'}</Text>
-	                          {item.revision_area ? (
-	                            <Text style={styles.scanRegisteredArea} numberOfLines={1}>
-	                              Area: {areaRevisionTexto(item.revision_area)}
-	                            </Text>
-	                          ) : null}
-	                        </View>
-	                        <Badge resultado={item.resultado} />
-	                      </View>
+                        <EscaneoReciente key={item.id_escaneo || `${item.codigo}-${item.created_at}`} item={item}
+                          reciente={ultimoEscaneo?.toma === tomaActiva?.id_toma && ultimoEscaneo?.id === Number(item.id_escaneo)} />
 	                    ))
 	                  ) : (
 	                    <Text style={styles.scanRegisteredEmpty}>Sin equipos escaneados aun.</Text>
 	                  )}
 	                </View>
-	                <View style={styles.scanRow}>
-	                  <TextInput
-	                    style={[styles.input, styles.scanInput]}
-	                    value={valorManual}
-	                    onChangeText={setValorManual}
-	                    placeholder="Codigo o N serie"
-	                    placeholderTextColor="#94a3b8"
-	                    autoCapitalize="characters"
-	                  />
-	                  <Pressable
-	                    style={[styles.iconBtn, (saving || !valorManual.trim()) && styles.btnDisabled]}
-	                    disabled={saving || !valorManual.trim()}
-	                    onPress={() => registrarValor(valorManual)}
-	                  >
-	                    <Ionicons name="checkmark" size={21} color="#fff" />
-	                  </Pressable>
-	                </View>
 	                <View style={styles.actionsRow}>
-	                  <Pressable style={styles.scanBtn} onPress={() => abrirScanner('informe')}>
-	                    <Ionicons name="scan-outline" size={18} color="#fff" />
-	                    <Text style={styles.scanBtnText}>Escanear</Text>
-	                  </Pressable>
-	                  <Pressable style={[styles.closeBtn, saving && styles.btnDisabled]} disabled={saving} onPress={cerrarToma}>
+                      {!tomaAbierta && <Text style={styles.emptyText}>Este informe ya esta finalizado.</Text>}
+	                  <Pressable style={[styles.closeBtn, (saving || !tomaAbierta || tomaActivaLoading) && styles.btnDisabled]}
+                        disabled={saving || !tomaAbierta || tomaActivaLoading} onPress={cerrarToma}>
 	                    <Ionicons name="lock-closed-outline" size={17} color="#991b1b" />
 	                    <Text style={styles.closeBtnText}>Finalizar informe</Text>
 	                  </Pressable>
@@ -1004,7 +1087,7 @@ export default function InventarioBodegaScreen() {
 	        </View>
 	      </Modal>
 
-	      <Modal visible={verInformeModalVisible} animationType="fade" transparent>
+	      <Modal visible={verInformeModalVisible} animationType="fade" transparent onRequestClose={cerrarDetalle}>
 	        <View style={styles.formModalOverlay}>
 	          <View style={styles.reportModalCard}>
 	            <View style={styles.formModalHeader}>
@@ -1022,13 +1105,14 @@ export default function InventarioBodegaScreen() {
 	                  </Text>
 	                </View>
 	              </View>
-	              <Pressable onPress={() => {
-	                setFaltantesModalVisible(false);
-	                setVerInformeModalVisible(false);
-	              }} disabled={informeDetalleLoading}>
+	              <Pressable onPress={cerrarDetalle} accessibilityLabel="Cerrar informe">
 	                <Ionicons name="close-circle" size={27} color="#64748b" />
 	              </Pressable>
 	            </View>
+                <BuscadorInforme value={busquedaInforme} onChange={setBusquedaInforme} />
+                {!!busquedaInforme.trim() && <Text style={styles.searchSummary}>
+                  {escaneosDetalleFiltrados.length} escaneados | {faltantesDetalleFiltrados.length} faltantes coinciden
+                </Text>}
 
 	            {informeDetalleLoading ? (
 	              <View style={styles.reportLoadingBox}>
@@ -1036,7 +1120,8 @@ export default function InventarioBodegaScreen() {
 	                <Text style={styles.loadingText}>Cargando informe...</Text>
 	              </View>
 	            ) : informeDetalle ? (
-	              <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.reportModalContent}>
+	              <ScrollView style={styles.modalScroll} keyboardShouldPersistTaps="handled"
+                    showsVerticalScrollIndicator={false} contentContainerStyle={styles.reportModalContent}>
 	                <View style={styles.reportInfoList}>
 	                  <InfoLine icon="location-outline" label="Ubicacion" value={informeDetalle.ubicacion || 'Bodega central'} />
 	                  <InfoLine icon="person-outline" label="Responsable" value={informeDetalle.responsable_nombre || '-'} />
@@ -1057,24 +1142,14 @@ export default function InventarioBodegaScreen() {
 	                  <Kpi icon="alert-circle-outline" label="Faltantes" value={resumenInformeDetalle.faltantes || 0} color="#dc2626" />
 	                </View>
 
-	                <Text style={styles.reportSectionTitle}>Ultimos encontrados</Text>
-	                {escaneosInformeDetalle.length ? (
-	                  escaneosInformeDetalle.slice(0, 6).map((item) => (
-	                    <View key={item.id_escaneo || `${item.codigo}-${item.created_at}`} style={styles.reportListItem}>
-	                      <Ionicons name="barcode-outline" size={17} color="#0b3b8c" />
-	                      <View style={{ flex: 1 }}>
-	                        <Text style={styles.itemTitle}>{item.equipo_nombre || 'Equipo'}</Text>
-	                        <Text style={styles.itemCode}>Codigo: {item.codigo || '-'}</Text>
-	                        <Text style={styles.itemMeta}>Serie: {item.numero_serie || '-'}</Text>
-	                        {item.revision_area ? (
-	                          <Text style={styles.itemArea}>Area: {areaRevisionTexto(item.revision_area)}</Text>
-	                        ) : null}
-	                      </View>
-	                      <Badge resultado={item.resultado} />
-	                    </View>
+                    <Text style={styles.reportSectionTitle}>Escaneados ({escaneosDetalleFiltrados.length})</Text>
+	                {escaneosDetalleFiltrados.length ? (
+	                  escaneosDetalleFiltrados.map((item) => (
+                        <EscaneoReciente key={item.id_escaneo || `${item.codigo}-${item.created_at}`} item={item}
+                          reciente={ultimoEscaneo?.toma === informeDetalle?.id_toma && ultimoEscaneo?.id === Number(item.id_escaneo)} />
 	                  ))
 	                ) : (
-	                  <Text style={styles.emptyText}>Sin equipos encontrados.</Text>
+                      <Text style={styles.emptyText}>{busquedaInforme.trim() ? 'Sin escaneos que coincidan.' : 'Sin equipos escaneados.'}</Text>
 	                )}
 
 	                <Pressable
@@ -1120,7 +1195,7 @@ export default function InventarioBodegaScreen() {
 	                  <Text style={styles.kicker}>COMPARATIVA</Text>
 	                  <Text style={styles.formModalTitle}>Equipos faltantes</Text>
 	                  <Text style={styles.formModalSubtitle}>
-	                    {faltantesInformeDetalle.length} pendientes en este informe
+                        {faltantesDetalleFiltrados.length} de {faltantesInformeDetalle.length} pendientes
 	                  </Text>
 	                </View>
 	              </View>
@@ -1128,8 +1203,10 @@ export default function InventarioBodegaScreen() {
 	                <Ionicons name="close-circle" size={27} color="#64748b" />
 	              </Pressable>
 	            </View>
-	            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.missingModalContent}>
-	              {faltantesInformeDetalle.map((item) => (
+                <BuscadorInforme value={busquedaInforme} onChange={setBusquedaInforme} />
+	            <ScrollView style={styles.modalScroll} keyboardShouldPersistTaps="handled"
+                  showsVerticalScrollIndicator={false} contentContainerStyle={styles.missingModalContent}>
+	              {faltantesDetalleFiltrados.map((item) => (
 	                <View key={item.id_bodega_equipo || `${item.codigo}-${item.numero_serie}`} style={styles.reportListItem}>
 	                  <Ionicons name="alert-circle-outline" size={17} color="#dc2626" />
 	                  <View style={{ flex: 1 }}>
@@ -1139,6 +1216,7 @@ export default function InventarioBodegaScreen() {
 	                  </View>
 	                </View>
 	              ))}
+                  {!faltantesDetalleFiltrados.length && <Text style={styles.emptyText}>Sin faltantes que coincidan.</Text>}
 	            </ScrollView>
 	          </View>
 	        </View>
@@ -1170,6 +1248,45 @@ export default function InventarioBodegaScreen() {
 	      </Modal>
     </SafeAreaView>
   );
+}
+
+function BuscadorInforme({ value, onChange }: { value: string; onChange: (text: string) => void }) {
+  return <View style={styles.reportSearch}>
+    <Ionicons name="search-outline" size={19} color="#64748b" />
+    <TextInput style={styles.reportSearchInput} value={value} onChangeText={onChange}
+      placeholder="Buscar codigo, serie o equipo" placeholderTextColor="#64748b"
+      accessibilityLabel="Buscar en todo el informe" autoCapitalize="none" autoCorrect={false} returnKeyType="search" />
+    {!!value && <Pressable onPress={() => onChange('')} accessibilityLabel="Limpiar busqueda" hitSlop={8}>
+      <Ionicons name="close-circle" size={20} color="#64748b" />
+    </Pressable>}
+  </View>;
+}
+
+function EscaneoReciente({ item, reciente }: { item: any; reciente: boolean }) {
+  const opacidad = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    opacidad.setValue(reciente ? 1 : 0);
+    if (!reciente) return;
+    const animacion = Animated.sequence([
+      Animated.delay(1000),
+      Animated.timing(opacidad, { toValue: 0, duration: 1800, useNativeDriver: true }),
+    ]);
+    animacion.start();
+    return () => animacion.stop();
+  }, [opacidad, reciente]);
+  return <View style={styles.scanRegisteredItem}>
+    <Animated.View pointerEvents="none" accessible={false}
+      style={[StyleSheet.absoluteFillObject, styles.recentOutline, { opacity: opacidad }]} />
+    <Ionicons name="checkmark-circle-outline" size={16} color="#16a34a" />
+    <View style={{ flex: 1 }}>
+      <Text style={styles.scanRegisteredName} numberOfLines={1}>{item.equipo_nombre || 'Equipo'}</Text>
+      {reciente && <Text style={styles.recentLabel}>Recien ingresado</Text>}
+      <Text style={styles.scanRegisteredCode}>Codigo: {item.codigo || '-'}</Text>
+      <Text style={styles.scanRegisteredMeta}>Serie: {item.numero_serie || '-'}</Text>
+      {!!item.revision_area && <Text style={styles.scanRegisteredArea}>Area: {areaRevisionTexto(item.revision_area)}</Text>}
+    </View>
+    <Badge resultado={item.resultado} />
+  </View>;
 }
 
 function InfoLine({
@@ -1250,8 +1367,11 @@ const styles = StyleSheet.create({
     backgroundColor: '#f8fbff',
   },
   hero: {
-    borderRadius: 28,
-    padding: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    borderRadius: 20,
+    padding: 14,
     overflow: 'hidden',
     backgroundColor: '#071527',
     shadowColor: '#0f172a',
@@ -1261,15 +1381,14 @@ const styles = StyleSheet.create({
     elevation: 5,
   },
   heroIcon: {
-    width: 58,
-    height: 58,
-    borderRadius: 20,
+    width: 44,
+    height: 44,
+    borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#0b3b8c',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.18)',
-    marginBottom: 18,
   },
   heroKicker: {
     color: '#7dd3fc',
@@ -1279,16 +1398,35 @@ const styles = StyleSheet.create({
   },
   heroTitle: {
     color: '#ffffff',
-    fontSize: 27,
+    fontSize: 18,
     fontWeight: '900',
-    marginTop: 4,
   },
   heroText: {
     color: '#cbd5e1',
-    fontSize: 13,
-    lineHeight: 19,
-    marginTop: 8,
+    fontSize: 12,
+    lineHeight: 17,
+    marginTop: 3,
   },
+  syncWarning: {
+    color: '#92400e',
+    backgroundColor: '#fef3c7',
+    padding: 10,
+    borderRadius: 12,
+    fontSize: 12,
+  },
+  modalScroll: { flexShrink: 1 },
+  scanToolbar: { gap: 10, marginBottom: 12 },
+  reportSearch: {
+    flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12,
+    minHeight: 46, borderRadius: 14, borderWidth: 1, borderColor: '#cbd5e1',
+    backgroundColor: '#f8fafc', marginBottom: 12,
+  },
+  reportSearchInput: { flex: 1, minWidth: 0, paddingVertical: 10, fontSize: 13, color: '#0f172a' },
+  searchSummary: { fontSize: 12, color: '#475569', marginBottom: 10 },
+  recentOutline: {
+    borderWidth: 2, borderColor: '#16a34a', borderRadius: 12, backgroundColor: 'rgba(22,163,74,0.07)',
+  },
+  recentLabel: { color: '#15803d', fontSize: 10, fontWeight: '800', marginTop: 2 },
   heroStats: {
     flexDirection: 'row',
     gap: 10,
@@ -1941,6 +2079,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
     paddingVertical: 8,
+    paddingHorizontal: 8,
+    borderRadius: 12,
+    marginBottom: 3,
     borderTopWidth: 1,
     borderTopColor: '#eef2f7',
   },
@@ -1993,7 +2134,7 @@ const styles = StyleSheet.create({
     marginTop: 12,
   },
   scanBtn: {
-    flex: 1,
+    minHeight: 46,
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',

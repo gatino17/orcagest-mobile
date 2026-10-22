@@ -48,13 +48,15 @@ export const subscribeActividadUpdated = (handler: ActividadUpdatedHandler) => {
   };
 };
 
-export const subscribeInventarioUpdated = (handler: InventarioUpdatedHandler) => {
+export const subscribeInventarioUpdated = (handler: InventarioUpdatedHandler, onConnect?: () => void) => {
   const s = getSocket();
   refs += 1;
   s.on('inventario_updated', handler);
+  if (onConnect) s.on('connect', onConnect);
 
   return () => {
     s.off('inventario_updated', handler);
+    if (onConnect) s.off('connect', onConnect);
     refs = Math.max(0, refs - 1);
     if (refs === 0) {
       s.disconnect();
