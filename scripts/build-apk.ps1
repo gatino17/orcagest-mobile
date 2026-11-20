@@ -14,6 +14,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $env:JAVA_HOME 'bin\java.exe'))) { t
 if (-not (Test-Path -LiteralPath $env:ANDROID_HOME)) { throw 'No se encontro el SDK. Configura ANDROID_HOME.' }
 $env:ANDROID_SDK_ROOT = $env:ANDROID_HOME
 $env:NODE_ENV = 'production'
+$env:CMAKE_BUILD_PARALLEL_LEVEL = '2'
 $env:Path = "$env:JAVA_HOME\bin;$env:Path"
 $env:ORCAGEST_CXX_DIR = Join-Path ([IO.Path]::GetTempPath()) 'og-cxx'
 New-Item -ItemType Directory -Path $env:ORCAGEST_CXX_DIR -Force | Out-Null
@@ -42,7 +43,7 @@ gradle.beforeProject { p ->
 
 Push-Location (Join-Path $root 'android')
 try {
-    & .\gradlew.bat assembleRelease --no-daemon --max-workers=2 --console=plain --init-script $init "-PreactNativeArchitectures=$Arquitecturas"
+    & .\gradlew.bat assembleRelease --no-daemon --no-parallel --max-workers=1 --console=plain --init-script $init "-PreactNativeArchitectures=$Arquitecturas"
     if ($LASTEXITCODE -ne 0) { throw "La compilacion fallo con codigo $LASTEXITCODE." }
 } finally {
     Pop-Location
