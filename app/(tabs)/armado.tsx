@@ -7,8 +7,9 @@ import { useColorScheme } from '@/hooks/use-color-scheme';
 import { Colors } from '@/constants/theme';
 import { AuthContext } from '../_layout';
 import { useLocalSearchParams } from 'expo-router';
-import { getEquipos, getMaterialesArmado, saveMaterialesArmado, updateEquipo, createEquipo, updateArmado, validarSerieEquipo, getArmados } from '@/lib/api';
-import { enqueueOfflineOp, listPendingOfflineOps } from '@/lib/offline-queue';
+import { getEquipos, getMaterialesArmado, saveMaterialesArmado, updateEquipo, createEquipo, updateArmado, validarSerieEquipo, getArmados, asignarBultoArmado } from '@/lib/api';
+import { enqueueOfflineOp, listPendingOfflineOps, isOfflineQueueableError, subscribeOfflineQueueStatus } from '@/lib/offline-queue';
+import { elementoBulto, seleccionVigente, alternarSeleccion, alternarTodosVisibles, prepararAsignacionBulto, type ElementoBulto } from '@/lib/armado-seleccion';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as SecureStore from 'expo-secure-store';
 import { subscribeArmadoUpdated } from '@/lib/realtime';
@@ -328,6 +329,16 @@ const BASE_EQUIPOS: Equipo[] = GRUPOS_EQUIPOS.flatMap((g, gi) =>
   }))
 );
 
+function CasillaBulto({ item, seleccionados, bloqueado, onPress }: { item: ElementoBulto; seleccionados: string[]; bloqueado: boolean; onPress: (key: string) => void }) {
+  const marcado = seleccionados.includes(item.key);
+  return <Pressable accessibilityRole="checkbox" accessibilityLabel={`Seleccionar ${item.nombre}`}
+    accessibilityState={{ checked: marcado, disabled: bloqueado || !item.habilitado }}
+    disabled={bloqueado || !item.habilitado} onPress={() => onPress(item.key)} hitSlop={6}
+    style={[styles.bulkCheckbox, !item.habilitado && styles.btnDisabled]}>
+    <Ionicons name={marcado ? 'checkbox' : 'square-outline'} size={25} color={item.habilitado ? '#1d4ed8' : '#94a3b8'} />
+  </Pressable>;
+}
+
 export default function ArmadoScreen() {
   const { token, role, name, userId } = useContext(AuthContext);
   const colorScheme = useColorScheme() ?? 'light';
@@ -342,6 +353,14 @@ export default function ArmadoScreen() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<'equipos' | 'materiales'>('equipos');
+  const [modoSeleccionBulto, setModoSeleccionBulto] = useState(false);
+  const [seleccionBulto, setSeleccionBulto] = useState<string[]>([]);
+  const [modalAsignarBulto, setModalAsignarBulto] = useState(false);
+  const [bultoDestino, setBultoDestino] = useState('');
+  const [asignandoBulto, setAsignandoBulto] = useState(false);
+  const [avisoAsignacion, setAvisoAsignacion] = useState('');
+  const asignandoBultoRef = useRef(false);
+  const asignacionesPendientesRef = useRef(new Set<string>());
   const [cajas, setCajas] = useState<string[]>([DEFAULT_PENDING_BOX]);
   const [camVisible, setCamVisible] = useState(false);
   const [camEquipoId, setCamEquipoId] = useState<string | null>(null);
@@ -883,6 +902,10 @@ export default function ArmadoScreen() {
     const centroNum = Number(centroId || 0) || 0;
     const queue = await listPendingOfflineOps();
     return queue.some((op: any) => {
+      if (op?.type === 'asignar_bulto_armado' && Number(op.payload?.armadoId) === armadoNum) {
+        op.payload.data?.equipos?.forEach((id: number) => asignacionesPendientesRef.current.add(`equipo:${id}`));
+        return !!op.payload?.data?.equipos?.length;
+      }
       if (op?.type !== 'create_equipo' && op?.type !== 'update_equipo') return false;
       const data = op?.payload?.data || {};
       const opArmadoId = Number(data?.armado_id || 0) || 0;
@@ -895,16 +918,29 @@ export default function ArmadoScreen() {
     const armadoNum = Number(armadoId || 0) || 0;
     if (armadoNum <= 0) return false;
     const queue = await listPendingOfflineOps();
-    return queue.some((op: any) => op?.type === 'save_materiales' && (Number(op?.payload?.armadoId || 0) || 0) === armadoNum);
+    return queue.some((op: any) => {
+      if (Number(op?.payload?.armadoId) !== armadoNum) return false;
+      if (op.type === 'asignar_bulto_armado') {
+        op.payload.data?.materiales?.forEach((id: number) => asignacionesPendientesRef.current.add(`material:${id}`));
+        return !!op.payload.data?.materiales?.length;
+      }
+      return op.type === 'save_materiales';
+    });
   }, [armadoId]);
 
   const mergeEquiposConPendientesLocales = useCallback(
     (backend: Equipo[], preservarLocales: boolean) => {
-      if (!preservarLocales) return backend;
       const merged = [...backend];
-      equiposStateRef.current.forEach((local) => {
+      equiposStateRef.current.forEach((registroLocal) => {
+        let local = registroLocal;
         if (!equipoTieneContenido(local)) return;
         const localId = String(local.id || '');
+        if (!preservarLocales && asignacionesPendientesRef.current.has(`equipo:${localId}`)) {
+          const servidor = backend.find((item) => String(item.id) === localId);
+          if (servidor) local = { ...local, caja: servidor.caja };
+          asignacionesPendientesRef.current.delete(`equipo:${localId}`);
+        }
+        if (!preservarLocales && /^\d+$/.test(localId) && hashEquipo(local) === equiposSnapshotRef.current[localId]) return;
         let idx = merged.findIndex((item) => String(item.id || '') === localId);
         if (idx < 0) {
           const localNombre = normalizarTextoBusqueda(local.nombre);
@@ -982,11 +1018,17 @@ export default function ArmadoScreen() {
 
   const mergeMaterialesConPendientesLocales = useCallback(
     (backend: Material[], preservarLocales: boolean) => {
-      if (!preservarLocales) return backend;
       const merged = [...backend];
-      materialesStateRef.current.forEach((local) => {
+      materialesStateRef.current.forEach((registroLocal) => {
+        let local = registroLocal;
         if (!materialTieneContenido(local)) return;
         const localId = String(local.id || '');
+        if (!preservarLocales && asignacionesPendientesRef.current.has(`material:${localId}`)) {
+          const servidor = backend.find((item) => String(item.id) === localId);
+          if (servidor) local = { ...local, caja: servidor.caja };
+          asignacionesPendientesRef.current.delete(`material:${localId}`);
+        }
+        if (!preservarLocales && /^\d+$/.test(localId) && hashMaterial(local) === materialesSnapshotRef.current[localId]) return;
         let idx = merged.findIndex((item) => String(item.id || '') === localId);
         if (idx < 0) {
           const localNombre = normalizarNombreMaterial(local.nombre);
@@ -1112,7 +1154,7 @@ export default function ArmadoScreen() {
         const mapped = mergeEquiposConPendientesLocales(mappedBase, preservarLocales);
         setEquipos(mapped);
         const snap: Record<string, string> = {};
-        mapped.forEach((e) => {
+        mappedBase.forEach((e) => {
           snap[String(e.id)] = hashEquipo(e);
         });
         equiposSnapshotRef.current = snap;
@@ -1177,7 +1219,7 @@ export default function ArmadoScreen() {
       const mapped = mergeMaterialesConPendientesLocales(mappedBase, preservarLocales);
       setMateriales(mapped);
       const snap: Record<string, string> = {};
-      mapped.forEach((m) => {
+      mappedBase.forEach((m) => {
         snap[String(m.id)] = hashMaterial(m);
       });
       materialesSnapshotRef.current = snap;
@@ -1286,6 +1328,17 @@ export default function ArmadoScreen() {
     };
     return subscribeArmadoUpdated(onArmadoUpdated);
   }, [token, armadoId, cargarDetalleArmado, cargarEquipos, cargarMat]);
+
+  useEffect(() => {
+    const unsubscribe = subscribeOfflineQueueStatus((status) => {
+      if (status.pending || !asignacionesPendientesRef.current.size || suppressRealtimeRefreshRef.current) return;
+      setAvisoAsignacion(status.notice);
+      void cargarEquipos({ silent: true });
+      void cargarMat({ silent: true });
+      void cargarDetalleArmado();
+    });
+    return () => { unsubscribe(); };
+  }, [cargarEquipos, cargarMat, cargarDetalleArmado]);
 
   useEffect(() => {
     if (!token || !armadoId) return;
@@ -1545,6 +1598,100 @@ export default function ArmadoScreen() {
     setModalSelectorCajaVisible(false);
     setSelectorCajaTarget(null);
   }, [actualizarEquipo, actualizarMaterial, estadoCaja, selectorCajaTarget]);
+
+  const elementoEquipoBulto = useCallback((equipo: Equipo) => {
+    const material = esEquipoPorCantidadNombre(equipo.nombre) ? obtenerMaterialPorNombre(equipo.nombre) : null;
+    return material
+      ? elementoBulto('material', String(material.id), equipo.nombre, Number(material.cantidad) > 0, material.estadoRegistro)
+      : elementoBulto('equipo', String(equipo.id), equipo.nombre, !esEquipoPorCantidadNombre(equipo.nombre) && !!(equipo.serie?.trim() || equipo.codigo?.trim()), equipo.estadoRegistro);
+  }, [obtenerMaterialPorNombre]);
+  const elementosBulto = useMemo(() => tab === 'equipos'
+    ? gruposRender.flatMap((grupo) => grupo.items.map(elementoEquipoBulto))
+    : materiales.map((m) => elementoBulto('material', String(m.id), m.nombre, Number(m.cantidad) > 0, m.estadoRegistro)),
+  [tab, gruposRender, elementoEquipoBulto, materiales]);
+  const elementosBultoVisibles = useMemo(() => tab === 'equipos'
+    ? gruposEquiposFiltrados.filter((grupo) => !gruposColapsados[grupo.titulo]).flatMap((grupo) => grupo.items.map(elementoEquipoBulto))
+    : materialesFiltrados.map((m) => elementoBulto('material', String(m.id), m.nombre, Number(m.cantidad) > 0, m.estadoRegistro)),
+  [tab, gruposEquiposFiltrados, gruposColapsados, elementoEquipoBulto, materialesFiltrados]);
+  const seleccionBultoVigente = useMemo(() => seleccionVigente(seleccionBulto, elementosBulto), [seleccionBulto, elementosBulto]);
+  const todosBultoVisibles = elementosBultoVisibles.some((item) => item.habilitado) && elementosBultoVisibles.filter((item) => item.habilitado).every((item) => seleccionBultoVigente.includes(item.key));
+  const cajasAsignacion = cajas.filter((caja) => !esCajaPendiente(caja));
+  const bultoDestinoValido = cajasAsignacion.includes(bultoDestino) && estadoCaja(bultoDestino) !== 'cerrada';
+  const cerrarSeleccionBulto = () => {
+    if (asignandoBultoRef.current) return;
+    setModoSeleccionBulto(false);
+    setSeleccionBulto([]);
+    setModalAsignarBulto(false);
+    setBultoDestino('');
+  };
+  const cambiarTab = (siguiente: 'equipos' | 'materiales') => {
+    if (asignandoBultoRef.current) return;
+    cerrarSeleccionBulto();
+    setTab(siguiente);
+  };
+  useEffect(() => {
+    setSeleccionBulto((prev) => {
+      const next = seleccionVigente(prev, elementosBulto);
+      return prev.length === next.length && prev.every((key, index) => key === next[index]) ? prev : next;
+    });
+  }, [elementosBulto]);
+  useEffect(() => {
+    if (esSoloLectura) {
+      setModoSeleccionBulto(false);
+      setSeleccionBulto([]);
+      setModalAsignarBulto(false);
+    }
+  }, [esSoloLectura, armadoId]);
+
+  const confirmarAsignacionBulto = async () => {
+    if (asignandoBultoRef.current || esSoloLectura || !armadoId || !bultoDestinoValido) return;
+    const { seleccionados, nuevos, payload } = prepararAsignacionBulto(seleccionBultoVigente, elementosBulto, bultoDestino);
+    if (!seleccionados.length) return;
+    asignandoBultoRef.current = true;
+    setAsignandoBulto(true);
+    suppressRealtimeRefreshRef.current = true;
+    let caja = bultoDestino;
+    let pendiente = false;
+    try {
+      if (payload.equipos.length || payload.materiales.length) {
+        try {
+          const resultado = await asignarBultoArmado(armadoId, payload);
+          caja = resultado.caja;
+        } catch (err) {
+          if (!isOfflineQueueableError(err)) throw err;
+          await enqueueOfflineOp('asignar_bulto_armado', { armadoId, data: payload });
+          payload.equipos.forEach((id) => asignacionesPendientesRef.current.add(`equipo:${id}`));
+          payload.materiales.forEach((id) => asignacionesPendientesRef.current.add(`material:${id}`));
+          pendiente = true;
+        }
+      }
+      const keys = new Set(seleccionados.map((item) => item.key));
+      // La asignacion no debe convertir cantidades o series intactas en cambios por guardar.
+      equiposStateRef.current.forEach((item) => {
+        if (/^\d+$/.test(item.id) && keys.has(`equipo:${item.id}`) && hashEquipo(item) === equiposSnapshotRef.current[item.id]) {
+          equiposSnapshotRef.current[item.id] = hashEquipo({ ...item, caja });
+        }
+      });
+      materialesStateRef.current.forEach((item) => {
+        if (/^\d+$/.test(item.id) && keys.has(`material:${item.id}`) && hashMaterial(item) === materialesSnapshotRef.current[item.id]) {
+          materialesSnapshotRef.current[item.id] = hashMaterial({ ...item, caja });
+        }
+      });
+      setEquipos((prev) => prev.map((item) => keys.has(`equipo:${item.id}`) ? { ...item, caja } : item));
+      setMateriales((prev) => prev.map((item) => keys.has(`material:${item.id}`) ? { ...item, caja } : item));
+      setAvisoAsignacion(`${seleccionados.length} elementos asignados a ${etiquetaBulto(caja)}.${pendiente ? ' Sin conexion: asignacion pendiente de sincronizar.' : ''}${nuevos.length ? ` ${nuevos.length} nuevos pendientes de guardar con Guardar ${tab}.` : ''}`);
+      setModalAsignarBulto(false);
+      setModoSeleccionBulto(false);
+      setSeleccionBulto([]);
+      setBultoDestino('');
+    } catch (err: any) {
+      Alert.alert('No se pudo asignar el bulto', err?.response?.data?.message || 'No se guardo la asignacion. Intenta nuevamente.');
+    } finally {
+      suppressRealtimeRefreshRef.current = false;
+      asignandoBultoRef.current = false;
+      setAsignandoBulto(false);
+    }
+  };
 
   const persistirConfiguracionCajas = useCallback(async (nextCajas: string[], nextEstados: Record<string, CajaEstado>) => {
     if (!armadoId) return;
@@ -2494,7 +2641,8 @@ export default function ArmadoScreen() {
               tab === 'equipos' && styles.tabBtnActive,
               pressed && styles.btnPressed,
             ]}
-            onPress={() => setTab('equipos')}>
+            disabled={asignandoBulto}
+            onPress={() => cambiarTab('equipos')}>
             <Ionicons name="hardware-chip-outline" size={16} color={tab === 'equipos' ? '#ffffff' : '#475569'} />
             <Text style={[styles.tabText, tab === 'equipos' && styles.tabTextActive]}>Equipos</Text>
           </Pressable>
@@ -2504,14 +2652,15 @@ export default function ArmadoScreen() {
               tab === 'materiales' && styles.tabBtnActive,
               pressed && styles.btnPressed,
             ]}
-            onPress={() => setTab('materiales')}>
+            disabled={asignandoBulto}
+            onPress={() => cambiarTab('materiales')}>
             <Ionicons name="construct-outline" size={16} color={tab === 'materiales' ? '#ffffff' : '#475569'} />
             <Text style={[styles.tabText, tab === 'materiales' && styles.tabTextActive]}>Materiales</Text>
           </Pressable>
           <Pressable
             style={({ pressed }) => [styles.addBoxBtn, esSoloLectura && styles.btnDisabled, pressed && styles.btnPressed]}
             onPress={abrirGestionCajas}
-            disabled={esSoloLectura}>
+            disabled={esSoloLectura || modoSeleccionBulto}>
             <Ionicons name="file-tray-full-outline" size={16} color="#0b3b8c" />
             <Text style={styles.addBoxText}>Bultos</Text>
           </Pressable>
@@ -2588,6 +2737,20 @@ export default function ArmadoScreen() {
             </View>
           </View>
         ) : null}
+
+        {avisoAsignacion ? <View style={styles.bulkNotice} accessibilityLiveRegion="polite"><Text style={styles.bulkHelp}>{avisoAsignacion}</Text><Pressable accessibilityLabel="Cerrar aviso de asignacion" onPress={() => setAvisoAsignacion('')}><Ionicons name="close-circle" size={20} color="#475569" /></Pressable></View> : null}
+        {!esSoloLectura && armadoId ? <View style={styles.bulkToolbar}>
+          {modoSeleccionBulto ? <>
+            <Text style={styles.bulkTitle}>{seleccionBultoVigente.length} seleccionados</Text>
+            <Pressable disabled={asignandoBulto} onPress={() => setSeleccionBulto((prev) => alternarTodosVisibles(prev, elementosBultoVisibles))} style={styles.bulkSmallButton}>
+              <Text style={styles.bulkButtonText}>{todosBultoVisibles ? 'Desmarcar visibles' : 'Seleccionar visibles'}</Text>
+            </Pressable>
+            <Pressable disabled={asignandoBulto} onPress={cerrarSeleccionBulto} style={styles.bulkSmallButton}><Text style={styles.bulkButtonText}>Cancelar</Text></Pressable>
+            <Text style={styles.bulkHelp}>Solo elementos con datos. Las cantidades completas se asignan a un mismo bulto.</Text>
+          </> : <Pressable style={styles.bulkSelectButton} disabled={loading || loadingMateriales || guardandoEq || guardandoMat || guardandoAccionMaterial} onPress={() => { setModoSeleccionBulto(true); setSeleccionBulto([]); setGruposColapsados({}); setAvisoAsignacion(''); }}>
+            <Ionicons name="checkbox-outline" size={19} color="#1d4ed8" /><Text style={styles.bulkButtonText}>Seleccionar para asignar caja</Text>
+          </Pressable>}
+        </View> : null}
 
         {tab === 'equipos' ? (
           <>
@@ -2702,6 +2865,7 @@ export default function ArmadoScreen() {
                             ) : null}
                           </View>
                           <View style={styles.cardHeaderAsideCompact}>
+                            {modoSeleccionBulto ? <CasillaBulto item={elementoEquipoBulto(eq)} seleccionados={seleccionBultoVigente} bloqueado={asignandoBulto} onPress={(key) => setSeleccionBulto((prev) => alternarSeleccion(prev, key))} /> : null}
                             {esBloqueadoPorEstado ? (
                               <View
                                 style={[
@@ -2727,7 +2891,7 @@ export default function ArmadoScreen() {
                                   actual: cajaActual,
                                   nombre: eq.nombre,
                                 })}
-                                disabled={esSoloLectura}>
+                                disabled={esSoloLectura || modoSeleccionBulto}>
                                 <Text style={esCajaPendiente(cajaActual) ? styles.pendingBoxBadgeTextCompact : styles.cardBadgeTextCompact}>
                                   {cajaEtiqueta}
                                 </Text>
@@ -2764,7 +2928,7 @@ export default function ArmadoScreen() {
                                   });
                                 }}
                                 keyboardType="numeric"
-                                editable={!esSoloLectura && !esBloqueadoPorEstado}
+                                editable={!esSoloLectura && !modoSeleccionBulto && !esBloqueadoPorEstado}
                               />
                             ) : (
                               <TextInput
@@ -2787,7 +2951,7 @@ export default function ArmadoScreen() {
                                   actualizarEquipo(eq.id, { serie: serieNumerica, codigo: serieNumerica.slice(0, 5), nombre: eq.nombre });
                                 }}
                                 keyboardType="numeric"
-                                editable={!esSoloLectura && !esBloqueadoPorEstado}
+                                editable={!esSoloLectura && !modoSeleccionBulto && !esBloqueadoPorEstado}
                               />
                             )}
                             {!esEquipoCantidad ? (
@@ -2795,7 +2959,7 @@ export default function ArmadoScreen() {
                                 style={[styles.camBtn, (esSoloLectura || esBloqueadoPorEstado) && styles.btnDisabled]}
                                 onPress={() => abrirCamaraSerie(eq.id, eq.nombre)}
                                 hitSlop={6}
-                                disabled={esSoloLectura || esBloqueadoPorEstado}>
+                                disabled={esSoloLectura || modoSeleccionBulto || esBloqueadoPorEstado}>
                                 <Ionicons name="barcode-outline" size={18} color="#ffffff" />
                               </Pressable>
                             ) : null}
@@ -2806,7 +2970,7 @@ export default function ArmadoScreen() {
                                 else abrirEstadoEquipo(eq);
                               }}
                               hitSlop={6}
-                              disabled={esSoloLectura}
+                              disabled={esSoloLectura || modoSeleccionBulto}
                             >
                               <Ionicons name="document-text-outline" size={17} color="#0b3b8c" />
                             </Pressable>
@@ -2878,6 +3042,7 @@ export default function ArmadoScreen() {
                                 ) : null}
 		                      </View>
 		                      <View style={styles.materialHeaderAside}>
+                                {modoSeleccionBulto ? <CasillaBulto item={elementoBulto('material', String(m.id), m.nombre, Number(m.cantidad) > 0, m.estadoRegistro)} seleccionados={seleccionBultoVigente} bloqueado={asignandoBulto} onPress={(key) => setSeleccionBulto((prev) => alternarSeleccion(prev, key))} /> : null}
 		                        <View style={styles.materialCajaWrap}>
                                   {esBloqueadoPorEstado ? (
 			                            <View
@@ -2906,7 +3071,7 @@ export default function ArmadoScreen() {
 			                                actual: m.caja || DEFAULT_PENDING_BOX,
 			                                nombre: m.nombre,
 			                              })}
-			                              disabled={esSoloLectura || materialGuardado}>
+			                              disabled={esSoloLectura || modoSeleccionBulto || materialGuardado}>
 		                              <Text style={esCajaPendiente(m.caja) ? styles.pendingBoxBadgeTextCompact : styles.materialCardBadgeText}>
 		                                {cajaEtiqueta}
 		                              </Text>
@@ -2939,13 +3104,13 @@ export default function ArmadoScreen() {
 	                        { flex: 1, color: '#0f172a', borderColor: '#d7e3f4', backgroundColor: materialGuardado ? '#eef2ff' : '#f8fbff' },
                                 esBloqueadoPorEstado && styles.inputDisabledSoft,
 		                      ]}
-		                        editable={!esSoloLectura && !materialGuardado && !esBloqueadoPorEstado}
+		                        editable={!esSoloLectura && !modoSeleccionBulto && !materialGuardado && !esBloqueadoPorEstado}
 		                      />
                               <Pressable
                                 style={[styles.estadoEquipoBtn, esSoloLectura && styles.btnDisabled]}
                                 onPress={() => abrirEstadoMaterial(m)}
                                 hitSlop={6}
-                                disabled={esSoloLectura}
+                                disabled={esSoloLectura || modoSeleccionBulto}
                               >
                                 <Ionicons name="document-text-outline" size={17} color="#0b3b8c" />
                               </Pressable>
@@ -2957,13 +3122,13 @@ export default function ArmadoScreen() {
 		                          <Pressable
 		                            style={[styles.materialActionBtn, (esSoloLectura || esBloqueadoPorEstado) && styles.btnDisabled]}
 		                            onPress={() => abrirAccionMaterial(m, 'ajuste')}
-		                            disabled={esSoloLectura || esBloqueadoPorEstado}>
+		                            disabled={esSoloLectura || modoSeleccionBulto || esBloqueadoPorEstado}>
 		                            <Ionicons name="checkmark-done-circle" size={18} color="#f59e0b" />
 		                          </Pressable>
 		                          <Pressable
 		                            style={[styles.materialActionBtn, (esSoloLectura || esBloqueadoPorEstado) && styles.btnDisabled]}
 		                            onPress={() => abrirAccionMaterial(m, 'incremento')}
-		                            disabled={esSoloLectura || esBloqueadoPorEstado}>
+		                            disabled={esSoloLectura || modoSeleccionBulto || esBloqueadoPorEstado}>
 		                            <Ionicons name="add-circle" size={18} color="#0b3b8c" />
 		                          </Pressable>
 	                        </View>
@@ -2979,7 +3144,11 @@ export default function ArmadoScreen() {
         )}
       </ScrollView>
 
-      {tab === 'equipos' && (
+      {modoSeleccionBulto && !esSoloLectura ? <Pressable style={[styles.fabSave, (!seleccionBultoVigente.length || asignandoBulto) && styles.btnDisabled]}
+        disabled={!seleccionBultoVigente.length || asignandoBulto} onPress={() => { setBultoDestino(''); setModalAsignarBulto(true); }}>
+        <Ionicons name="cube-outline" size={20} color="#fff" /><Text style={styles.planillaText}>Asignar caja ({seleccionBultoVigente.length})</Text>
+      </Pressable> : null}
+      {tab === 'equipos' && !modoSeleccionBulto && (
         <Pressable
           style={[styles.fabSave, esSoloLectura && styles.btnDisabled]}
           disabled={guardandoEq || esSoloLectura}
@@ -2988,7 +3157,7 @@ export default function ArmadoScreen() {
           <Text style={styles.planillaText}>{guardandoEq ? 'Guardando...' : 'Guardar equipos'}</Text>
         </Pressable>
       )}
-      {tab === 'materiales' && (
+      {tab === 'materiales' && !modoSeleccionBulto && (
         <Pressable
           style={[styles.fabSave, esSoloLectura && styles.btnDisabled]}
           disabled={guardandoMat || esSoloLectura}
@@ -2997,6 +3166,27 @@ export default function ArmadoScreen() {
           <Text style={styles.planillaText}>{guardandoMat ? 'Guardando...' : 'Guardar materiales'}</Text>
         </Pressable>
       )}
+
+      <Modal visible={modalAsignarBulto} animationType="fade" transparent onRequestClose={() => { if (!asignandoBulto) setModalAsignarBulto(false); }}>
+        <View style={styles.camOverlay}><View style={styles.boxSelectorModal}>
+          <View style={styles.boxSelectorHeader}><Text style={styles.boxSelectorTitle}>Asignar caja</Text><Pressable disabled={asignandoBulto} accessibilityLabel="Cerrar asignacion" onPress={() => setModalAsignarBulto(false)}><Ionicons name="close-circle" size={25} color="#64748b" /></Pressable></View>
+          <Text style={styles.boxSelectorText}>{seleccionBultoVigente.length} elementos seleccionados. Elige un bulto abierto y confirma.</Text>
+          <ScrollView style={styles.boxSelectorList}>
+            {!cajasAsignacion.length ? <Text style={styles.bulkHelp}>No hay bultos disponibles. Cancela y crea uno desde Bultos.</Text> : null}
+            {cajasAsignacion.map((caja) => <Pressable key={`bulk-${caja}`} disabled={asignandoBulto || estadoCaja(caja) === 'cerrada'} accessibilityRole="radio" accessibilityState={{ selected: bultoDestino === caja, disabled: estadoCaja(caja) === 'cerrada' }} onPress={() => setBultoDestino(caja)} style={[styles.boxSelectorOption, bultoDestino === caja && styles.boxSelectorOptionActive, estadoCaja(caja) === 'cerrada' && styles.boxSelectorOptionDisabled]}>
+              <View style={styles.boxSelectorOptionLeft}><Ionicons name={bultoDestino === caja ? 'radio-button-on' : 'radio-button-off'} size={21} color="#1d4ed8" /><Text style={styles.boxSelectorOptionText}>{etiquetaBulto(caja)}</Text></View>
+              {estadoCaja(caja) === 'cerrada' ? <Text style={styles.boxSelectorClosedText}>Cerrada</Text> : null}
+            </Pressable>)}
+          </ScrollView>
+          <Text style={styles.bulkHelp}>Los registros guardados se actualizan al confirmar. Los nuevos requieren Guardar {tab}.</Text>
+          <View style={styles.confirmActions}>
+            <Pressable style={styles.confirmCancelBtn} disabled={asignandoBulto} onPress={() => setModalAsignarBulto(false)}><Text style={styles.confirmCancelText}>Cancelar</Text></Pressable>
+            <Pressable style={[styles.confirmSaveBtn, (!bultoDestinoValido || !seleccionBultoVigente.length || asignandoBulto) && styles.btnDisabled]} disabled={!bultoDestinoValido || !seleccionBultoVigente.length || asignandoBulto} onPress={confirmarAsignacionBulto}>
+              <Text style={styles.confirmSaveText}>{asignandoBulto ? 'Asignando...' : 'Confirmar asignacion'}</Text>
+            </Pressable>
+          </View>
+        </View></View>
+      </Modal>
 
       <Modal visible={camVisible} animationType="fade" transparent>
         <View style={styles.camOverlay}>
@@ -3633,6 +3823,14 @@ export default function ArmadoScreen() {
 }
 
 const styles = StyleSheet.create({
+  bulkToolbar: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8, padding: 12, borderRadius: 12, backgroundColor: '#eff6ff', borderWidth: 1, borderColor: '#bfdbfe', marginBottom: 12 },
+  bulkSelectButton: { flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 40 },
+  bulkSmallButton: { paddingVertical: 8, paddingHorizontal: 10, borderRadius: 8, backgroundColor: '#fff', minHeight: 40, justifyContent: 'center' },
+  bulkTitle: { fontWeight: '700', color: '#0f172a', flexGrow: 1 },
+  bulkButtonText: { fontSize: 12, fontWeight: '700', color: '#1d4ed8' },
+  bulkHelp: { fontSize: 12, lineHeight: 18, color: '#475569', flexShrink: 1 },
+  bulkCheckbox: { padding: 6, minWidth: 40, minHeight: 40, alignItems: 'center', justifyContent: 'center' },
+  bulkNotice: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#ecfdf5', borderWidth: 1, borderColor: '#86efac', borderRadius: 10, padding: 12, marginBottom: 12 },
   safe: {
     flex: 1,
   },

@@ -1,5 +1,6 @@
 import * as SecureStore from 'expo-secure-store';
 import {
+  asignarBultoArmado,
   createActaEntrega,
   createCambioEquipoMantencion,
   createEquipo,
@@ -21,6 +22,7 @@ import {
 } from '@/lib/api';
 
 type OpType =
+  | 'asignar_bulto_armado'
   | 'save_materiales'
   | 'update_equipo'
   | 'create_equipo'
@@ -82,6 +84,17 @@ const writeQueue = async (queue: PendingOp[]) => {
   await SecureStore.setItemAsync(QUEUE_KEY, JSON.stringify(queue));
 };
 
+let queueWrite: Promise<unknown> = Promise.resolve();
+const mutateQueue = (change: (queue: PendingOp[]) => PendingOp[]) => {
+  const result = queueWrite.then(async () => {
+    const queue = change(await readQueue());
+    await writeQueue(queue);
+    return queue;
+  });
+  queueWrite = result.catch(() => {});
+  return result;
+};
+
 const setNotice = async (message: string) => {
   await SecureStore.setItemAsync(NOTICE_KEY, message);
 };
@@ -133,15 +146,17 @@ export const listPendingOfflineOps = async () => {
 };
 
 export const enqueueOfflineOp = async (type: OpType, payload: any) => {
-  const queue = await readQueue();
-  queue.push({ id: uid(), type, payload, createdAt: new Date().toISOString() });
-  await writeQueue(queue);
+  const op = { id: uid(), type, payload, createdAt: new Date().toISOString() };
+  const queue = await mutateQueue((current) => [...current, op]);
   const notice = 'Sin red: hay cambios pendientes por sincronizar.';
   await setNotice(notice);
   emitStatus({ pending: queue.length, notice });
 };
 
 const execOp = async (op: PendingOp) => {
+  if (op.type === 'asignar_bulto_armado') {
+    return asignarBultoArmado(op.payload.armadoId, op.payload.data);
+  }
   if (op.type === 'save_materiales') {
     return saveMaterialesArmado(op.payload.armadoId, op.payload.materiales);
   }
@@ -232,6 +247,7 @@ export const syncOfflineQueue = async () => {
     emitStatus({ pending: queue.length, notice: syncingNotice });
 
     const remaining: PendingOp[] = [];
+    const rejectedBoxes: string[] = [];
     let synced = 0;
 
     for (let idx = 0; idx < queue.length; idx += 1) {
@@ -240,28 +256,36 @@ export const syncOfflineQueue = async () => {
         await execOp(op);
         synced += 1;
       } catch (error) {
-        if (isOfflineQueueableError(error)) {
+        if (isOfflineQueueableError(error) || (op.type === 'asignar_bulto_armado' && Number((error as any)?.response?.status) >= 500)) {
           remaining.push(op, ...queue.slice(idx + 1));
           break;
+        }
+        if (op.type === 'asignar_bulto_armado') {
+          rejectedBoxes.push((error as any)?.response?.data?.message || 'Revisa el estado del bulto y tus permisos.');
         }
         // Si falla por validacion/servidor, descartamos ese op para no bloquear toda la cola.
       }
     }
 
-    await writeQueue(remaining);
+    // Una operacion agregada mientras sincronizamos no pertenece al lote procesado.
+    const processedIds = new Set(queue.map((op) => op.id));
+    const pending = await mutateQueue((current) => [...remaining, ...current.filter((op) => !processedIds.has(op.id))]);
     let finalNotice = '';
-    if (remaining.length === 0 && synced > 0) {
+    if (rejectedBoxes.length) {
+      finalNotice = `No se pudo sincronizar la asignacion de bulto: ${rejectedBoxes.join(' ')}${pending.length ? ' Hay otros cambios pendientes.' : ''}`;
+      await setNotice(finalNotice);
+    } else if (pending.length === 0 && synced > 0) {
       finalNotice = 'Todo en linea y subido.';
       await setNotice(finalNotice);
-    } else if (remaining.length > 0) {
+    } else if (pending.length > 0) {
       finalNotice = 'Sin red: hay cambios pendientes por sincronizar.';
       await setNotice(finalNotice);
     } else {
       await SecureStore.deleteItemAsync(NOTICE_KEY);
     }
-    emitStatus({ pending: remaining.length, notice: finalNotice });
+    emitStatus({ pending: pending.length, notice: finalNotice });
     lastSyncAt = Date.now();
-    return { synced, pending: remaining.length };
+    return { synced, pending: pending.length };
   };
 
   syncingPromise = run();

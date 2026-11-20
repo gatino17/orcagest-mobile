@@ -65,6 +65,11 @@ export const getMovimientosArmado = async (armadoId: string | number) => {
   return res.data;
 };
 
+export const asignarBultoArmado = async (armadoId: string | number, payload: { caja: string; equipos: number[]; materiales: number[] }) => {
+  const res = await api.patch(`/armados/${armadoId}/asignar-bulto`, payload);
+  return res.data;
+};
+
 // Equipos por centro (misma ruta que frontend web)
 export const getEquipos = async (centro_id?: string | number) => {
   const res = await api.get('/equipos/', { params: { centro_id } });
