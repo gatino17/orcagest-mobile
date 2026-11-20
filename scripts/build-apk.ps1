@@ -1,10 +1,16 @@
 param(
     [string]$Nombre = "OrcaGest-$(Get-Date -Format 'yyyy-MM-dd')-asignacion-cajas.apk",
-    [string]$Arquitecturas = 'arm64-v8a,armeabi-v7a'
+    [string]$Arquitecturas = 'arm64-v8a,armeabi-v7a',
+    [string]$Credenciales = ''
 )
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
+if (-not $Credenciales) { $Credenciales = Join-Path $root 'credentials.json' }
+if (-not (Test-Path -LiteralPath $Credenciales)) {
+    throw 'Descarga primero las credenciales existentes de Expo a credentials.json. No generes una clave nueva.'
+}
+$Credenciales = (Get-Item -LiteralPath $Credenciales).FullName
 if ([IO.Path]::GetFileName($Nombre) -ne $Nombre -or -not $Nombre.EndsWith('.apk')) {
     throw 'Indica un nombre de archivo APK, sin directorios.'
 }
@@ -43,7 +49,7 @@ gradle.beforeProject { p ->
 
 Push-Location (Join-Path $root 'android')
 try {
-    & .\gradlew.bat assembleRelease --no-daemon --no-parallel --max-workers=1 --console=plain --init-script $init "-PreactNativeArchitectures=$Arquitecturas"
+    & .\gradlew.bat :app:assembleRelease --no-daemon --no-parallel --max-workers=1 --console=plain --init-script $init "-PreactNativeArchitectures=$Arquitecturas"
     if ($LASTEXITCODE -ne 0) { throw "La compilacion fallo con codigo $LASTEXITCODE." }
 } finally {
     Pop-Location
@@ -59,5 +65,6 @@ if (Test-Path -LiteralPath $dest) {
     $dest = Join-Path $dist ($Nombre.Substring(0, $Nombre.Length - 4) + '-' + (Get-Date -Format 'HHmmss') + '.apk')
 }
 Copy-Item -LiteralPath $source -Destination $dest
+& (Join-Path $PSScriptRoot 'sign-apk.ps1') -Apk $dest -Credenciales $Credenciales
 Get-Item -LiteralPath $dest | Select-Object FullName, Length, LastWriteTime
 Get-FileHash -LiteralPath $dest -Algorithm SHA256
